@@ -1,9 +1,12 @@
+import {compressedWasmFetch} from './runtimeFetch';
 import {env} from '@huggingface/transformers';
 import {preloadDiarizationModels} from '@yourdevice/engine/worker';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
 import mjsUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs?url';
 // Runtime files are served with the app, not fetched from an unpinned CDN.
 env.allowLocalModels=false;
+env.useWasmCache=true;
+if(import.meta.env.PROD)env.fetch=compressedWasmFetch(env.fetch,new URL(wasmUrl,import.meta.url).href);
 env.experimental_useCrossOriginStorage=false;
 if(env.backends.onnx.wasm)env.backends.onnx.wasm.wasmPaths={wasm:wasmUrl,mjs:mjsUrl};
 let preloading=false;

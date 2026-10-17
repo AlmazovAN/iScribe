@@ -2,3 +2,4 @@
 .error{color:#9e3b2f;background:#fff2ee;border:1px solid #edc9bf;padding:12px;border-radius:8px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
 .transcript{font-size:14px;line-height:1.8;max-height:480px;overflow:auto;overflow-wrap:anywhere;white-space:pre-wrap}.transcript small{font-size:10px;color:#798778;margin-right:8px}
 .speaker-stages{padding-left:16px;font-size:10px;line-height:1.9;color:#7e8980}.warning{padding:12px;border:1px solid #e8d3a6;background:#fff9eb;color:#856221;font-size:12px;line-height:1.6;border-radius:8px}
+.release-note{font-size:11px!important;line-height:1.6;max-width:690px;color:#8a795c!important}.help{font-size:12px}.help summary{cursor:pointer;font-weight:600;color:#4b6654}.help ol{padding-left:18px;margin-bottom:0;font-size:11px;line-height:1.8;color:#778674}footer a{font-size:10px;font-weight:400;color:#6e836c}.drop+button{margin-top:14px}.transcript>p:last-child{margin-bottom:0}

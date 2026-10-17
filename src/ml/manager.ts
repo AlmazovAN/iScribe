@@ -18,15 +18,16 @@ export class ModelManager{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.active=null;this.capabilities=null;
-  const client=new EngineClient(()=>new EngineWorker());this.client=client;
-  client.onDownloadProgress=info=>{if(generation===this.generation)this.onProgress(`Загрузка ${(info.loadedBytes/1024/1024).toFixed(1)} МБ${info.totalBytes?' / '+(info.totalBytes/1024/1024).toFixed(1)+' МБ':''}`,info.totalBytes?Math.min(100,info.loadedBytes/info.totalBytes*100):null)};
+  let client:EngineClient|null=null;
   try{
+  client=new EngineClient(()=>new EngineWorker());this.client=client;
+  client.onDownloadProgress=info=>{if(generation===this.generation)this.onProgress(`Загрузка ${(info.loadedBytes/1024/1024).toFixed(1)} МБ${info.totalBytes?' / '+(info.totalBytes/1024/1024).toFixed(1)+' МБ':''}`,info.totalBytes?Math.min(100,info.loadedBytes/info.totalBytes*100):null)};
    this.onProgress('Загрузка и инициализация модели…',null);
    const report=await client.init(id);if(generation!==this.generation)throw new Error('Операция отменена.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
    this.active=id;this.capabilities=report;
    const cached=await recordWhisperCache(repos[id]);return {cached,backend:report.active};
-  }catch(error){client.dispose();if(this.client===client){this.client=null;this.active=null;this.capabilities=null}throw error}
+  }catch(error){client?.dispose();if(this.client===client){this.client=null;this.active=null;this.capabilities=null}throw error}
   finally{if(generation===this.generation)this.busy=false}
  }
  async speakersCached(){
@@ -37,9 +38,10 @@ export class ModelManager{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
-  const worker=new EngineWorker();this.speakerWorker=worker;
+  let createdWorker:Worker|null=null;
   const requestId='speakers-'+generation;
   try{
+   const worker=new EngineWorker();createdWorker=worker;this.speakerWorker=worker;
    await new Promise<void>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker.addEventListener('error',()=>reject(new Error('Worker загрузки моделей говорящих завершился с ошибкой.')));
@@ -63,7 +65,7 @@ export class ModelManager{
    if(!cached.segmentation||!cached.embedding)throw new Error('Не подтверждён полный кеш обеих моделей говорящих. Повторите загрузку; проверьте свободное место браузера.');
    return cached;
   }finally{
-   worker.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}
+   createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
    if(generation===this.generation)this.busy=false;
   }
  }
