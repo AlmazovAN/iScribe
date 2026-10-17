@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Local browser Russian speech transcription",
   "scripts": {
-    "dev": "vite",
-    "typecheck": "tsc --noEmit",
+    "dev": "npm run prepare:engine && vite",
+    "typecheck": "npm run prepare:engine && tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "build": "vite build"
+    "test": "npm run prepare:engine && vitest run",
+    "build": "npm run prepare:engine && vite build",
+    "prepare:engine": "node scripts/patch-engine.mjs"
   },
   "keywords": [],
   "author": "",

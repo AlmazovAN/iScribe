@@ -1,0 +1,24 @@
+[
+  {
+    "file": "dist/models.js",
+    "sha256": "86c39985a6121452c4a0b218990c399cae2034454a127a9271194cfae235a386",
+    "patchedSha256": "ea41d4fb6b60d90aaa1edf3dc082beed11b8d884daca3b33ec25a997cfae2e1c",
+    "changes": [
+      {
+        "find": "export const MODELS = {",
+        "replace": "export const MODELS = {\n    // iScribe extension: full Large v3, never Turbo. Runtime validation required.\n    'whisper-large-v3': {\n        id: 'whisper-large-v3',\n        hfRepo: 'onnx-community/whisper-large-v3-ONNX',\n        approxSizeMb: 3100,\n        multilingual: true,\n        label: 'Large v3 (experimental, NOT TESTED)',\n        hidden: false,\n        acceleratedDtype: { encoder_model: 'fp16', decoder_model_merged: 'q4' },\n    },"
+      }
+    ]
+  },
+  {
+    "file": "dist/models.d.ts",
+    "sha256": "811712f9a0d17cfd8e7872708fb7b9cb21d161da5b214125c969e2c0b363ac6a",
+    "patchedSha256": "80d310330092fe9ed1804b8896362260c4312ef113e295b5c95652d50466fed2",
+    "changes": [
+      {
+        "find": "export type ModelId = ",
+        "replace": "export type ModelId = 'whisper-large-v3' | "
+      }
+    ]
+  }
+]
