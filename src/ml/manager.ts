@@ -1,4 +1,4 @@
-import {EngineClient,type CapabilityReport,type TranscriptSegment} from '@yourdevice/engine';
+import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -73,16 +73,40 @@ export class ModelManager{
    if(generation===this.generation)this.busy=false;
   }
  }
- async transcribe(audio:Float32Array,diarize:boolean,onPartial:(segments:TranscriptSegment[])=>void):Promise<TranscriptSegment[]>{
+ async transcribe(audio:Float32Array,diarize:boolean,onPartial:(segments:TranscriptSegment[])=>void,language:'ru'|'en'='ru'):Promise<TranscriptSegment[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   if(!this.client||!this.active)throw new Error('Сначала скачайте и выберите модель.');
   this.busy=true;const generation=this.generation;
   try{
    this.onProgress('Распознавание русской речи…',null);
-   const result=await this.client.transcribe(audio,{language:'ru',task:'transcribe',diarize},{onDiarizationProgress:(processed,total)=>{if(generation===this.generation)this.onProgress(`Разделение говорящих (WASM): ${processed} / ${total}`,total?processed/total*100:null)},onPartial:(segments,processed,total)=>{if(generation!==this.generation)return;onPartial(segments);this.onProgress(`Распознано ${processed.toFixed(0)} / ${total.toFixed(0)} с`,total?processed/total*100:null)}});
+   const result=await this.client.transcribe(audio,{language,task:'transcribe',diarize},{onDiarizationProgress:(processed,total)=>{if(generation===this.generation)this.onProgress(`Разделение говорящих (WASM): ${processed} / ${total}`,total?processed/total*100:null)},onPartial:(segments,processed,total)=>{if(generation!==this.generation)return;onPartial(segments);this.onProgress(`Распознано ${processed.toFixed(0)} / ${total.toFixed(0)} с`,total?processed/total*100:null)}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    return result;
   }finally{if(generation===this.generation)this.busy=false}
+ }
+ async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
+  if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.busy=true;const generation=++this.generation;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  let worker:Worker|null=null;
+  try{
+   worker=new EngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
+   return await new Promise<SpeakerTurn[]>((resolve,reject)=>{
+    this.rejectPreload=reject;
+    worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
+    worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
+    worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
+     const d=event.data;if(!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
+     if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string')this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
+     if(d.type==='iscribe:preload-error'&&'message' in d&&typeof d.message==='string')reject(new Error(d.message));
+     if(d.type==='iscribe:speaker-result'&&'turns' in d){
+      if(!Array.isArray(d.turns)||!d.turns.every(t=>t&&typeof t==='object'&&typeof t.start==='number'&&Number.isFinite(t.start)&&typeof t.end==='number'&&Number.isFinite(t.end)&&t.end>t.start&&typeof t.speaker==='string')){reject(new Error('Некорректные интервалы диаризации.'));return}
+      resolve(d.turns);
+     }
+    });
+    worker!.postMessage({type:'iscribe:speakers',requestId,audio});
+   });
+  }finally{worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
  cancel(){++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false}
 }

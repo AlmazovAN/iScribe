@@ -24,7 +24,7 @@
   {
     "file": "dist/worker.js",
     "sha256": "c217f878fc93d8f19c181d422aed83c483c5072efc860eb482f7ae355259a934",
-    "patchedSha256": "49c57999f8855356b70b6201a116a8c772ab2cb6b696105e55fa838803ea7b69",
+    "patchedSha256": "a2795c647485e84fc67f6a4bf3dc930edced65844614238da85315c31bf71085",
     "changes": [
       {
         "find": "const device = activeDevice ?? 'wasm';",
@@ -37,17 +37,37 @@
       {
         "find": "//# sourceMappingURL=worker.js.map",
         "replace": "\n// iScribe: prepare both q8/WASM speaker models sequentially, without inference.\nexport async function preloadDiarizationModels(onProgress) {\n    await releaseAsrPipeline();\n    await releaseDiarizer();\n    for (const repo of [DIARIZATION_SEG_REPO, DIARIZATION_EMB_REPO]) {\n        let model = null;\n        const progress_callback = (info) => onProgress({ ...info, model: repo });\n        try {\n            onProgress({ model: repo, status: 'initiate', file: '', loaded: 0, total: 0 });\n            model = repo === DIARIZATION_SEG_REPO\n                ? await AutoModelForAudioFrameClassification.from_pretrained(repo, {device:'wasm',dtype:'q8',progress_callback})\n                : await AutoModel.from_pretrained(repo, {device:'wasm',dtype:'q8',progress_callback});\n            await AutoProcessor.from_pretrained(repo, {progress_callback});\n            onProgress({ model: repo, status: 'ready', file: '', loaded: 0, total: 0 });\n        } catch (error) {\n            throw new Error(`${repo}: ${error instanceof Error ? error.message : String(error)}`);\n        } finally {\n            if (model) await model.dispose();\n        }\n    }\n}\n\n//# sourceMappingURL=worker.js.map"
+      },
+      {
+        "find": "async function configureModelHost(modelId) {\n    if (modelHostConfigured)\n        return;\n    modelHostConfigured = true;\n    try {\n        const probeUrl = new URL(`/models/${MODELS[modelId].hfRepo}/resolve/main/config.json`, self.location.href);\n        const probe = await fetch(probeUrl, { method: 'HEAD' });\n        if (probe.ok) {\n            env.remoteHost = new URL('/models/', self.location.href).href;\n            // Same layout as the Hugging Face default, so R2 keys mirror HF paths.\n            env.remotePathTemplate = '{model}/resolve/{revision}/';\n        }\n    }\n    catch {\n        // Mirror unreachable — keep the Hugging Face default.\n    }\n}\n",
+        "replace": "async function configureModelHost() {\n    env.remoteHost = 'https://huggingface.co/';\n    env.remotePathTemplate = '{model}/resolve/{revision}/';\n}\n"
+      },
+      {
+        "find": "data.type === 'iscribe:preload'",
+        "replace": "typeof data.type === 'string' && data.type.startsWith('iscribe:')"
+      },
+      {
+        "find": "function handleDownloadProgress(requestId, modelId, info) {\n    if (abortedRequestIds.has(requestId) || info.status !== 'progress')\n        return;\n    let files = downloadProgressByRequest.get(requestId);\n    if (!files) {\n        files = new Map();\n        downloadProgressByRequest.set(requestId, files);\n    }\n    files.set(info.file, { loaded: info.loaded, total: info.total });\n    let loadedBytes = 0;\n    let totalBytes = 0;\n    for (const file of files.values()) {\n        loadedBytes += file.loaded;\n        totalBytes += file.total;\n    }\n    send({ type: 'download-progress', requestId, modelId, loadedBytes, totalBytes });\n}\n",
+        "replace": "function handleDownloadProgress(requestId, modelId, info) {\n    if (abortedRequestIds.has(requestId) || !info.file) return;\n    let files = downloadProgressByRequest.get(requestId);\n    if (!files) { files = new Map(); downloadProgressByRequest.set(requestId, files); }\n    const old = files.get(info.file) ?? {loaded:0,total:0};\n    files.set(info.file, {loaded: Number.isFinite(info.loaded) ? info.loaded : old.loaded, total: Number.isFinite(info.total) && info.total > 0 ? info.total : old.total});\n    const names=[...files.keys()];\n    const manifestKnown=['config.json','tokenizer_config.json','tokenizer.json','preprocessor_config.json'].every(n=>names.some(f=>f===n||f.endsWith('/'+n))) && ['encoder_model','decoder_model_merged'].every(n=>names.some(f=>f.includes(n)&&f.endsWith('.onnx')));\n    const loadedBytes=[...files.values()].reduce((s,f)=>s+f.loaded,0);\n    const totalBytes=manifestKnown && [...files.values()].every(f=>f.total>0) ? [...files.values()].reduce((s,f)=>s+f.total,0) : 0;\n    send({type:'download-progress',requestId,modelId,loadedBytes,totalBytes});\n}\n"
+      },
+      {
+        "find": "//# sourceMappingURL=worker.js.map",
+        "replace": "// iScribe standalone speaker pass: no Whisper init or repeated ASR.\nexport async function runSpeakerPass(audio, onProgress) {\n    await releaseAsrPipeline();\n    try {\n        onProgress('Подготовка моделей говорящих', null);\n        const runners = await ensureDiarizer('iscribe-speakers');\n        let vadSeconds = 0;\n        const runSegmentation = async (window) => {\n            const result = await runners.runSegmentation(window);\n            vadSeconds += window.length / 16000;\n            onProgress('Поиск речи', Math.min(30, vadSeconds / (audio.length/16000) * 30));\n            return result;\n        };\n        let processedWindows = 0;\n        const turns = await diarize(audio, runSegmentation, runners.runEmbedding, undefined, (_embedded, total) => {\n            processedWindows++;\n            onProgress('Разделение говорящих', 30 + Math.min(70, processedWindows/total*70));\n        });\n        return turns;\n    } finally { await releaseDiarizer(); }\n}\n//# sourceMappingURL=worker.js.map"
       }
     ]
   },
   {
     "file": "dist/worker.d.ts",
     "sha256": "683089716d767267c72bded1ae8bfbd65f66bec246ac63ce4fe239dc0872f60b",
-    "patchedSha256": "df7fad1bfe584b8885553c6bbe4582c4cb66b1c916b441cc2e3ff34e154f1ca9",
+    "patchedSha256": "1a6a9df3d0f9882b3ca792579e9f803238c1866d9ee5dde121c1276d5c6bbd4f",
     "changes": [
       {
         "find": "//# sourceMappingURL=worker.d.ts.map",
         "replace": "export declare function preloadDiarizationModels(onProgress: (info: {model: string; status: string; file?: string; loaded?: number; total?: number}) => void): Promise<void>;\n//# sourceMappingURL=worker.d.ts.map"
+      },
+      {
+        "find": "//# sourceMappingURL=worker.d.ts.map",
+        "replace": "export declare function runSpeakerPass(audio: Float32Array, onProgress: (status: string, percent: number | null) => void): Promise<import('./diarize.js').SpeakerTurn[]>;\n//# sourceMappingURL=worker.d.ts.map"
       }
     ]
   }

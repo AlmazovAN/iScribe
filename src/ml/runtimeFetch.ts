@@ -11,3 +11,17 @@ export function compressedWasmFetch(original:RuntimeFetch,wasmURL:string):Runtim
   return new Response(response.body.pipeThrough(new DecompressionStream('gzip')),{headers:{'Content-Type':'application/wasm'}});
  };
 }
+
+// Preserve the deployed JSON validation fix. Range responses may be incomplete
+// by design and must be returned untouched to Transformers.js.
+export function validatedModelFetch(original:RuntimeFetch):RuntimeFetch{
+ return async(input,init)=>{
+  const response=await original(input,init);
+  if(!response.ok||init?.method?.toUpperCase()==='HEAD'||response.status===206||new Headers(init?.headers).has('Range'))return response;
+  let url:URL;try{url=new URL(String(input))}catch{return response}
+  if(url.hostname==='huggingface.co'&&url.pathname.includes('/resolve/')&&url.pathname.endsWith('.json')){
+   try{await response.clone().json()}catch{throw new Error(`Не удалось прочитать полный JSON модели: ${url.href} (HTTP ${response.status}). Проверьте доступ к Hugging Face и повторите загрузку.`)}
+  }
+  return response;
+ };
+}
