@@ -13,7 +13,6 @@ export class ModelManager{
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
  async prepare(id:WhisperId):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
-  if(id==='whisper-large-v3')throw new Error('Large v3 ещё не подключена.');
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.active=null;this.capabilities=null;
   const client=new EngineClient(()=>new EngineWorker());this.client=client;
