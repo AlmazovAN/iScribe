@@ -44,3 +44,8 @@ it('storage failure stops the pipeline before speakers while preserving in-memor
  const save=store.save.bind(store);vi.spyOn(store,'save').mockImplementation(async(job,file)=>{if(job.nextWindow>0)throw new Error('quota');return save(job,file)});
  runner.enqueue(id);await finished(runner);expect(fake.diarize).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.segments).toHaveLength(1);expect(runner.snapshot().notice).toContain('Не удалось сохранить');
 });
+it('a denied cross-tab lock starts no inference and leaves a resumable job',async()=>{
+ const {runner,fake}=setup();await runner.init();await runner.add([new File(['a'],'other-tab.wav')],{model:'whisper-small',language:'ru',diarize:false});const id=runner.snapshot().jobs.at(-1)!.id;
+ vi.stubGlobal('navigator',{locks:{request:async(_name:string,_opts:unknown,callback:(lock:null)=>Promise<void>)=>callback(null)}});
+ try{runner.enqueue(id);await finished(runner);expect(fake.prepare).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.stage).toBe('interrupted');expect(runner.snapshot().notice).toContain('другой вкладке')}finally{vi.unstubAllGlobals()}
+});

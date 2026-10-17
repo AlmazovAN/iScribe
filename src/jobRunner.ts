@@ -1,5 +1,6 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,validateFile} from './audio';
+import {audioDuration} from './audioMetadata';
 import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,type Job,type JobParams} from './jobs';
 import {ModelManager,type WhisperId} from './ml/manager';
@@ -36,6 +37,7 @@ export class JobRunner{
   for(const file of files){
    try{
     validateFile(file);const job=createJob(file,params);await this.store.save(job,file);this.set({jobs:[...this.state.jobs,job]});
+    if(typeof document!=='undefined')void audioDuration(file).then(async duration=>{if(!duration||!this.state.jobs.some(j=>j.id===job.id&&j.stage==='waiting'))return;this.patch(job.id,{duration});try{await this.persist(job.id)}catch{/* Notice is set by persist. */}});
    }catch(error){this.set({notice:`${file.name}: ${message(error)}`})}
   }
  }
@@ -80,6 +82,8 @@ export class JobRunner{
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
+  const disk=(await this.store.list()).find(j=>j.id===id);this.check();
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow))this.patch(id,{...disk,stage:'queued'});
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
