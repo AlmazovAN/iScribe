@@ -1,4 +1,4 @@
-import {EngineClient,type CapabilityReport} from '@yourdevice/engine';
+import {EngineClient,type CapabilityReport,type TranscriptSegment} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {checkWhisperCache,recordWhisperCache} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -26,6 +26,17 @@ export class ModelManager{
    const cached=await recordWhisperCache(repos[id]);return {cached,backend:report.active};
   }catch(error){client.dispose();if(this.client===client){this.client=null;this.active=null;this.capabilities=null}throw error}
   finally{if(generation===this.generation)this.busy=false}
+ }
+ async transcribe(audio:Float32Array,onPartial:(segments:TranscriptSegment[])=>void):Promise<TranscriptSegment[]>{
+  if(this.busy)throw new Error('Дождитесь текущей операции.');
+  if(!this.client||!this.active)throw new Error('Сначала скачайте и выберите модель.');
+  this.busy=true;const generation=this.generation;
+  try{
+   this.onProgress('Распознавание русской речи…',null);
+   const result=await this.client.transcribe(audio,{language:'ru',task:'transcribe',diarize:false},{onPartial:(segments,processed,total)=>{if(generation!==this.generation)return;onPartial(segments);this.onProgress(`Распознано ${processed.toFixed(0)} / ${total.toFixed(0)} с`,total?processed/total*100:null)}});
+   if(generation!==this.generation)throw new Error('Операция отменена.');
+   return result;
+  }finally{if(generation===this.generation)this.busy=false}
  }
  cancel(){++this.generation;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false}
 }
