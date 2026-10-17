@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio} from './audio';
-import {ModelManager,type WhisperId} from './ml/manager';
+import {ModelManager,type WhisperId,type WhisperDownloadProgress} from './ml/manager';
 export function useRuntime(){
  const [speakerStages,setSpeakerStages]=useState({segmentation:'Кеш не подтверждён',embedding:'Кеш не подтверждён'});
  const [speakersReady,setSpeakersReady]=useState(false);
@@ -19,24 +19,28 @@ export function useRuntime(){
  const [error,setError]=useState('');
  const [active,setActive]=useState<WhisperId|null>(null);
  const [backend,setBackend]=useState('Не инициализировано');
+ const [downloads,setDownloads]=useState<Partial<Record<WhisperId,WhisperDownloadProgress>>>({});
+ const preparing=useRef<WhisperId|null>(null);
  const [cached,setCached]=useState<Partial<Record<WhisperId,boolean>>>({});
  const locked=useRef(false);const epoch=useRef(0);const mounted=useRef(true);
  useEffect(()=>{
   mounted.current=true;
-  void Promise.all((['whisper-tiny','whisper-small','whisper-large-v3'] as const).map(async id=>[id,await manager.cached(id)] as const)).then(entries=>{if(mounted.current)setCached(Object.fromEntries(entries))});
+  void Promise.all((['whisper-tiny','whisper-small','whisper-large-v3'] as const).map(async id=>[id,await manager.cached(id)] as const)).then(entries=>{if(mounted.current)setCached(current=>({...Object.fromEntries(entries),...current}))});
   void manager.speakersCached().then(cache=>{if(mounted.current){setSpeakersReady(cache.segmentation&&cache.embedding);setSpeakerStages({segmentation:cache.segmentation?'В кеше':'Кеш не подтверждён',embedding:cache.embedding?'В кеше':'Кеш не подтверждён'})}});
   return()=>{mounted.current=false;epoch.current++;audioAbort.current?.abort();manager.cancel()};
  },[manager]);
+ manager.onWhisperProgress=(id,progress)=>{if(mounted.current)setDownloads(d=>({...d,[id]:progress}))};
  manager.onSpeakerProgress=(id,stage)=>{if(mounted.current)setSpeakerStages(s=>({...s,[id]:stage}))};
  manager.onProgress=(text,value)=>{if(mounted.current){setStatus(text);setPercent(value)}};
  async function prepare(id:WhisperId){
-  if(locked.current)return;locked.current=true;const run=++epoch.current;setBusy(true);setError('');setActive(null);setBackend('Инициализация…');
+  if(locked.current)return;locked.current=true;const run=++epoch.current;preparing.current=id;setDownloads(d=>({...d,[id]:{phase:'loading'}}));setBusy(true);setError('');setActive(null);setBackend('Инициализация…');
   try{
    const result=await manager.prepare(id);if(run!==epoch.current||!mounted.current)return;
+   setDownloads(d=>({...d,[id]:{phase:'ready'}}));
    setActive(id);setBackend(result.backend);setCached(c=>({...c,[id]:result.cached}));
-   setStatus(result.cached?'Модель активна. Комплект в кеше подтверждён.':'Модель активна; сохранение полного комплекта в кеше не подтверждено.');setPercent(100);
-  }catch(e){if(run===epoch.current&&mounted.current){setError(e instanceof Error?e.message:String(e));setStatus('Ошибка инициализации');setActive(null);setBackend('Не инициализировано')}}
-  finally{if(run===epoch.current&&mounted.current){locked.current=false;setBusy(false)}}
+   setStatus(result.cached?'Модель скачана и готова к работе.':'Модель готова к работе; сохранение для следующего запуска не подтверждено.');setPercent(100);
+  }catch(e){if(run===epoch.current&&mounted.current){setError(e instanceof Error?e.message:String(e));setDownloads(d=>({...d,[id]:{phase:'error',message:e instanceof Error?e.message:String(e)}}));setStatus('Ошибка подготовки модели');setActive(null);setBackend('Не инициализировано')}}
+  finally{if(run===epoch.current&&mounted.current){preparing.current=null;locked.current=false;setBusy(false)}}
  }
  async function preloadSpeakers(){
   if(locked.current)return;locked.current=true;const operation=++epoch.current;
@@ -65,6 +69,6 @@ export function useRuntime(){
   finally{if(operation===epoch.current&&mounted.current){locked.current=false;setBusy(false)}}
  }
  function clearResults(){setSegments([]);setComplete(false);setWarning('')}
- function cancel(){audioAbort.current?.abort();setComplete(false);locked.current=false;epoch.current++;manager.cancel();setBusy(false);setActive(null);setBackend('Не инициализировано');setStatus('Отменено. Worker освобождён.');setPercent(0)}
- return {busy,status,percent,error,active,backend,cached,prepare,cancel,run,segments,complete,verified,speakerStages,speakersReady,preloadSpeakers,warning,resultDiarization,resultFile,clearResults};
+ function cancel(){const interrupted=preparing.current;preparing.current=null;if(interrupted)setDownloads(d=>({...d,[interrupted]:{...d[interrupted],phase:'cancelled'}}));audioAbort.current?.abort();setComplete(false);locked.current=false;epoch.current++;manager.cancel();setBusy(false);setActive(null);setBackend('Не инициализировано');setStatus('Отменено. Worker освобождён.');setPercent(0)}
+ return {busy,status,percent,error,active,backend,cached,downloads,prepare,cancel,run,segments,complete,verified,speakerStages,speakersReady,preloadSpeakers,warning,resultDiarization,resultFile,clearResults};
 }
