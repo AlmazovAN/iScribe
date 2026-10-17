@@ -29,3 +29,14 @@ export async function checkWhisperCache(repo:string):Promise<boolean>{
   return true;
  }catch{return false}
 }
+export const speakerRepos={segmentation:'onnx-community/pyannote-segmentation-3.0',embedding:'onnx-community/wespeaker-voxceleb-resnet34-LM'} as const;
+export async function checkSpeakerCache(repo:string):Promise<boolean>{
+ try{
+  const cache=await caches.open(MODEL_CACHE);const prefix=`/${repo}/resolve/main/`;
+  const urls=(await cache.keys()).map(r=>r.url).filter(u=>u.includes(prefix));
+  for(const file of ['config.json','preprocessor_config.json','onnx/model_quantized.onnx']){
+   const url=urls.find(u=>u.endsWith('/'+file));if(!url||!(await cache.match(url))?.ok)return false;
+  }
+  return true;
+ }catch{return false}
+}
