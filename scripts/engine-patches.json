@@ -20,5 +20,35 @@
         "replace": "export type ModelId = 'whisper-large-v3' | "
       }
     ]
+  },
+  {
+    "file": "dist/worker.js",
+    "sha256": "c217f878fc93d8f19c181d422aed83c483c5072efc860eb482f7ae355259a934",
+    "patchedSha256": "49c57999f8855356b70b6201a116a8c772ab2cb6b696105e55fa838803ea7b69",
+    "changes": [
+      {
+        "find": "const device = activeDevice ?? 'wasm';",
+        "replace": "const device = 'wasm'; // iScribe fixed q8/WASM profile matches explicit speaker preload."
+      },
+      {
+        "find": "    const data = event.data;\n    if (!isHostMessage(data)) {",
+        "replace": "    const data = event.data;\n    if (data && typeof data === 'object' && data.type === 'iscribe:preload' && typeof data.requestId === 'string') return;\n    if (!isHostMessage(data)) {"
+      },
+      {
+        "find": "//# sourceMappingURL=worker.js.map",
+        "replace": "\n// iScribe: prepare both q8/WASM speaker models sequentially, without inference.\nexport async function preloadDiarizationModels(onProgress) {\n    await releaseAsrPipeline();\n    await releaseDiarizer();\n    for (const repo of [DIARIZATION_SEG_REPO, DIARIZATION_EMB_REPO]) {\n        let model = null;\n        const progress_callback = (info) => onProgress({ ...info, model: repo });\n        try {\n            onProgress({ model: repo, status: 'initiate', file: '', loaded: 0, total: 0 });\n            model = repo === DIARIZATION_SEG_REPO\n                ? await AutoModelForAudioFrameClassification.from_pretrained(repo, {device:'wasm',dtype:'q8',progress_callback})\n                : await AutoModel.from_pretrained(repo, {device:'wasm',dtype:'q8',progress_callback});\n            await AutoProcessor.from_pretrained(repo, {progress_callback});\n            onProgress({ model: repo, status: 'ready', file: '', loaded: 0, total: 0 });\n        } catch (error) {\n            throw new Error(`${repo}: ${error instanceof Error ? error.message : String(error)}`);\n        } finally {\n            if (model) await model.dispose();\n        }\n    }\n}\n\n//# sourceMappingURL=worker.js.map"
+      }
+    ]
+  },
+  {
+    "file": "dist/worker.d.ts",
+    "sha256": "683089716d767267c72bded1ae8bfbd65f66bec246ac63ce4fe239dc0872f60b",
+    "patchedSha256": "df7fad1bfe584b8885553c6bbe4582c4cb66b1c916b441cc2e3ff34e154f1ca9",
+    "changes": [
+      {
+        "find": "//# sourceMappingURL=worker.d.ts.map",
+        "replace": "export declare function preloadDiarizationModels(onProgress: (info: {model: string; status: string; file?: string; loaded?: number; total?: number}) => void): Promise<void>;\n//# sourceMappingURL=worker.d.ts.map"
+      }
+    ]
   }
 ]
