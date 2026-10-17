@@ -6,6 +6,8 @@ export function useRuntime(){
  const [speakerStages,setSpeakerStages]=useState({segmentation:'Кеш не подтверждён',embedding:'Кеш не подтверждён'});
  const [speakersReady,setSpeakersReady]=useState(false);
  const [warning,setWarning]=useState('');
+ const [resultDiarization,setResultDiarization]=useState(false);
+ const [resultFile,setResultFile]=useState('recording');
  const [segments,setSegments]=useState<TranscriptSegment[]>([]);
  const [complete,setComplete]=useState(false);
  const [verified,setVerified]=useState<Partial<Record<WhisperId,boolean>>>({});
@@ -49,7 +51,7 @@ export function useRuntime(){
   if(locked.current)return;
   if(manager.active!==id){setError('Нажмите «Скачать» или «Выбрать» для выбранной модели.');return}
   locked.current=true;const operation=++epoch.current;const controller=new AbortController();audioAbort.current=controller;
-  setBusy(true);setError('');setWarning('');setComplete(false);setSegments([]);setStatus('Декодирование аудиофайла…');setPercent(null);
+  setBusy(true);setError('');setWarning('');setComplete(false);setSegments([]);setResultDiarization(diarize);setResultFile(file.name);setStatus('Декодирование аудиофайла…');setPercent(null);
   try{
    if(diarize){const cache=await manager.speakersCached();if(!cache.segmentation||!cache.embedding){setSpeakersReady(false);throw new Error('Сначала нажмите «Скачать модели говорящих» или отключите разделение говорящих.')}}
    const audio=await decodeAudio(file,controller.signal);if(operation!==epoch.current)return;
@@ -62,6 +64,7 @@ export function useRuntime(){
   }catch(e){if(operation===epoch.current&&mounted.current){setError(e instanceof Error?e.message:String(e));setStatus('Распознавание не завершено.');setComplete(false)}}
   finally{if(operation===epoch.current&&mounted.current){locked.current=false;setBusy(false)}}
  }
+ function clearResults(){setSegments([]);setComplete(false);setWarning('')}
  function cancel(){audioAbort.current?.abort();setComplete(false);locked.current=false;epoch.current++;manager.cancel();setBusy(false);setActive(null);setBackend('Не инициализировано');setStatus('Отменено. Worker освобождён.');setPercent(0)}
- return {busy,status,percent,error,active,backend,cached,prepare,cancel,run,segments,complete,verified,speakerStages,speakersReady,preloadSpeakers,warning};
+ return {busy,status,percent,error,active,backend,cached,prepare,cancel,run,segments,complete,verified,speakerStages,speakersReady,preloadSpeakers,warning,resultDiarization,resultFile,clearResults};
 }

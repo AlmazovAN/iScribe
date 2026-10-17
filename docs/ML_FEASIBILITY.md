@@ -61,3 +61,16 @@ WeSpeaker CC BY 4.0, Whisper base model Apache-2.0; ONNX conversions attributed.
 
 Gate B/C/D/G: NOT TESTED. Actual two-speaker quality and cache reuse require
 real browser recordings. Unit tests and build do not establish these gates.
+
+## IS-08 runtime transport for static hosting
+
+The first Sites deployment failed because the 26,861,777-byte WASM exceeded
+its 26,214,400-byte per-file cap. Production packaging now gzip-compresses
+only WASM assets to .gz.bin. A narrow env.fetch adapter decompresses the exact
+runtime URL before Transformers.js supplies wasmBinary to ORT; other fetches
+(including models) are unchanged. env.useWasmCache is enabled so this supported
+WASM-binary path is used even when persistent caching is unavailable.
+The uncompressed runtime can then be cached by Transformers.js as usual.
+The Vite build verifies the gzip round trip byte-for-byte; a unit test checks
+transport routing and decompression. Development mode uses ordinary WASM files.
+This is a transport fix, not evidence of successful browser inference.
