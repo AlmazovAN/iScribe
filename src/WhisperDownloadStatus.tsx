@@ -8,19 +8,18 @@ export function WhisperDownloadStatus({name,cached,active,download}:{name:string
  const total=download?.totalBytes;
  const percent=loaded!==undefined&&Number.isFinite(loaded)&&total!==undefined&&Number.isFinite(total)&&total>0?Math.min(100,Math.max(0,Math.floor(loaded/total*100))):undefined;
  let title=cached===undefined?'Проверяем скачанные файлы…':cached?'Скачана':'Не скачана';
- let detail=cached?'Сохранена в этом браузере.':'';
+ let detail=cached?'В кэше':'';
  if(loading){
   title=percent===100?'Файлы получены · подготовка модели…':percent!==undefined?`Скачивание: ${percent}%`:cached?'Подготовка к работе…':'Начинаем скачивание…';
-  detail=loaded!==undefined?`${size(loaded)}${total&&total>0?' из '+size(total):''}`:'Ожидаем данные загрузки';
- }else if(download?.phase==='checking'){title='Проверяем сохранение модели…';detail='Подготовка завершена. Проверяем скачанные файлы.'}
+  detail=loaded!==undefined?`${size(loaded)}${total&&total>0?' из '+size(total):' · полный объём уточняется'}`:'Ожидаем данные загрузки';
+ }else if(download?.phase==='checking'){title='Проверяем сохранение модели…';detail=''}
  else if(download?.phase==='error'){title=cached?'Скачана · ошибка подготовки':'Ошибка загрузки или подготовки';detail=download.message??'Повторите попытку.'}
  else if(download?.phase==='cancelled'){title=cached?'Скачана · подготовка отменена':'Скачивание отменено';detail=cached?'Файлы сохранены в этом браузере.':'Полная загрузка не подтверждена.'}
- else if(active){title=cached?'Скачана · готова к работе':'Готова к работе';detail=cached?'Выбрана для распознавания.':'Сохранение не подтверждено. После закрытия может потребоваться загрузка.'}
+ else if(active){title=cached?'Скачана · готова к работе':'Готова к работе';detail=cached?'В кэше':'Сохранение не подтверждено.'}
  const pending=loading||download?.phase==='checking'||(cached===undefined&&!download);
  return <div className={'download-status '+(cached?'saved':'')} role="status" aria-live="polite" aria-atomic="true">
   <strong>{title}</strong>
   {detail&&<span>{detail}</span>}
-  {(pending||cached)&&<progress max={100} value={pending?(loading?percent:undefined):100} aria-label={`Загрузка Whisper ${name}`}/>}
-  {loading&&<span>После скачивания модель подготавливается к работе. Объём файлов уточняется во время загрузки.</span>}
+  {(pending||cached)&&<progress max={100} value={pending?(loading?percent:undefined):100} aria-label={`Загрузка ${name}`}/>}
  </div>;
 }

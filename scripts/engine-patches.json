@@ -24,7 +24,7 @@
   {
     "file": "dist/worker.js",
     "sha256": "c217f878fc93d8f19c181d422aed83c483c5072efc860eb482f7ae355259a934",
-    "patchedSha256": "a2795c647485e84fc67f6a4bf3dc930edced65844614238da85315c31bf71085",
+    "patchedSha256": "7cbd30d25b5b22ea2c0eca4247659d4c95dc4f14a8e4f4e195dd232af412c1d7",
     "changes": [
       {
         "find": "const device = activeDevice ?? 'wasm';",
@@ -53,6 +53,10 @@
       {
         "find": "//# sourceMappingURL=worker.js.map",
         "replace": "// iScribe standalone speaker pass: no Whisper init or repeated ASR.\nexport async function runSpeakerPass(audio, onProgress) {\n    await releaseAsrPipeline();\n    try {\n        onProgress('Подготовка моделей говорящих', null);\n        const runners = await ensureDiarizer('iscribe-speakers');\n        let vadSeconds = 0;\n        const runSegmentation = async (window) => {\n            const result = await runners.runSegmentation(window);\n            vadSeconds += window.length / 16000;\n            onProgress('Поиск речи', Math.min(30, vadSeconds / (audio.length/16000) * 30));\n            return result;\n        };\n        let processedWindows = 0;\n        const turns = await diarize(audio, runSegmentation, runners.runEmbedding, undefined, (_embedded, total) => {\n            processedWindows++;\n            onProgress('Разделение говорящих', 30 + Math.min(70, processedWindows/total*70));\n        });\n        return turns;\n    } finally { await releaseDiarizer(); }\n}\n//# sourceMappingURL=worker.js.map"
+      },
+      {
+        "find": "const totalBytes=manifestKnown && [...files.values()].every(f=>f.total>0) ? [...files.values()].reduce((s,f)=>s+f.total,0) : 0;",
+        "replace": "// Files (including external ONNX data) may be discovered late: no certified full manifest yet.\n    void manifestKnown; const totalBytes=0;"
       }
     ]
   },
