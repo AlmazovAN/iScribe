@@ -13,6 +13,7 @@ const key=(name:string)=>'iscribe-e2e:'+name;
 const enabled=(name:string)=>localStorage.getItem(key(name))==='1';
 
 export async function fixtureDecode(file:File,_signal?:AbortSignal):Promise<Float32Array>{
+ void _signal;
  const seconds=Number(file.name.match(/-(\d+)s\./)?.[1]??60);
  if(!Number.isInteger(seconds)||seconds<1||seconds>3600)throw new Error('Invalid fixture length');
  const pcm=new Float32Array(seconds*SAMPLE_RATE);
@@ -39,6 +40,7 @@ export class FixtureManager{
   return {cached,backend:'wasm'};
  }
  async transcribe(audio:Float32Array,_diarize:boolean,_partial:(x:TranscriptSegment[])=>void,_language:'ru'|'en'){
+  void _diarize;void _partial;void _language;
   const windowNumber=Math.round(audio[0]);
   const count=Number(localStorage.getItem(key('transcribeCount'))??0);
   localStorage.setItem(key('transcribeCount'),String(count+1));
@@ -53,6 +55,7 @@ export class FixtureManager{
   return [{start:0,end:audio.length/SAMPLE_RATE,speaker:'Fixture Speaker'}];
  }
  async recover(id:WhisperId,_wasmOnly:boolean){
+  void _wasmOnly;
   return this.prepare(id);
  }
  cancel(){this.active=null}

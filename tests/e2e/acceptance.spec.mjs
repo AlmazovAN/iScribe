@@ -12,7 +12,7 @@ const add=async(page,name)=>{
 };
 const loadFixture=async page=>{
  await small(page).getByRole('button',{name:'Скачать'}).click();
- await expect(small(page).locator('.download-status')).toContainText('готова к работе');
+ await expect(small(page).locator('.download-status')).toContainText('Готова к работе');
 };
 const snapshot=async(page)=>page.evaluate(async()=>new Promise((resolve,reject)=>{
  const request=indexedDB.open('iscribe-jobs-v1');
@@ -45,7 +45,7 @@ test('actual Cache API persists across reload and notices eviction',async({page}
  await expect(small(page).locator('.download-status')).toContainText('Скачана');
  await expect(small(page).getByRole('button',{name:'Выбрать'})).toBeVisible();
  await small(page).getByRole('button',{name:'Выбрать'}).click();
- await expect(small(page).locator('.download-status')).toContainText('готова к работе');
+ await expect(small(page).locator('.download-status')).toContainText('Готова к работе');
  await page.evaluate(()=>caches.delete('transformers-cache'));
  await page.reload();
  await expect(small(page).locator('.download-status')).toContainText('Не скачана');
