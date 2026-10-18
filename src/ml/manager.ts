@@ -1,5 +1,6 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
+import {MAX_ASR_WINDOW_SAMPLES} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
 export const repos:Record<WhisperId,string>={'whisper-tiny':'onnx-community/whisper-tiny','whisper-small':'onnx-community/whisper-small','whisper-large-v3':'onnx-community/whisper-large-v3-ONNX'};
@@ -89,6 +90,10 @@ export class ModelManager{
  async transcribe(audio:Float32Array,diarize:boolean,onPartial:(segments:TranscriptSegment[])=>void,language:'ru'|'en'='ru'):Promise<TranscriptSegment[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   if(!this.client||!this.active)throw new Error('Сначала скачайте и выберите модель.');
+  // An unintended whole-recording transfer would duplicate tens/hundreds
+  // of MB in Worker memory. Send exactly one <=30 s Float32 PCM window.
+  if(!Number.isInteger(audio.length)||audio.length===0||audio.length>MAX_ASR_WINDOW_SAMPLES)
+   throw new Error('Некорректный размер окна ASR. Передавайте не более 30 секунд аудио.');
   this.busy=true;const generation=this.generation;
   try{
    this.onProgress(language==='ru'?'Распознавание русской речи…':'Распознавание английской речи…',null);
