@@ -6,7 +6,7 @@ import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {ModelManager} from './ml/manager';
 function setup(){
- const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
+ const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),decode=vi.fn(async()=>new Float32Array(60*16000));
  return {fake,store,download,runner:new JobRunner({store,manager:fake as unknown as ModelManager,decode,download})};
 }
@@ -107,11 +107,73 @@ it('a silent ASR window still advances the durable checkpoint without faking tex
  expect(disk.segments).toHaveLength(2);
 });
 
+it('recovers a failed Worker and commits only one copy of the current window',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ await runner.add([new File(['a'],'worker-recovery.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'first'}])
+  .mockRejectedValueOnce(Object.assign(new Error('Worker died unexpectedly'),{code:'worker-failed'}))
+  .mockImplementationOnce(async()=>[{start:3,end:4,text:'second'}])
+  .mockImplementationOnce(async()=>[{start:3,end:4,text:'third'}]);
+ runner.enqueue(id);await finished(runner);
+ expect(fake.transcribe).toHaveBeenCalledTimes(4);
+ expect(fake.recover).toHaveBeenCalledExactlyOnceWith('whisper-small',true);
+ const saved=(await store.list()).find(j=>j.id===id)!;
+ expect(saved.stage).toBe('done');
+ expect(saved.asrComplete).toBe(true);
+ expect(saved.nextWindow).toBe(3);
+ expect(saved.segments.map(s=>s.text)).toEqual(['first','second','third']);
+});
+it('stops after three failed inference attempts and keeps earlier checkpoint intact',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ await runner.add([new File(['a'],'exhausted.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}])
+  .mockRejectedValue(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
+ runner.enqueue(id);await finished(runner);
+ expect(fake.transcribe).toHaveBeenCalledTimes(4);
+ expect(fake.recover).toHaveBeenCalledTimes(2);
+ const saved=(await store.list()).find(j=>j.id===id)!;
+ expect(saved.stage).toBe('error');
+ expect(saved.nextWindow).toBe(1);
+ expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
+});
+it('does not retry a non-transient model or network error',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ await runner.add([new File(['a'],'network-error.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockRejectedValueOnce(Object.assign(new Error('network unavailable'),{code:'transcribe-failed'}));
+ runner.enqueue(id);await finished(runner);
+ expect(fake.transcribe).toHaveBeenCalledTimes(1);
+ expect(fake.recover).not.toHaveBeenCalled();
+ expect((await store.list()).find(j=>j.id===id)!.nextWindow).toBe(0);
+});
+it('cancellation during recovery prevents another inference attempt',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ await runner.add([new File(['a'],'cancel-recovery.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ let release:()=>void=()=>{};
+ const blocked=new Promise<void>(resolve=>{release=resolve});
+ fake.transcribe.mockRejectedValueOnce(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
+ fake.recover.mockImplementationOnce(async()=>{await blocked;return {cached:true,backend:'wasm'}});
+ runner.enqueue(id);
+ await vi.waitFor(()=>expect(fake.recover).toHaveBeenCalledTimes(1));
+ runner.cancel();release();
+ await finished(runner);
+ expect(fake.transcribe).toHaveBeenCalledTimes(1);
+ const job=(await store.list()).find(j=>j.id===id)!;
+ expect(job.stage).toBe('cancelled');
+ expect(job.nextWindow).toBe(0);
+});
+
 it('persists the last committed checkpoint and backend when a later ASR window fails',async()=>{
  const {runner,fake,store}=setup();await runner.init();
  await runner.add([new File(['audio'],'diagnostic.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
- fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}]).mockRejectedValueOnce(new Error('GPU worker failed'));
+ fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}])
+  .mockRejectedValueOnce(new Error('GPU worker failed'))
+  .mockRejectedValueOnce(new Error('GPU worker failed'))
+  .mockRejectedValueOnce(new Error('GPU worker failed'));
  runner.enqueue(id);await finished(runner);
  const job=runner.snapshot().jobs.find(j=>j.id===id)!;
  expect(job.stage).toBe('error');

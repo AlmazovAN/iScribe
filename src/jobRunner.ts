@@ -5,6 +5,7 @@ import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
+import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
 import {ModelManager,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -144,7 +145,26 @@ export class JobRunner{
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
     this.patch(id,{status:currentWindowLabel(windows,index),percent:checkpointProgress(windows,index).percent});
-    const result=await this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);this.check();
+    // Retry only the current uncommitted window. Previous windows must not
+    // be appended again, and checkpoints remain unchanged until commit().
+    let result:TranscriptSegment[]|undefined;
+    for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
+     this.check();
+     try{
+      result=await this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);
+      this.check();break;
+     }catch(error){
+      this.check();
+      if(!shouldRetryAsrWindow(error,attempt))throw error;
+      const next=attempt+1,wasmOnly=preferWasmAfterFailure(this.state.backend);
+      this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`});
+      // Throw on failed reinit instead of silently continuing on an unknown
+      // backend. Explicit cancellation aborts before starting another window.
+      const prepared=await this.manager.recover(params.model,wasmOnly);this.check();
+      this.set({backend:prepared.backend});
+     }
+    }
+    if(!result)throw new Error('Окно не вернуло результат распознавания.');
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
     const after=checkpointProgress(windows,index+1);
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
