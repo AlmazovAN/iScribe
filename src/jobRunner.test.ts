@@ -49,3 +49,16 @@ it('a denied cross-tab lock starts no inference and leaves a resumable job',asyn
  vi.stubGlobal('navigator',{locks:{request:async(_name:string,_opts:unknown,callback:(lock:null)=>Promise<void>)=>callback(null)}});
  try{runner.enqueue(id);await finished(runner);expect(fake.prepare).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.stage).toBe('interrupted');expect(runner.snapshot().notice).toContain('другой вкладке')}finally{vi.unstubAllGlobals()}
 });
+
+it('persists the last committed checkpoint and backend when a later ASR window fails',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ await runner.add([new File(['audio'],'diagnostic.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}]).mockRejectedValueOnce(new Error('GPU worker failed'));
+ runner.enqueue(id);await finished(runner);
+ const job=runner.snapshot().jobs.find(j=>j.id===id)!;
+ expect(job.stage).toBe('error');
+ expect(job.failure).toMatchObject({reason:'execution-error',stage:'recognizing',completedWindows:1,backend:'wasm',checkpointSeconds:30,message:'GPU worker failed'});
+ const disk=(await store.list()).find(j=>j.id===id)!;
+ expect(disk.failure).toMatchObject({completedWindows:1,reason:'execution-error',backend:'wasm'});
+});
