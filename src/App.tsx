@@ -37,7 +37,7 @@ export function App(){
  const add=(files:FileList|File[])=>{setError('');void runner.add(Array.from(files),params);if(navigator.storage?.persist)void navigator.storage.persist().catch(()=>false)};
  const download=(id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const chosen=state.jobs.find(j=>j.id===previewId)??state.jobs.find(j=>j.id===state.activeId)??state.jobs.at(-1);
- let preview='';try{if(chosen)preview=formatTranscript(chosen.speakerSegments??chosen.segments,{timestamps:true,diarize:!!chosen.speakerSegments})}catch{preview='Не удалось сформировать предпросмотр. Проверьте временные метки.'}
+ let preview='';try{if(chosen)preview=formatTranscript(chosen.speakerSegments??chosen.volatileSegments??chosen.segments,{timestamps:true,diarize:!!chosen.speakerSegments})}catch{preview='Не удалось сформировать предпросмотр. Проверьте временные метки.'}
  return <div className="app">
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><span className="local"><i/>Обработка на вашем устройстве</span></header>
   <main>

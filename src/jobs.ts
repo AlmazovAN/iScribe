@@ -2,7 +2,7 @@ import type {TranscriptSegment} from '@yourdevice/engine';
 import type {WhisperId} from './ml/manager';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;error?:string;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;error?:string;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job):Job{
  return isRunning(job.stage)||job.stage==='queued'?{...job,stage:'interrupted',status:job.asrComplete?'Текст сохранён. Можно повторить разделение говорящих.':'Обработка прервана. Можно продолжить с сохранённого фрагмента.',percent:null}:job;

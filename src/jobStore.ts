@@ -20,7 +20,9 @@ export class JobStore{
  async save(job:Job,file?:File):Promise<void>{
   const db=await this.open();return new Promise((resolve,reject)=>{
    const tx=db.transaction(file?['jobs','audio']:['jobs'],'readwrite');
-   tx.objectStore('jobs').put(job);if(file)tx.objectStore('audio').put(file,job.id);
+   // Volatile text must never survive a reload as if it were checkpointed.
+   const durable={...job};delete durable.volatileSegments;
+   tx.objectStore('jobs').put(durable);if(file)tx.objectStore('audio').put(file,job.id);
    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??new Error('Сохранение отменено.'));
   });
  }
