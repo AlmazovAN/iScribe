@@ -76,3 +76,9 @@ GitHub Actions. Затем Actions → «Deploy Pages (manual after Pages enable
 [ML-решения](docs/ML_FEASIBILITY.md) ·
 [Лицензии и атрибуция](public/THIRD_PARTY_NOTICES.txt) ·
 [Исходное ТЗ](docs/STAGE_1_PLAN.md)
+
+## PR-18 — браузерные тесты приёмки
+
+Отдельная suite Playwright открывает настоящую страницу React через Chromium и проверяет IndexedDB, Cache API, перезагрузку, 35 окон (14:31) и три скачанных TXT. В ней **используется имитация Whisper/декодирования**, без реальных весов и GPU; это не доказательство качества реального распознавания.
+
+Для локального запуска после `npm ci`: `npm install --no-save --package-lock=false @playwright/test@1.56.1`, `npx playwright install chromium`, `npx playwright test`. Отдельный job `browser-acceptance` запускается в CI. [Приёмочные сценарии с настоящим аудио](docs/PR18_BROWSER_ACCEPTANCE.md) требуют реального браузера и файла и пока имеют статус NOT TESTED.
