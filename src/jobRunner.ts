@@ -3,6 +3,7 @@ import {decodeAudio,validateFile} from './audio';
 import {audioDuration} from './audioMetadata';
 import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,type Job,type JobParams} from './jobs';
+import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {ModelManager,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -21,7 +22,15 @@ export class JobRunner{
  private lease:Promise<unknown>|undefined;
  constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;
-  this.manager.onProgress=(status,percent)=>{if(this.cancelled)return;const id=this.state.activeId;if(id)this.patch(id,{status,percent});else this.set({operation:status})};
+  this.manager.onProgress=(status,percent)=>{
+   if(this.cancelled)return;
+   const id=this.state.activeId;
+   if(!id){this.set({operation:status});return}
+   // Engine callbacks report progress INSIDE a 30s window. Never replace the
+   // persisted whole-recording checkpoint or its percent with this value.
+   if(this.job(id).stage==='recognizing')return;
+   this.patch(id,{status,percent:this.job(id).stage==='speakers'?percent:null});
+  };
  }
  subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener)}};
  snapshot=()=>this.state;
@@ -31,6 +40,19 @@ export class JobRunner{
  init(){return this.initialization??=(async()=>{try{this.set({jobs:await this.store.list()})}catch(error){this.set({notice:'Не удалось открыть сохранённые задания: '+message(error)})}finally{this.set({ready:true})}})()}
  private async persist(id:string){
   try{await this.store.save(this.job(id))}catch(error){this.set({notice:'Не удалось сохранить результат в браузере. Скачайте доступный TXT. '+message(error)});throw new Error('Ошибка локального сохранения. Текст остаётся доступен в этой вкладке.')}
+ }
+ // Persist the text and nextWindow in ONE transaction, THEN publish progress.
+ // If the transaction fails, keep the uncommitted text only in the open tab
+ // for immediate export; it is never considered part of the durable checkpoint.
+ private async commit(id:string,patch:Partial<Job>,volatileText?:TranscriptSegment[]){
+  const durable:Job={...this.job(id),...patch,updated:Date.now()};
+  delete durable.volatileSegments;
+  try{await this.store.save(durable)}catch(error){
+   if(volatileText)this.patch(id,{volatileSegments:volatileText});
+   this.set({notice:'Не удалось сохранить контрольную точку. Скачайте TXT до закрытия вкладки. '+message(error)});
+   throw new Error('Ошибка локального сохранения. Номер сохранённого окна не изменён.');
+  }
+  this.set({jobs:this.state.jobs.map(j=>j.id===id?durable:j)});
  }
  async add(files:File[],params:JobParams){
   await this.init();
@@ -84,23 +106,27 @@ export class JobRunner{
  private async execute(id:string){
   const disk=(await this.store.list()).find(j=>j.id===id);this.check();
   if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow))this.patch(id,{...disk,stage:'queued'});
-  this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined});await this.persist(id);this.check();
+  this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
-   if(this.manager.active!==params.model){const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend})}
-   this.patch(id,{stage:'recognizing',status:'Распознавание',percent:0});
    const windows=audioWindows(audio.length);
-   for(let index=this.job(id).nextWindow;index<windows.length;index++){
+   // A corrupted checkpoint must never masquerade as a completed transcript.
+   const initial=checkpointProgress(windows,this.job(id).nextWindow);
+   if(this.manager.active!==params.model){const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend})}
+   this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent});
+   for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
+    this.patch(id,{status:currentWindowLabel(windows,index),percent:checkpointProgress(windows,index).percent});
     const result=await this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);this.check();
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
-    this.patch(id,{segments,nextWindow:index+1,percent:(index+1)/windows.length*100,status:`Распознавание · ${Math.round(window.end/16000)} / ${Math.round(audio.length/16000)} с`});
-    await this.persist(id);this.check();
+    const after=checkpointProgress(windows,index+1);
+    await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
+    this.check();
    }
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
-   this.patch(id,{asrComplete:true,status:'Текст готов и сохраняется'});await this.persist(id);this.check();
+   await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
   if(params.diarize){
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
@@ -126,7 +152,7 @@ export class JobRunner{
   finally{this.set({busy:false,operation:''});if(this.queue.length)void this.drain()}
  }
  export(id:string,variant:'plain'|'time'|'speakers'){
-  const job=this.job(id);const segments:TranscriptSegment[]=variant==='speakers'?(job.speakerSegments??job.segments):job.segments;
+  const job=this.job(id);const segments:TranscriptSegment[]=variant==='speakers'?(job.speakerSegments??job.volatileSegments??job.segments):(job.volatileSegments??job.segments);
   const text=formatTranscript(segments,{timestamps:variant!=='plain',diarize:variant==='speakers'});
   const suffix=variant==='plain'?'text':variant==='time'?'time':'time_speakers';
   const partial=!job.asrComplete||(variant==='speakers'&&job.stage!=='done');
