@@ -9,8 +9,8 @@ import {formatTranscript} from './formatTranscript';
 import type {WhisperId} from './ml/manager';
 import type {JobParams} from './jobs';
 const models=[{id:'whisper-tiny',name:'Whisper Tiny',tag:'Быстрые заметки',description:'Короткие записи и проверка устройства.'},{id:'whisper-small',name:'Whisper Small',tag:'По умолчанию',description:'Встречи и повседневная работа.'},{id:'whisper-large-v3',name:'Whisper Large v3',tag:'Экспериментальная',description:'Полная модель. Несколько ГБ и высокий расход памяти.'}] as const;
-export function App(){
- const [runner]=useState(()=>new JobRunner());
+export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
+ const [runner]=useState(()=>createRunner?createRunner():new JobRunner());
  const state=useSyncExternalStore(runner.subscribe,runner.snapshot,runner.snapshot);
  const [selected,setSelected]=useState<WhisperId>('whisper-small');
  const [language,setLanguage]=useState<'ru'|'en'>('ru');

@@ -6,7 +6,7 @@
     "dev": "npm run prepare:engine && vite",
     "typecheck": "npm run prepare:engine && tsc --noEmit",
     "lint": "eslint .",
-    "test": "npm run prepare:engine && vitest run",
+    "test": "npm run prepare:engine && vitest run src scripts",
     "build": "npm run prepare:engine && vite build",
     "prepare:engine": "node scripts/patch-engine.mjs"
   },
