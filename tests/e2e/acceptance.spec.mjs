@@ -42,7 +42,8 @@ test('actual Cache API persists across reload and notices eviction',async({page}
  await loadFixture(page);
  expect(await page.evaluate(async()=>{const c=await caches.open('transformers-cache');return (await c.keys()).length})).toBeGreaterThan(0);
  await page.reload();
- await expect(small(page).locator('.download-status')).toContainText('Скачана');
+ // Cached files survive reload; ONNX session itself must be initialized again.
+ await expect(small(page).locator('.download-status')).toContainText('В кэше');
  await expect(small(page).getByRole('button',{name:'Выбрать'})).toBeVisible();
  await small(page).getByRole('button',{name:'Выбрать'}).click();
  await expect(small(page).locator('.download-status')).toContainText(/готова к работе/i);
