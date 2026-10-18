@@ -15,3 +15,15 @@ it('rejects HTML model JSON but preserves range requests and non-model responses
  expect((await fetcher('https://huggingface.co/a/resolve/main/config.json',{headers:{Range:'bytes=0-99'}})).ok).toBe(true);
  expect((await fetcher('https://example.org/page')).ok).toBe(true);
 });
+
+import {observedWhisperHttpFetch} from './runtimeFetch';
+it('counts model HTTP fetch invocations without claiming downloaded bytes',async()=>{
+ const requests:string[]=[];
+ const original=vi.fn(async()=>new Response('ok'));
+ const fetch=observedWhisperHttpFetch(original,repo=>requests.push(repo));
+ await fetch('https://huggingface.co/onnx-community/whisper-small/resolve/main/config.json');
+ await fetch('https://huggingface.co/onnx-community/pyannote-segmentation-3.0/resolve/main/config.json');
+ await fetch('https://huggingface.co/onnx-community/whisper-small/resolve/main/config.json',{method:'HEAD'});
+ expect(requests).toEqual(['onnx-community/whisper-small']);
+ expect(original).toHaveBeenCalledTimes(3);
+});
