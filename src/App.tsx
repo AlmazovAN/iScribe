@@ -23,6 +23,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const cancelDialog=useRef<HTMLDialogElement>(null),removeDialog=useRef<HTMLDialogElement>(null);
  const input=useRef<HTMLInputElement>(null);
  const modelState=useModels(runner.manager,state.busy);
+ const modelBusy=state.busy;
  useProtection(state.busy,state.activeId);
  useEffect(()=>{void runner.init()},[runner]);
  useEffect(()=>{if(cancelOpen)cancelDialog.current?.showModal();else cancelDialog.current?.close()},[cancelOpen]);
@@ -46,7 +47,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     <div className="models">{models.map(m=><article className={'model '+(selected===m.id?'selected':'')} key={m.id}>
      <label className="model-name"><input type="radio" name="model" checked={selected===m.id} onChange={()=>setSelected(m.id)}/><strong>{m.name}</strong></label><span className="tag">{m.tag}</span><p>{m.description}</p>
      <WhisperDownloadStatus name={m.name} cached={modelState.cached[m.id]} active={runner.manager.active===m.id} download={modelState.downloads[m.id]}/>
-     <button className="secondary" disabled={state.busy} onClick={()=>{setSelected(m.id);if(m.id!=='whisper-large-v3'||largeAllowed())void runner.prepare(m.id)}}>{runner.manager.active===m.id?'Готова к работе':modelState.cached[m.id]?'Выбрать':'Скачать'}</button>
+     <button className="secondary" disabled={modelBusy||(selected===m.id&&runner.manager.active===m.id)} onClick={()=>{if(m.id==='whisper-large-v3'&&!largeAllowed())return;setSelected(m.id);void runner.prepare(m.id)}}>{selected===m.id?(runner.manager.active===m.id?'Выбрана · используется':'Выбрана · '+(modelState.cached[m.id]?'в кэше':'скачать')):modelState.cached[m.id]?'Выбрать':'Скачать'}</button>
     </article>)}
     <article className={'model speakers '+(diarize?'enabled':'')}><label className="model-name"><strong>Разделение говорящих</strong><input type="checkbox" checked={diarize} onChange={e=>setDiarize(e.target.checked)} aria-label="Разделять говорящих"/></label><span className="tag">Pyannote + WeSpeaker</span><p>Кто говорил и когда. После получения текста.</p><div className="download-status" role="status"><strong>{modelState.speakers.ready?'Скачаны · в кэше':'Комплект из двух моделей'}</strong><span>Pyannote: {modelState.speakers.segmentation}</span><span>WeSpeaker: {modelState.speakers.embedding}</span></div><button className="secondary" disabled={state.busy||modelState.speakers.ready} onClick={()=>void runner.preloadSpeakers()}>{modelState.speakers.ready?'Готово к работе':'Скачать комплект'}</button></article>
     </div>
