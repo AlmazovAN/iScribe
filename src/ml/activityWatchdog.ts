@@ -56,6 +56,6 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,op
   visible?.addEventListener('visibilitychange',onVisibility);
   options.signal?.addEventListener('abort',onAbort,{once:true});
   timer=setInterval(tick,pollMs);
-  Promise.resolve().then(()=>work(heartbeat)).then(value=>settle(undefined,value),error=>settle(error));
+  Promise.resolve().then(()=>finished?undefined:work(heartbeat)).then(value=>settle(undefined,value as T),error=>settle(error));
  });
 }

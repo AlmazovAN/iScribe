@@ -4,14 +4,15 @@ afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals()});
 it('allows slow but responsive foreground inference without killing the worker',async()=>{
  vi.useFakeTimers();
  let done:(value:string)=>void=()=>{};
- const timeout=vi.fn(),promise=withActivityWatchdog<string>(()=>new Promise(resolve=>{done=resolve}),{timeoutMs:100,pollMs:10,visibility:null,onTimeout:timeout});
+ const timeout=vi.fn(),promise=withActivityWatchdog<string>(()=>new Promise(()=>{}),{timeoutMs:100,pollMs:10,visibility:null,onTimeout:timeout});
+ const stalled=expect(promise).rejects.toBeInstanceOf(WorkerStalledError);
  // Exercise heartbeat via a second, independently guarded task.
  let beat:()=>void=()=>{};
  const observed=withActivityWatchdog<string>(heartbeat=>{beat=heartbeat;return new Promise(resolve=>{done=resolve})},{timeoutMs:100,pollMs:10,visibility:null,onTimeout:timeout});
  for(let n=0;n<5;n++){await vi.advanceTimersByTimeAsync(70);beat()}
  done('ok');
  await expect(observed).resolves.toBe('ok');
- await expect(promise).rejects.toBeInstanceOf(WorkerStalledError);
+ await stalled;
  expect(timeout).toHaveBeenCalledTimes(1);
 });
 it('pauses the idle clock in a hidden tab rather than treating throttling as a hang',async()=>{

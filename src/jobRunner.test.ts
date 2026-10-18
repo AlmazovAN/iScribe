@@ -165,3 +165,21 @@ it('cancellation during recovery prevents another inference attempt',async()=>{
  expect(job.stage).toBe('cancelled');
  expect(job.nextWindow).toBe(0);
 });
+
+it('watchdog recovers a Worker that never resolves without advancing an uncommitted checkpoint',async()=>{
+ const {fake,store,decode,download}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,download,asrIdleMs:70});
+ await runner.init();await runner.add([new File(['a'],'stalled-worker.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementationOnce(()=>new Promise(()=>{}))
+  .mockImplementation(async()=>[{start:3,end:4,text:'after recovery'}]);
+ runner.enqueue(id);await finished(runner);
+ expect(fake.cancel).toHaveBeenCalledTimes(1);
+ expect(fake.recover).toHaveBeenCalledOnce();
+ expect(fake.transcribe).toHaveBeenCalledTimes(4);
+ const saved=(await store.list()).find(j=>j.id===id)!;
+ expect(saved.stage).toBe('done');
+ expect(saved.nextWindow).toBe(3);
+ expect(saved.segments).toHaveLength(3);
+ expect(saved.segments.every(s=>s.text==='after recovery')).toBe(true);
+});

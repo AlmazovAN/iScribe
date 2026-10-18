@@ -135,7 +135,7 @@ export class JobRunner{
         this.asrHeartbeat=heartbeat;
         return this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);
        },{
-        timeoutMs:this.asrIdleMs,signal:this.abort!.signal,
+        timeoutMs:this.asrIdleMs,pollMs:Math.min(1000,Math.max(5,this.asrIdleMs/4)),signal:this.abort!.signal,
         onTimeout:()=>this.manager.cancel()
        });
       }finally{this.asrHeartbeat=null}
