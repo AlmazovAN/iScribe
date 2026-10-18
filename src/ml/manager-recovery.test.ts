@@ -4,7 +4,7 @@ const state=vi.hoisted(()=>({
  preferences:[] as string[][],
  disposeCount:0
 }));
-vi.mock('./worker?worker',()=>({default:class{}}));
+vi.mock('./worker?worker',()=>({default:class{addEventListener(){/* Model request observer. */}}}));
 vi.mock('@yourdevice/engine',()=>({
  EngineClient:class{
   onDownloadProgress:unknown;

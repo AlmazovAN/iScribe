@@ -1,4 +1,4 @@
-import {compressedWasmFetch,validatedModelFetch} from './runtimeFetch';
+import {compressedWasmFetch,validatedModelFetch,observedWhisperHttpFetch} from './runtimeFetch';
 import {env} from '@huggingface/transformers';
 import {preloadDiarizationModels,runSpeakerPass} from '@yourdevice/engine/worker';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
@@ -6,6 +6,7 @@ import mjsUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-thread
 // Runtime files are served with the app, not fetched from an unpinned CDN.
 env.allowLocalModels=false;
 env.fetch=validatedModelFetch(env.fetch);
+env.fetch=observedWhisperHttpFetch(env.fetch,repo=>postMessage({type:'iscribe:model-http-request',repo}));
 env.useWasmCache=true;
 if(import.meta.env.PROD)env.fetch=compressedWasmFetch(env.fetch,new URL(wasmUrl,import.meta.url).href);
 env.experimental_useCrossOriginStorage=false;

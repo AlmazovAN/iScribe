@@ -4,7 +4,7 @@ import {MAX_ASR_WINDOW_SAMPLES} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
 export const repos:Record<WhisperId,string>={'whisper-tiny':'onnx-community/whisper-tiny','whisper-small':'onnx-community/whisper-small','whisper-large-v3':'onnx-community/whisper-large-v3-ONNX'};
-export type WhisperDownloadProgress={phase:'loading'|'checking'|'ready'|'error'|'cancelled';loadedBytes?:number;totalBytes?:number;message?:string};
+export type WhisperDownloadProgress={phase:'loading'|'initializing'|'checking'|'ready'|'error'|'cancelled';loadedBytes?:number;totalBytes?:number;httpRequests?:number;cachedBefore?:boolean;cachedAfter?:boolean;message?:string};
 export class ModelManager{
  private client:EngineClient|null=null;
  private busy=false;
@@ -20,24 +20,62 @@ export class ModelManager{
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
  async prepare(id:WhisperId,options:{wasmOnly?:boolean}={}):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  // Selecting the already active model must not dispose its ONNX session.
+  if(this.active===id&&this.client&&this.capabilities?.active&&(!options.wasmOnly||this.capabilities.active==='wasm')){
+   const cached=await this.cached(id);
+   this.onWhisperProgress(id,{phase:'ready',cachedBefore:cached,cachedAfter:cached,httpRequests:0});
+   return {cached,backend:this.capabilities.active};
+  }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
   this.client?.dispose();this.active=null;this.capabilities=null;
   let client:EngineClient|null=null;
+  let cachedBefore=false,requests=0,loadedBytes=0,totalBytes=0;
+  const progress=(phase:WhisperDownloadProgress['phase'],message?:string,cachedAfter?:boolean)=>{
+   if(generation!==this.generation)return;
+   this.onWhisperProgress(id,{phase,cachedBefore,httpRequests:requests,
+    loadedBytes:loadedBytes||undefined,totalBytes:totalBytes||undefined,message,cachedAfter});
+  };
   try{
-  client=new EngineClient(()=>new EngineWorker());this.client=client;
-  client.onDownloadProgress=info=>{if(generation!==this.generation)return;this.onWhisperProgress(id,{phase:'loading',loadedBytes:info.loadedBytes,totalBytes:info.totalBytes});this.onProgress(`Загрузка ${(info.loadedBytes/1024/1024).toFixed(1)} МБ${info.totalBytes?' / '+(info.totalBytes/1024/1024).toFixed(1)+' МБ':''}`,info.totalBytes?Math.min(100,info.loadedBytes/info.totalBytes*100):null)};
-   this.onWhisperProgress(id,{phase:'loading'});
-   this.onProgress('Загрузка и инициализация модели…',null);
-   const report=await client.init(id,options.wasmOnly?{backendPreference:['wasm']}:{ });if(generation!==this.generation)throw new Error('Операция отменена.');
-   // The pinned engine appends its fallback ladder even to an explicit preference.
-   // Never silently claim WASM recovery if it actually selected GPU/WebNN.
+   cachedBefore=await this.cached(id);
+   if(generation!==this.generation)throw new Error('Операция отменена.');
+   progress('initializing');
+   this.onProgress(cachedBefore?'Инициализация модели из сохранённых файлов…':'Подготовка и проверка файлов модели…',null);
+   client=new EngineClient(()=>{
+    const worker=new EngineWorker();
+    worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
+     const d=event.data;
+     if(generation!==this.generation||!d||typeof d!=='object'||!('type' in d)||d.type!=='iscribe:model-http-request'||
+        !('repo' in d)||d.repo!==repos[id])return;
+     requests++;
+     progress('loading');
+     this.onProgress('HTTP-запрос файлов модели (возможен кэш браузера)…',null);
+    });
+    return worker;
+   });
+   this.client=client;
+   // Engine download-progress measures model files processed, including cache hits.
+   // It does NOT measure bytes transferred over the network.
+   client.onDownloadProgress=info=>{
+    if(generation!==this.generation)return;
+    loadedBytes=info.loadedBytes;totalBytes=info.totalBytes;
+    progress(requests>0?'loading':'initializing');
+   };
+   const report=await client.init(id,options.wasmOnly?{backendPreference:['wasm']}:{});
+   if(generation!==this.generation)throw new Error('Операция отменена.');
    if(options.wasmOnly&&report.active!=='wasm')throw new Error('Безопасное восстановление на WASM недоступно.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
    this.active=id;this.capabilities=report;
-   this.onWhisperProgress(id,{phase:'checking'});
-   const cached=await recordWhisperCache(repos[id]);if(generation!==this.generation)throw new Error('Операция отменена.');this.onWhisperProgress(id,{phase:'ready'});return {cached,backend:report.active};
-  }catch(error){if(generation===this.generation)this.onWhisperProgress(id,{phase:'error',message:error instanceof Error?error.message:String(error)});client?.dispose();if(this.client===client){this.client=null;this.active=null;this.capabilities=null}throw error}
-  finally{if(generation===this.generation){this.busy=false;this.preparingId=null}}
+   progress('checking');
+   const cached=await recordWhisperCache(repos[id]);
+   if(generation!==this.generation)throw new Error('Операция отменена.');
+   progress('ready',undefined,cached);
+   return {cached,backend:report.active};
+  }catch(error){
+   progress('error',error instanceof Error?error.message:String(error));
+   client?.dispose();
+   if(this.client===client){this.client=null;this.active=null;this.capabilities=null}
+   throw error;
+  }finally{if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
  async recover(id:WhisperId,wasmOnly:boolean):Promise<{cached:boolean,backend:BackendId}>{
   // A failed inference worker must be discarded; ONNX session and pending
