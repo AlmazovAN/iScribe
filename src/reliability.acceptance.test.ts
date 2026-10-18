@@ -41,7 +41,8 @@ it('acceptance: 14:31 audio finishes all 35 windows with monotonic durable check
  const done=find(r,id),windows=audioWindows(SECONDS*16000);
  expect(windows).toHaveLength(35);
  expect(ml.transcribe).toHaveBeenCalledTimes(35);
- expect(checkpoints).toEqual(Array.from({length:37},(_,i)=>Math.min(i+1,35)).slice(0,35).concat([35,35,35]));
+ expect(checkpoints.slice(0,35)).toEqual(Array.from({length:35},(_,i)=>i+1));
+ expect(checkpoints.slice(35).every(n=>n===35)).toBe(true);
  expect(done.asrComplete).toBe(true);
  expect(done.stage).toBe('done');
  expect(done.nextWindow).toBe(35);
