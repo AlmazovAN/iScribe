@@ -1,4 +1,4 @@
-import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn} from '@yourdevice/engine';
+import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -17,7 +17,7 @@ export class ModelManager{
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};
  onProgress:(text:string,percent:number|null)=>void=()=>{};
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
- async prepare(id:WhisperId):Promise<{cached:boolean,backend:string}>{
+ async prepare(id:WhisperId,options:{wasmOnly?:boolean}={}):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;this.preparingId=id;const generation=++this.generation;
   this.client?.dispose();this.active=null;this.capabilities=null;
@@ -27,13 +27,25 @@ export class ModelManager{
   client.onDownloadProgress=info=>{if(generation!==this.generation)return;this.onWhisperProgress(id,{phase:'loading',loadedBytes:info.loadedBytes,totalBytes:info.totalBytes});this.onProgress(`Загрузка ${(info.loadedBytes/1024/1024).toFixed(1)} МБ${info.totalBytes?' / '+(info.totalBytes/1024/1024).toFixed(1)+' МБ':''}`,info.totalBytes?Math.min(100,info.loadedBytes/info.totalBytes*100):null)};
    this.onWhisperProgress(id,{phase:'loading'});
    this.onProgress('Загрузка и инициализация модели…',null);
-   const report=await client.init(id);if(generation!==this.generation)throw new Error('Операция отменена.');
+   const report=await client.init(id,options.wasmOnly?{backendPreference:['wasm']}:{ });if(generation!==this.generation)throw new Error('Операция отменена.');
+   // The pinned engine appends its fallback ladder even to an explicit preference.
+   // Never silently claim WASM recovery if it actually selected GPU/WebNN.
+   if(options.wasmOnly&&report.active!=='wasm')throw new Error('Безопасное восстановление на WASM недоступно.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
    this.active=id;this.capabilities=report;
    this.onWhisperProgress(id,{phase:'checking'});
    const cached=await recordWhisperCache(repos[id]);if(generation!==this.generation)throw new Error('Операция отменена.');this.onWhisperProgress(id,{phase:'ready'});return {cached,backend:report.active};
   }catch(error){if(generation===this.generation)this.onWhisperProgress(id,{phase:'error',message:error instanceof Error?error.message:String(error)});client?.dispose();if(this.client===client){this.client=null;this.active=null;this.capabilities=null}throw error}
   finally{if(generation===this.generation){this.busy=false;this.preparingId=null}}
+ }
+ async recover(id:WhisperId,wasmOnly:boolean):Promise<{cached:boolean,backend:BackendId}>{
+  // A failed inference worker must be discarded; ONNX session and pending
+  // requests in that worker are not safe to reuse on the next attempt.
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  const prepared=await this.prepare(id,{wasmOnly});
+  const backend=prepared.backend;
+  if(backend!=='webnn'&&backend!=='webgpu'&&backend!=='wasm')throw new Error('Неизвестный backend после восстановления.');
+  return {...prepared,backend};
  }
  async speakersCached(){
   const [segmentation,embedding]=await Promise.all([checkSpeakerCache(speakerRepos.segmentation),checkSpeakerCache(speakerRepos.embedding)]);
