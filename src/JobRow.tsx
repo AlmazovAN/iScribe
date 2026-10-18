@@ -3,7 +3,8 @@ import {isRunning,audioWindows} from './jobs';
 import {checkpointLabel,checkpointProgress} from './recognitionProgress';
 export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void}){
  const queued=job.stage==='queued',running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
- const progress=job.duration&&job.duration>0?checkpointProgress(audioWindows(Math.round(job.duration*16000)),Math.min(job.nextWindow,audioWindows(Math.round(job.duration*16000)).length)):null;
+ const windows=job.duration&&job.duration>0?audioWindows(Math.round(job.duration*16000)):[];
+ const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
  const retry=job.stage==='partial'||job.stage==='error'||job.stage==='interrupted'||job.stage==='cancelled';
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
   <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{job.duration?`${Math.floor(job.duration/60)} мин ${Math.floor(job.duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ</small></div></div>
