@@ -25,3 +25,17 @@ export function validatedModelFetch(original:RuntimeFetch):RuntimeFetch{
   return response;
  };
 }
+
+// Count HTTP fetch invocations only. HTTP cache and service workers can satisfy
+// fetch without transferring bytes; do not call this a network byte counter.
+export function observedWhisperHttpFetch(original:RuntimeFetch,onRequest:(repo:string)=>void):RuntimeFetch{
+ return async(input,init)=>{
+  try{
+   const u=new URL(String(input));
+   const match=u.hostname==='huggingface.co'&&u.protocol==='https:'
+    ?u.pathname.match(/^\/(onnx-community\/whisper-[^/]+)\/resolve\/[^/]+\//):null;
+   if(match&&(init?.method??'GET').toUpperCase()!=='HEAD')onRequest(match[1]);
+  }catch{/* Keep the underlying fetch semantics unchanged. */}
+  return original(input,init);
+ };
+}

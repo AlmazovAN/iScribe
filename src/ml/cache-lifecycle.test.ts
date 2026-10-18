@@ -20,3 +20,18 @@ it('requires config, processor and the exact speaker q8 weight, not a different 
  for(const file of ['config.json','preprocessor_config.json','onnx/model.onnx'])cache.set(prefix+file,new Response('cached'));
  expect(await checkSpeakerCache(repo)).toBe(false);cache.set(prefix+'onnx/model_quantized.onnx',new Response('q8'));expect(await checkSpeakerCache(repo)).toBe(true);
 });
+
+it('recognizes a pre-existing transformers cache even without an iScribe manifest',async()=>{
+ const cache=memoryCache(),repo='onnx-community/whisper-small';
+ const prefix=`https://huggingface.co/${repo}/resolve/main/`;
+ for(const file of ['config.json','tokenizer_config.json','tokenizer.json','preprocessor_config.json','onnx/encoder_model_fp16.onnx','onnx/decoder_model_merged_q4.onnx'])cache.set(prefix+file,new Response('cached'));
+ expect(await checkWhisperCache(repo)).toBe(true);
+});
+it('does not require evicted weights for a different backend profile',async()=>{
+ const cache=memoryCache(),repo='onnx-community/whisper-small';
+ const prefix=`https://huggingface.co/${repo}/resolve/main/`;
+ for(const file of ['config.json','tokenizer_config.json','tokenizer.json','preprocessor_config.json','onnx/encoder_model_quantized.onnx','onnx/decoder_model_merged_quantized.onnx','onnx/encoder_model_fp16.onnx','onnx/decoder_model_merged_q4.onnx'])cache.set(prefix+file,new Response('cached'));
+ expect(await recordWhisperCache(repo)).toBe(true);
+ cache.delete(prefix+'onnx/encoder_model_fp16.onnx');
+ expect(await checkWhisperCache(repo)).toBe(true);
+});
