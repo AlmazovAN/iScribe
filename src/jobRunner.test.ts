@@ -6,7 +6,7 @@ import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {ModelManager} from './ml/manager';
 function setup(){
- const fake={active:null as string|null,onProgress:(_status:string,_percent:number|null)=>{},prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
+ const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),decode=vi.fn(async()=>new Float32Array(60*16000));
  return {fake,store,download,runner:new JobRunner({store,manager:fake as unknown as ModelManager,decode,download})};
 }
