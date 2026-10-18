@@ -167,8 +167,8 @@ it('cancellation during recovery prevents another inference attempt',async()=>{
 });
 
 it('watchdog recovers a Worker that never resolves without advancing an uncommitted checkpoint',async()=>{
- const {fake,store,decode,download}=setup();
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,download,asrIdleMs:70});
+ const {fake,store,download}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode:async()=>new Float32Array(60*16000),download,asrIdleMs:70});
  await runner.init();await runner.add([new File(['a'],'stalled-worker.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
  fake.transcribe.mockImplementationOnce(()=>new Promise<{start:number;end:number;text:string}[]>(()=>{}))
