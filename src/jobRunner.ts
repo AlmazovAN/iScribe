@@ -148,7 +148,7 @@ export class JobRunner{
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
-    this.patch(id,{status:currentWindowLabel(windows,index),percent:checkpointProgress(windows,index).percent});
+    this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend),percent:checkpointProgress(windows,index).percent});
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
     let result:TranscriptSegment[]|undefined;
@@ -164,12 +164,12 @@ export class JobRunner{
         onTimeout:()=>this.manager.cancel()
        });
       }finally{this.asrHeartbeat=null}
-      this.check();break;
+      this.check();this.patch(id,{error:undefined});break;
      }catch(error){
       this.check();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       const next=attempt+1,wasmOnly=preferWasmAfterFailure(this.state.backend);
-      this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`});
+      this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
       // Throw on failed reinit instead of silently continuing on an unknown
       // backend. Explicit cancellation aborts before starting another window.
       const prepared=await this.manager.recover(params.model,wasmOnly);this.check();

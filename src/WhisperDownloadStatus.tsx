@@ -23,10 +23,10 @@ export function WhisperDownloadStatus({name,cached,active,download}:{name:string
  }else if(download?.phase==='cancelled'){
   title=effectiveCache?'Подготовка отменена · файлы в кэше':'Подготовка отменена';
   detail='Состояние кэша можно повторно проверить.';
- }else if(download?.phase==='ready'||active){
+ }else if(active){
   title=effectiveCache?'Готова к работе · в кэше':'Готова к работе · кэш не подтверждён';
   detail=effectiveCache?'Повторная инициализация после перезагрузки необходима.':'После перезагрузки могут потребоваться файлы из сети.';
- }else if(effectiveCache){detail='Файлы на устройстве; модель ещё не инициализирована.'}
+ }else if(effectiveCache){title='В кэше · не инициализирована';detail='Файлы на устройстве; после освобождения модели потребуется повторная инициализация.'}
  if(preparing&&download?.loadedBytes!==undefined){
   detail+=' Обработано файлов: '+size(download.loadedBytes)+' (не сетевой трафик).';
  }

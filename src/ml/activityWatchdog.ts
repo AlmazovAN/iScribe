@@ -1,7 +1,7 @@
 // Count only time spent in the foreground: background tabs suspend timers and
 // may freeze legitimate inference, so elapsed wall-clock time is not proof
 // that a worker is stuck. Heartbeats must represent actual model progress.
-export const DEFAULT_ASR_IDLE_MS=15*60*1000;
+export const DEFAULT_ASR_IDLE_MS=5*60*1000;
 export const MAX_ASR_WINDOW_SAMPLES=30*16000;
 export class WorkerStalledError extends Error{
  readonly code='worker-failed';
