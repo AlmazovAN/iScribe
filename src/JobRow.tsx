@@ -20,6 +20,7 @@ export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview}
   {!job.asrComplete&&job.nextWindow>0&&progress&&<small className="diagnostics">{checkpointLabel(progress)}</small>}
   {job.volatileSegments&&<small className="diagnostics">Текст последнего окна не сохранён в браузере. Скачайте TXT до закрытия вкладки.</small>}
   {job.error&&<p className="row-error" role="alert">{job.error}</p>}
+  {job.failure&&<small className="diagnostics" aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null?` / ${job.failure.totalWindows}`:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?` из ${Math.round(job.failure.durationSeconds)} с`:''} · backend: {job.failure.backend??'неизвестен'} · {job.failure.observedExit==='pagehide'?'зафиксирован выход со страницы (не обязательно перезагрузка)':'событие выхода не зафиксировано'} · {job.failure.message}</small>}
   {job.diagnostics&&<small className="diagnostics">Интервалов: {job.diagnostics.turns} · сегментов: {job.diagnostics.segments} · без спикера: {job.diagnostics.unlabeled} · точечных сегментов: {job.diagnostics.zeroDuration}{job.stage==='partial'?' · * частичный результат':''}</small>}
  </article>;
 }

@@ -9,6 +9,15 @@ it('keeps both text exports enabled while speaker processing is running',()=>{
  expect(html).not.toContain('<button disabled="">Скачать TXT');expect(html).not.toContain('<button disabled="">TXT + time</button>');
 });
 
+it('shows checkpoint data without claiming that pagehide proves a reload',()=>{
+ const j=createJob(new File(['a'],'meeting.wav'),{model:'whisper-small',language:'ru',diarize:false});
+ const job={...j,stage:'interrupted' as const,failure:{reason:'session-ended' as const,at:1,stage:'recognizing' as const,message:'Previous session ended',backend:'webgpu',completedWindows:1,totalWindows:35,checkpointSeconds:30,durationSeconds:871,observedExit:'pagehide' as const}};
+ const html=renderToStaticMarkup(<JobRow job={job} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}}/>);
+ expect(html).toContain('сохранено окон: 1 / 35');
+ expect(html).toContain('backend: webgpu');
+ expect(html).toContain('не обязательно перезагрузка');
+});
+
 it('shows committed progress after interruption and flags transient unsaved text',()=>{
  const j=createJob(new File(['audio'],'long.mp3'),{model:'whisper-small',language:'ru',diarize:false});
  const html=renderToStaticMarkup(<JobRow job={{...j,duration:871,stage:'interrupted',nextWindow:2,segments:[{start:3,end:4,text:'saved'}],volatileSegments:[{start:3,end:4,text:'saved'},{start:55,end:56,text:'unsaved'}]}} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}}/>);

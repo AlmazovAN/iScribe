@@ -5,7 +5,10 @@ export function useModels(manager:ModelManager,busy:boolean){
  const [downloads,setDownloads]=useState<Partial<Record<WhisperId,WhisperDownloadProgress>>>({});
  const [speakers,setSpeakers]=useState({segmentation:'Проверка кэша',embedding:'Проверка кэша',ready:false});
  useEffect(()=>{
-  manager.onWhisperProgress=(id,progress)=>setDownloads(d=>({...d,[id]:progress}));
+  manager.onWhisperProgress=(id,progress)=>{
+   setDownloads(d=>({...d,[id]:progress}));
+   if(progress.phase==='ready'&&progress.cachedAfter!==undefined)setCached(s=>({...s,[id]:progress.cachedAfter}));
+  };
   manager.onSpeakerProgress=(id,status)=>setSpeakers(s=>({...s,[id]:status}));
   return()=>{manager.onWhisperProgress=()=>{};manager.onSpeakerProgress=()=>{}};
  },[manager]);
