@@ -170,7 +170,10 @@ it('persists the last committed checkpoint and backend when a later ASR window f
  const {runner,fake,store}=setup();await runner.init();
  await runner.add([new File(['audio'],'diagnostic.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
- fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}]).mockRejectedValueOnce(new Error('GPU worker failed'));
+ fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}])
+  .mockRejectedValueOnce(new Error('GPU worker failed'))
+  .mockRejectedValueOnce(new Error('GPU worker failed'))
+  .mockRejectedValueOnce(new Error('GPU worker failed'));
  runner.enqueue(id);await finished(runner);
  const job=runner.snapshot().jobs.find(j=>j.id===id)!;
  expect(job.stage).toBe('error');
