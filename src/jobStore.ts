@@ -11,10 +11,10 @@ export class JobStore{
    request.onblocked=()=>{this.opening=undefined;reject(new Error('Закройте другие вкладки iScribe для доступа к сохранённым заданиям.'))};
   }));
  }
- async list():Promise<Job[]>{
+ async list(recover=true):Promise<Job[]>{
   const db=await this.open();return new Promise((resolve,reject)=>{
    const tx=db.transaction('jobs','readonly'),req=tx.objectStore('jobs').getAll();
-   tx.oncomplete=()=>resolve((req.result as Job[]).map(recoverJob).sort((a,b)=>a.updated-b.updated));tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+   tx.oncomplete=()=>resolve((recover?(req.result as Job[]).map(job=>recoverJob(job)):(req.result as Job[])).sort((a,b)=>a.updated-b.updated));tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
   });
  }
  async save(job:Job,file?:File):Promise<void>{
