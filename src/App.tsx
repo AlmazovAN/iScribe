@@ -23,7 +23,7 @@ export function App(){
  const cancelDialog=useRef<HTMLDialogElement>(null),removeDialog=useRef<HTMLDialogElement>(null);
  const input=useRef<HTMLInputElement>(null);
  const modelState=useModels(runner.manager,state.busy);
- useProtection(state.busy);
+ useProtection(state.busy,state.activeId);
  useEffect(()=>{void runner.init()},[runner]);
  useEffect(()=>{if(cancelOpen)cancelDialog.current?.showModal();else cancelDialog.current?.close()},[cancelOpen]);
  useEffect(()=>{if(removeId)removeDialog.current?.showModal();else removeDialog.current?.close()},[removeId]);
