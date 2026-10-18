@@ -23,9 +23,9 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,op
  const visible=options.visibility===undefined?(typeof document==='undefined'?null:document):options.visibility;
  return new Promise<T>((resolve,reject)=>{
   let finished=false,active=visible?.visibilityState!=='hidden',last=Date.now(),idleMs=0;
-  let timer:ReturnType<typeof setInterval>|undefined;
+  const timer:{id?:ReturnType<typeof setInterval>}={};
   const cleanup=()=>{
-   if(timer!==undefined)clearInterval(timer);
+   if(timer.id!==undefined)clearInterval(timer.id);
    visible?.removeEventListener('visibilitychange',onVisibility);
    options.signal?.removeEventListener('abort',onAbort);
   };
@@ -55,7 +55,7 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,op
   if(options.signal?.aborted){onAbort();return}
   visible?.addEventListener('visibilitychange',onVisibility);
   options.signal?.addEventListener('abort',onAbort,{once:true});
-  timer=setInterval(tick,pollMs);
+  timer.id=setInterval(tick,pollMs);
   Promise.resolve().then(()=>finished?undefined:work(heartbeat)).then(value=>settle(undefined,value as T),error=>settle(error));
  });
 }
