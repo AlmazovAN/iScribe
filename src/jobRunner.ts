@@ -6,6 +6,7 @@ import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobPara
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
+import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -23,15 +24,18 @@ export class JobRunner{
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript}={}){
+ private asrHeartbeat:(()=>void)|null=null;
+ private readonly asrIdleMs:number;
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;asrIdleMs?:number}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;
+  this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.manager.onProgress=(status,percent)=>{
    if(this.cancelled)return;
    const id=this.state.activeId;
    if(!id){this.set({operation:status});return}
    // Engine callbacks report progress INSIDE a 30s window. Never replace the
    // persisted whole-recording checkpoint or its percent with this value.
-   if(this.job(id).stage==='recognizing')return;
+   if(this.job(id).stage==='recognizing'){this.asrHeartbeat?.();return}
    this.patch(id,{status,percent:this.job(id).stage==='speakers'?percent:null});
   };
  }
@@ -124,7 +128,7 @@ export class JobRunner{
     try{await this.persist(id)}catch{/* Keep the existing notice. */}
    }
    this.queue=[];
-  }finally{this.set({busy:false,activeId:null,operation:''});this.abort=null;this.lease=undefined}
+  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:''});this.abort=null;this.lease=undefined}
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -151,7 +155,15 @@ export class JobRunner{
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
      try{
-      result=await this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);
+      try{
+       result=await withActivityWatchdog(heartbeat=>{
+        this.asrHeartbeat=heartbeat;
+        return this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);
+       },{
+        timeoutMs:this.asrIdleMs,pollMs:Math.min(1000,Math.max(5,this.asrIdleMs/4)),signal:this.abort!.signal,
+        onTimeout:()=>this.manager.cancel()
+       });
+      }finally{this.asrHeartbeat=null}
       this.check();break;
      }catch(error){
       this.check();

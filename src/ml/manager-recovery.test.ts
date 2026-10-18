@@ -42,3 +42,12 @@ it('rejects a disguised GPU fallback when WASM recovery was required',async()=>{
  expect(state.preferences).toEqual([[],['wasm']]);
  manager.cancel();
 });
+
+it('rejects a full audio recording before it is copied into inference Worker memory',async()=>{
+ state.backends=['wasm'];state.preferences=[];state.disposeCount=0;
+ const manager=new ModelManager();
+ await manager.prepare('whisper-small');
+ await expect(manager.transcribe(new Float32Array(30*16000+1),false,()=>{})).rejects.toThrow('не более 30 секунд');
+ await expect(manager.transcribe(new Float32Array(0),false,()=>{})).rejects.toThrow('не более 30 секунд');
+ manager.cancel();
+});
