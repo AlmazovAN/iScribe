@@ -17,3 +17,11 @@ it('shows checkpoint data without claiming that pagehide proves a reload',()=>{
  expect(html).toContain('backend: webgpu');
  expect(html).toContain('не обязательно перезагрузка');
 });
+
+it('shows committed progress after interruption and flags transient unsaved text',()=>{
+ const j=createJob(new File(['audio'],'long.mp3'),{model:'whisper-small',language:'ru',diarize:false});
+ const html=renderToStaticMarkup(<JobRow job={{...j,duration:871,stage:'interrupted',nextWindow:2,segments:[{start:3,end:4,text:'saved'}],volatileSegments:[{start:3,end:4,text:'saved'},{start:55,end:56,text:'unsaved'}]}} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}}/>);
+ expect(html).toContain('00:55 / 14:31');
+ expect(html).toContain('окон 2/35');
+ expect(html).toContain('не сохранён в браузере');
+});

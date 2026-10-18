@@ -16,3 +16,14 @@ it('checkpoint boundaries preserve overlap cuts and absolute timestamps on resum
  expect(absoluteSegments(segments,windows[1])).toEqual([{start:28,end:30,text:'keep'}]);
  expect(audioWindows(30*16000)).toHaveLength(1);
 });
+
+it('does not persist in-memory-only audio segments when saving a failed job',async()=>{
+ const file=new File(['audio'],'volatile.wav'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ const store=new JobStore();
+ await store.save({...job,nextWindow:0,segments:[],volatileSegments:[{start:0,end:1,text:'memory only'}],stage:'error'},file);
+ const restored=(await new JobStore().list()).find(j=>j.id===job.id)!;
+ expect(restored.volatileSegments).toBeUndefined();
+ expect(restored.nextWindow).toBe(0);
+ expect(restored.segments).toHaveLength(0);
+ await store.remove(job.id);
+});

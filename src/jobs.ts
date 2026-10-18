@@ -3,7 +3,7 @@ import type {WhisperId} from './ml/manager';
 import {createFailureDiagnostic,type JobFailure,type PageExitEvent} from './jobDiagnostics';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;backend?:string;failure?:JobFailure;error?:string;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;backend?:string;failure?:JobFailure;error?:string;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  if(!isRunning(job.stage)&&job.stage!=='queued')return job;
