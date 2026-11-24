@@ -44,8 +44,8 @@ test('actual Cache API persists across reload and notices eviction',async({page}
  await page.reload();
  // Cached files survive reload; ONNX session itself must be initialized again.
  await expect(small(page).locator('.download-status')).toContainText('В кэше');
- await expect(small(page).getByRole('button',{name:'Выбрать'})).toBeVisible();
- await small(page).getByRole('button',{name:'Выбрать'}).click();
+ await expect(small(page).getByRole('button',{name:'Выбрана · в кэше'})).toBeVisible();
+ await small(page).getByRole('button',{name:'Выбрана · в кэше'}).click();
  await expect(small(page).locator('.download-status')).toContainText(/готова к работе/i);
  await page.evaluate(()=>caches.delete('transformers-cache'));
  await page.reload();
