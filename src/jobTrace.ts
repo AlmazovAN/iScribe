@@ -7,7 +7,7 @@ export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'model-start'|'model-ready'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
- 'checkpoint-committed'|'speaker-start'|'speaker-result'|'speaker-error'|
+ 'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
 export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
