@@ -41,7 +41,8 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
   if(value.code==='worker-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
-  if(value.name==='QuotaExceededError')return 'storage';
+  if(value.name==='QuotaExceededError'||value.code==='storage-failed')return 'storage';
+  if(value.name==='NetworkError'||value.code==='network-failed')return 'network';
  }
  // Do not inspect, classify or export arbitrary error.message strings:
  // they can contain source paths, filenames or captured audio/transcript data.
