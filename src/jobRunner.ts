@@ -289,9 +289,9 @@ export class JobRunner{
   try{this.export(id,params.diarize?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'})}catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)})}
  }
  cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
- async prepare(model:WhisperId){
+ async prepare(model:WhisperId,wasmOnly=false){
   if(this.state.busy)return;this.set({busy:true,operation:'Подготовка модели'});this.cancelled=false;
-  try{await this.exclusive(async()=>{const prepared=await this.manager.prepare(model);this.set({backend:prepared.backend})})}catch(error){this.set({notice:message(error)})}
+  try{await this.exclusive(async()=>{const prepared=await this.manager.prepare(model,{wasmOnly});this.set({backend:prepared.backend})})}catch(error){this.set({notice:message(error)})}
   finally{this.set({busy:false,operation:''});if(this.queue.length)void this.drain()}
  }
  async preloadSpeakers(){
