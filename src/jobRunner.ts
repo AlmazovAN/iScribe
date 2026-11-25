@@ -192,7 +192,7 @@ export class JobRunner{
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
-  const disk=(await this.store.list()).find(j=>j.id===id);this.check();
+  const disk=await this.store.get(id);this.check();
   if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
