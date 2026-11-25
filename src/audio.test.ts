@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {mixMono,validateFile,MAX_FILE_BYTES} from './audio';
+import {mixMono,validateFile,MAX_FILE_BYTES,MAX_STREAM_MP3_BYTES,isLargeMp3,decodeAudio} from './audio';
 it('averages channels without changing sample positions or mutating input',()=>{
  const left=Float32Array.of(1,0,-1),right=Float32Array.of(0,1,1);
  expect([...mixMono([left,right])]).toEqual([.5,.5,0]);expect([...left]).toEqual([1,0,-1]);
@@ -7,7 +7,10 @@ it('averages channels without changing sample positions or mutating input',()=>{
 it('rejects malformed input channels',()=>{expect(()=>mixMono([])).toThrow();expect(()=>mixMono([Float32Array.of(1),Float32Array.of(1,2)])).toThrow()});
 it('rejects empty, oversized and unsupported files',()=>{
  expect(()=>validateFile({name:'note.wav',size:0})).toThrow();
- expect(()=>validateFile({name:'note.mp3',size:MAX_FILE_BYTES+1})).toThrow();
+ expect(()=>validateFile({name:'note.mp3',size:MAX_FILE_BYTES+1})).not.toThrow();
+ expect(()=>validateFile({name:'note.mp3',size:MAX_STREAM_MP3_BYTES+1})).toThrow();
+ expect(()=>validateFile({name:'note.wav',size:MAX_FILE_BYTES+1})).toThrow();
+ expect(isLargeMp3({name:'note.mp3',size:MAX_FILE_BYTES+1})).toBe(true);
  expect(()=>validateFile({name:'note.exe',size:10})).toThrow();
  expect(()=>validateFile({name:'NOTE.WAV',size:100})).not.toThrow();
 });
@@ -55,4 +58,16 @@ it('reuses the decoder channel buffer for 16 kHz mono instead of copying the ful
   expect(result[100]).toBeCloseTo(0.4);
   expect(close).toHaveBeenCalledOnce();
  }finally{vi.unstubAllGlobals()}
+});
+
+it('protects RAM: full-file decoder rejects large MP3 before allocating AudioContext',async()=>{
+  const {vi}=await import('vitest');
+  const context=vi.fn();
+  vi.stubGlobal('AudioContext',context);
+  try{
+   const huge=new File(['test'],'large.mp3');
+   Object.defineProperty(huge,'size',{value:MAX_FILE_BYTES+1});
+   await expect(decodeAudio(huge)).rejects.toThrow('Полное декодирование отключено');
+   expect(context).not.toHaveBeenCalled();
+  }finally{vi.unstubAllGlobals()}
 });
