@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile} from 'node:fs/promises';
 
 const HARNESS='/tests/e2e/harness.html';
 const row=page=>page.locator('.file-row');
@@ -72,7 +72,7 @@ test('actual Cache API persists across reload and notices eviction',async({page}
  await expect(small(page).locator('.download-status')).toContainText('Не скачана');
 });
 
-test('14m31s: committed windows survive refresh; resume once; all three real TXT downloads',async({page})=>{
+test('14m31s: committed windows survive refresh; resume once; all three real TXT downloads',async({page},testInfo)=>{
  await page.evaluate(()=>localStorage.setItem('iscribe-e2e:pauseAt','3'));
  await loadFixture(page);
  await add(page,'meeting-871s.wav');
@@ -109,6 +109,20 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  expect(speakers.text).toContain('[SPEAKER_00]: Окно 1');
  expect(speakers.text).toContain('Окно 35');
  expect(speakers.text.match(/Окно \d+/g)).toHaveLength(35);
+ const benchmark=await downloadText(page,'Бенчмарк JSON');
+ const report=JSON.parse(benchmark.text);
+ expect(report).toMatchObject({schema:'iscribe.benchmark.v1',source:'browser-observed-timings',
+  resumedRuns:1,measuredCommittedWindows:35,measuredUniqueAudioSeconds:871,
+  asrWindowMs:{count:35},committedCheckpointWindows:35});
+ expect(report.timingsMs.checkpointPersistence).toBeGreaterThanOrEqual(0);
+ expect(report.asrWindowMs.p95).toBeGreaterThanOrEqual(0);
+ expect(report.windowTimings).toHaveLength(35);
+ expect(benchmark.text).not.toContain('meeting-871s.wav');
+ expect(benchmark.text).not.toContain('Окно 1');
+ // CI artifact contains synthetic fixture timings, not hardware Whisper scores.
+ await writeFile(testInfo.outputPath('synthetic-benchmark.json'),JSON.stringify({
+  ...report,ciFixture:'mocked-Whisper-871s; NOT a real inference benchmark'
+ },null,2));
 });
 
 test('speaker failures do not destroy complete TXT or rerun ASR on retry',async({page})=>{
