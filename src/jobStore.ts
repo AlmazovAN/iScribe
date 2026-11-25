@@ -105,7 +105,7 @@ export class JobStore{
      if(!Number.isSafeInteger(oldCount)||oldCount<0||
         job.segments.length<oldCount||(old&&job.nextWindow<old.nextWindow))
       throw new Error('Отказ от записи: сохранённый текст или контрольная точка не могут уменьшиться.');
-     if(old?.storageLayout===2&&job.segments.length>oldCount&&job.nextWindow<=old.nextWindow)
+     if(old&&job.segments.length>oldCount&&job.nextWindow<=old.nextWindow)
       throw new Error('Нельзя записать новый текст без подтверждённого номера следующего окна.');
      if(old?.storageLayout!==2){
       // One-time migration is in this SAME transaction. A failure cannot
