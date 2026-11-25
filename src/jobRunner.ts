@@ -12,13 +12,15 @@ import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
-export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string};
+export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number};
 export class JobRunner{
  readonly manager:ModelManager;
  private store:JobStore;
- private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:''};
+ private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0};
  private listeners=new Set<()=>void>();
  private queue:string[]=[];
+ private nextQueueOrder=0;
+ private queueWrites:Promise<void>=Promise.resolve();
  private cancelled=false;
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
@@ -106,8 +108,15 @@ export class JobRunner{
   try{
    const disk=await this.store.list(false),exit=consumePageExit();
    const jobs=disk.map(j=>recoverJob(j,exit?.jobId===j.id?exit.event:null));
+   // Only explicitly enqueued work is automatically restored; in-flight ASR
+   // becomes interrupted but retains its position for one-click resume.
+   const ordered=jobs.filter(j=>typeof j.queueOrder==='number'&&Number.isSafeInteger(j.queueOrder)&&j.queueOrder>0&&
+    (j.stage==='queued'||j.stage==='interrupted'))
+    .sort((a,b)=>a.queueOrder!-b.queueOrder!||a.id.localeCompare(b.id));
+   this.queue=ordered.map(j=>j.id);
+   this.nextQueueOrder=Math.max(0,...disk.map(j=>typeof j.queueOrder==='number'&&Number.isSafeInteger(j.queueOrder)?j.queueOrder:0));
    for(const job of disk)this.committedWindows.set(job.id,job.nextWindow);
-   this.set({jobs});
+   this.set({jobs,queueCount:this.queue.length});
    // Store the reconstructed stop diagnostic after reload, not in an unload handler.
    for(let i=0;i<jobs.length;i++)if(disk[i].stage!==jobs[i].stage){
     try{await this.store.save(jobs[i])}catch(error){this.set({notice:'Не удалось сохранить диагностику восстановления: '+message(error)})}
