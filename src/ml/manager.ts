@@ -86,6 +86,7 @@ export class ModelManager{
     return client!.init(id,options.wasmOnly?{backendPreference:['wasm']}:{})
    },{
     timeoutMs:this.initIdleMs,
+    pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),
     onTimeout:()=>{expired=true;client?.dispose()}
    });
    if(generation!==this.generation)throw new Error('Операция отменена.');
@@ -148,7 +149,7 @@ export class ModelManager{
      }
     });
     worker.postMessage({type:'iscribe:preload',requestId});
-   }),{timeoutMs:this.speakerIdleMs,onTimeout:()=>{createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    const cached=await this.speakersCached();
    if(!cached.segmentation||!cached.embedding)throw new Error('Не подтверждён полный кеш обеих моделей говорящих. Повторите загрузку; проверьте свободное место браузера.');
@@ -203,7 +204,7 @@ export class ModelManager{
      }
     });
     worker!.postMessage({type:'iscribe:speakers',requestId,audio});
-   }),{timeoutMs:this.speakerIdleMs,onTimeout:()=>{worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    this.phase('idle',null,null);
    return turns;
