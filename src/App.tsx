@@ -2,6 +2,7 @@ import {useEffect,useRef,useState,useSyncExternalStore} from 'react';
 import './style.css';
 import {WhisperDownloadStatus} from './WhisperDownloadStatus';
 import {OfflineReadinessPanel} from './OfflineReadinessPanel';
+import {HardwareAcceptancePanel} from './HardwareAcceptancePanel';
 import {JobRunner} from './jobRunner';
 import {JobRow} from './JobRow';
 import {useModels} from './useModels';
@@ -41,6 +42,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const download=(id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadDiagnostics=(id:string)=>{try{runner.exportDiagnostics(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadBenchmark=(id:string)=>{try{runner.exportBenchmark(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
+ const downloadHardware=(id:string)=>runner.exportHardwareEvidence(id);
  const inspectAudio=(id:string)=>{setError('');void runner.inspectAudio(id).catch(e=>setError(e instanceof Error?e.message:String(e)))};
  const chosen=state.jobs.find(j=>j.id===previewId)??state.jobs.find(j=>j.id===state.activeId)??state.jobs.at(-1);
  let preview='';try{if(chosen)preview=formatTranscript(chosen.speakerSegments??chosen.volatileSegments??chosen.segments,{timestamps:true,diarize:!!chosen.speakerSegments})}catch{preview='Не удалось сформировать предпросмотр. Проверьте временные метки.'}
@@ -66,6 +68,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     <div className="file-list">{state.jobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onCancel={openCancel} onRemove={()=>setRemoveId(job.id)} onPreview={()=>setPreviewId(job.id)} onDiagnostics={()=>downloadDiagnostics(job.id)} onBenchmark={()=>downloadBenchmark(job.id)} onInspectAudio={()=>inspectAudio(job.id)} queuePosition={job.queueOrder===undefined?undefined:state.jobs.filter(j=>j.queueOrder!==undefined).sort((a,b)=>(a.queueOrder??0)-(b.queueOrder??0)).findIndex(j=>j.id===job.id)+1} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')} inspectDisabled={state.busy}/>)}</div>
     {!state.jobs.length&&state.ready&&<p className="empty-list">Добавленные записи появятся здесь. До 128 МБ и одного часа на файл.</p>}
    </section>
+   <HardwareAcceptancePanel job={chosen} onExport={downloadHardware} busy={state.busy}/>
    <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ML: {engineLabels[state.enginePhase]} · ASR: {state.backend} · спикеры: WASM</span></div>
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}
    {chosen&&<section className="panel result"><div className="panel-heading"><h2>Текст записи</h2><span className="preview-name">{chosen.name}</span></div>{!chosen.asrComplete&&preview&&<p className="note">Промежуточный текст. Распознавание ещё не завершено.</p>}<div className={preview?'transcript':'empty'}>{preview||'Текст появится по мере распознавания.'}</div></section>}
