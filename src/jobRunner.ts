@@ -165,6 +165,9 @@ export class JobRunner{
   this.patch(id,{stage:'queued',status:'В очереди',error:undefined,queueOrder:order});
   this.set({queueCount:this.queue.length});
   this.queueWrites=this.queueWrites.then(()=>this.persist(id));
+  // Keep the rejection for ensureQueueSaved() while immediately observing it
+  // so a quota failure cannot become a global unhandledrejection event.
+  void this.queueWrites.catch(()=>{});
   void this.drain();
  }
  resumeQueue(){if(this.state.ready&&!this.state.busy&&this.queue.length)void this.drain()}
