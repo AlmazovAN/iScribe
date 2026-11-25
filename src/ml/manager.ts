@@ -1,11 +1,27 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
-import {MAX_ASR_WINDOW_SAMPLES} from './activityWatchdog';
+import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
 export const repos:Record<WhisperId,string>={'whisper-tiny':'onnx-community/whisper-tiny','whisper-small':'onnx-community/whisper-small','whisper-large-v3':'onnx-community/whisper-large-v3-ONNX'};
 export type WhisperDownloadProgress={phase:'loading'|'initializing'|'checking'|'ready'|'error'|'cancelled';loadedBytes?:number;totalBytes?:number;httpRequests?:number;cachedBefore?:boolean;cachedAfter?:boolean;message?:string};
+export type EnginePhase='idle'|'initializing'|'ready'|'transcribing'|'recovering'|'preloading-speakers'|'diarizing'|'cancelled'|'error';
+export type EngineLifecycle={phase:EnginePhase;model:WhisperId|null;backend:BackendId|null;generation:number};
+export const DEFAULT_MODEL_INIT_IDLE_MS=15*60*1000;
+export const DEFAULT_SPEAKER_IDLE_MS=15*60*1000;
 export class ModelManager{
+ readonly initIdleMs:number;
+ readonly speakerIdleMs:number;
+ lifecycle:EngineLifecycle={phase:'idle',model:null,backend:null,generation:0};
+ onLifecycleChange:(state:EngineLifecycle)=>void=()=>{};
+ private phase(phase:EnginePhase,model:WhisperId|null=this.active,backend:BackendId|null=this.capabilities?.active??null){
+  this.lifecycle={phase,model,backend,generation:this.generation};
+  this.onLifecycleChange({...this.lifecycle});
+ }
+ constructor(options:{initIdleMs?:number;speakerIdleMs?:number}={}){
+  this.initIdleMs=options.initIdleMs??DEFAULT_MODEL_INIT_IDLE_MS;
+  this.speakerIdleMs=options.speakerIdleMs??DEFAULT_SPEAKER_IDLE_MS;
+ }
  private client:EngineClient|null=null;
  private busy=false;
  private speakerWorker:Worker|null=null;
@@ -22,14 +38,21 @@ export class ModelManager{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   // Selecting the already active model must not dispose its ONNX session.
   if(this.active===id&&this.client&&this.capabilities?.active&&(!options.wasmOnly||this.capabilities.active==='wasm')){
+   // Cache inspection is asynchronous. The active session may be cancelled or
+   // replaced before it completes; never resurrect an old ready status.
+   const generation=this.generation,client=this.client,backend=this.capabilities.active;
    const cached=await this.cached(id);
+   if(generation!==this.generation||this.client!==client||this.active!==id)
+    throw new Error('Операция отменена или модель изменена.');
    this.onWhisperProgress(id,{phase:'ready',cachedBefore:cached,cachedAfter:cached,httpRequests:0});
-   return {cached,backend:this.capabilities.active};
+   return {cached,backend};
   }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
-  this.client?.dispose();this.active=null;this.capabilities=null;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.phase('initializing',id,null);
   let client:EngineClient|null=null;
   let cachedBefore=false,requests=0,loadedBytes=0,totalBytes=0;
+  let initHeartbeat:(()=>void)|null=null,expired=false;
   const progress=(phase:WhisperDownloadProgress['phase'],message?:string,cachedAfter?:boolean)=>{
    if(generation!==this.generation)return;
    this.onWhisperProgress(id,{phase,cachedBefore,httpRequests:requests,
@@ -46,7 +69,9 @@ export class ModelManager{
      const d=event.data;
      if(generation!==this.generation||!d||typeof d!=='object'||!('type' in d)||d.type!=='iscribe:model-http-request'||
         !('repo' in d)||d.repo!==repos[id])return;
+     if(expired)return;
      requests++;
+     initHeartbeat?.();
      progress('loading');
      this.onProgress('HTTP-запрос файлов модели (возможен кэш браузера)…',null);
     });
@@ -56,11 +81,19 @@ export class ModelManager{
    // Engine download-progress measures model files processed, including cache hits.
    // It does NOT measure bytes transferred over the network.
    client.onDownloadProgress=info=>{
-    if(generation!==this.generation)return;
+    if(generation!==this.generation||expired)return;
+    initHeartbeat?.();
     loadedBytes=info.loadedBytes;totalBytes=info.totalBytes;
     progress(requests>0?'loading':'initializing');
    };
-   const report=await client.init(id,options.wasmOnly?{backendPreference:['wasm']}:{});
+   const report=await withActivityWatchdog(heartbeat=>{
+    initHeartbeat=heartbeat;
+    return client!.init(id,options.wasmOnly?{backendPreference:['wasm']}:{})
+   },{
+    timeoutMs:this.initIdleMs,
+    pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),
+    onTimeout:()=>{expired=true;client?.dispose()}
+   });
    if(generation!==this.generation)throw new Error('Операция отменена.');
    if(options.wasmOnly&&report.active!=='wasm')throw new Error('Безопасное восстановление на WASM недоступно.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
@@ -69,17 +102,21 @@ export class ModelManager{
    const cached=await recordWhisperCache(repos[id]);
    if(generation!==this.generation)throw new Error('Операция отменена.');
    progress('ready',undefined,cached);
+   this.phase('ready',id,report.active);
    return {cached,backend:report.active};
   }catch(error){
    progress('error',error instanceof Error?error.message:String(error));
+   if(generation===this.generation)this.phase('error',id,null);
    client?.dispose();
    if(this.client===client){this.client=null;this.active=null;this.capabilities=null}
    throw error;
-  }finally{if(generation===this.generation){this.busy=false;this.preparingId=null}}
+  }finally{initHeartbeat=null;if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
  async recover(id:WhisperId,wasmOnly:boolean):Promise<{cached:boolean,backend:BackendId}>{
   // A failed inference worker must be discarded; ONNX session and pending
   // requests in that worker are not safe to reuse on the next attempt.
+  if(this.busy)throw new Error('Невозможно восстановить Worker во время другой операции.');
+  this.phase('recovering',id,null);
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   const prepared=await this.prepare(id,{wasmOnly});
   const backend=prepared.backend;
@@ -94,20 +131,22 @@ export class ModelManager{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
-  let createdWorker:Worker|null=null;
+  this.phase('preloading-speakers',null,null);
+  let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
   try{
    const worker=new EngineWorker();createdWorker=worker;this.speakerWorker=worker;
-   await new Promise<void>((resolve,reject)=>{
+   await withActivityWatchdog(heartbeat=>new Promise<void>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker.addEventListener('error',()=>reject(new Error('Worker загрузки моделей говорящих завершился с ошибкой.')));
     worker.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения от Worker моделей говорящих.')));
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const data=event.data;
-     if(!data||typeof data!=='object'||!('requestId' in data)||data.requestId!==requestId||!('type' in data)||generation!==this.generation)return;
-     if(data.type==='iscribe:preload-complete'){resolve();return}
+     if(stopped||!data||typeof data!=='object'||!('requestId' in data)||data.requestId!==requestId||!('type' in data)||generation!==this.generation)return;
+     if(data.type==='iscribe:preload-complete'){heartbeat();resolve();return}
      if(data.type==='iscribe:preload-error'&&'message' in data&&typeof data.message==='string'){reject(new Error(data.message));return}
      if(data.type==='iscribe:preload-progress'&&'model' in data&&typeof data.model==='string'&&'status' in data&&typeof data.status==='string'){
+      heartbeat();
       const id=data.model===speakerRepos.segmentation?'segmentation':data.model===speakerRepos.embedding?'embedding':null;if(!id)return;
       const mb='loaded' in data&&typeof data.loaded==='number'?` · ${(data.loaded/1024/1024).toFixed(1)} МБ`:'';
       const label=id==='segmentation'?'Pyannote':'WeSpeaker';const stage=data.status==='ready'?'Инициализирована':data.status==='initiate'?'Подготовка':'Загрузка'+mb;
@@ -115,13 +154,15 @@ export class ModelManager{
      }
     });
     worker.postMessage({type:'iscribe:preload',requestId});
-   });
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    const cached=await this.speakersCached();
    if(!cached.segmentation||!cached.embedding)throw new Error('Не подтверждён полный кеш обеих моделей говорящих. Повторите загрузку; проверьте свободное место браузера.');
+   this.phase('idle',null,null);
    return cached;
-  }finally{
-   createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
+  }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
+  finally{
+   stopped=true;createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
    if(generation===this.generation)this.busy=false;
   }
  }
@@ -133,36 +174,47 @@ export class ModelManager{
   if(!Number.isInteger(audio.length)||audio.length===0||audio.length>MAX_ASR_WINDOW_SAMPLES)
    throw new Error('Некорректный размер окна ASR. Передавайте не более 30 секунд аудио.');
   this.busy=true;const generation=this.generation;
+  this.phase('transcribing');
   try{
    this.onProgress(language==='ru'?'Распознавание русской речи…':'Распознавание английской речи…',null);
    const result=await this.client.transcribe(audio,{language,task:'transcribe',diarize},{onDiarizationProgress:(processed,total)=>{if(generation===this.generation)this.onProgress(`Разделение говорящих (WASM): ${processed} / ${total}`,total?processed/total*100:null)},onPartial:(segments,processed,total)=>{if(generation!==this.generation)return;onPartial(segments);this.onProgress(`Распознано ${processed.toFixed(0)} / ${total.toFixed(0)} с`,total?processed/total*100:null)}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
+   this.phase('ready');
    return result;
-  }finally{if(generation===this.generation)this.busy=false}
+  }catch(error){if(generation===this.generation)this.phase('error');throw error}
+  finally{if(generation===this.generation)this.busy=false}
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
-  let worker:Worker|null=null;
+  this.phase('diarizing',null,null);
+  let worker:Worker|null=null,stopped=false;
   try{
    worker=new EngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
-   return await new Promise<SpeakerTurn[]>((resolve,reject)=>{
+   const turns=await withActivityWatchdog(heartbeat=>new Promise<SpeakerTurn[]>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
     worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
     worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
-     const d=event.data;if(!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
-     if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string')this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
+     const d=event.data;if(stopped||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
+     if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string'){
+      heartbeat();
+      this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
+     }
      if(d.type==='iscribe:preload-error'&&'message' in d&&typeof d.message==='string')reject(new Error(d.message));
      if(d.type==='iscribe:speaker-result'&&'turns' in d){
       if(!Array.isArray(d.turns)||!d.turns.every(t=>t&&typeof t==='object'&&typeof t.start==='number'&&Number.isFinite(t.start)&&typeof t.end==='number'&&Number.isFinite(t.end)&&t.end>t.start&&typeof t.speaker==='string')){reject(new Error('Некорректные интервалы диаризации.'));return}
-      resolve(d.turns);
+      heartbeat();resolve(d.turns);
      }
     });
     worker!.postMessage({type:'iscribe:speakers',requestId,audio});
-   });
-  }finally{worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   if(generation!==this.generation)throw new Error('Операция отменена.');
+   this.phase('idle',null,null);
+   return turns;
+  }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
+  finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
- cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false}
+ cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false;this.phase('cancelled',null,null)}
 }

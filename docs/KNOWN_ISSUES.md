@@ -15,4 +15,6 @@ PR-21 CI baseline: verify passed; browser-acceptance failed because Playwright 1
 
 PR-23 validation cannot detect all damaged compressed MP3 frames: a browser decoder may conceal corruption. Actual hardware and MP3 reproduction remain mandatory.
 
+PR-24 adds defensive timeouts during model init and speaker processing; a slow but legitimately silent model can still be stopped, and browser device-loss handling needs real hardware testing. Existing ASR/diarization transcript guarantees must remain in place.
+
 No issue above is declared fixed without a reproducible test and observed outcome.

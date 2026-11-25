@@ -9,14 +9,14 @@ import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceEr
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
-import {ModelManager,type WhisperId} from './ml/manager';
+import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
-export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;operation:string};
+export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string};
 export class JobRunner{
  readonly manager:ModelManager;
  private store:JobStore;
- private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',operation:''};
+ private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:''};
  private listeners=new Set<()=>void>();
  private queue:string[]=[];
  private cancelled=false;
@@ -32,6 +32,9 @@ export class JobRunner{
  constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
+  this.manager.onLifecycleChange=event=>{
+   this.set({enginePhase:event.phase,backend:event.backend??'Не инициализировано'});
+  };
   this.manager.onProgress=(status,percent)=>{
    if(this.cancelled)return;
    const id=this.state.activeId;
@@ -227,6 +230,7 @@ export class JobRunner{
      // Save the in-flight window metadata before invoking the Worker.
      // A tab crash can then be diagnosed without claiming a committed result.
      await this.persist(id);
+     const attemptBackend=this.manager.capabilities?.active??this.state.backend;
      const attemptStarted=Date.now();
      try{
       try{
@@ -242,16 +246,17 @@ export class JobRunner{
       this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:result.length,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
       break;
      }catch(error){
-      this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
+      this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
       this.check();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
-      const next=attempt+1,wasmOnly=preferWasmAfterFailure(this.state.backend);
-      this.traceEvent(id,'window-retry','asr',{window:index+1,totalWindows:windows.length,attempt:next,backend:traceBackend(this.state.backend)});
+      const next=attempt+1,wasmOnly=preferWasmAfterFailure(attemptBackend);
+      this.traceEvent(id,'window-retry','asr',{window:index+1,totalWindows:windows.length,attempt:next,backend:traceBackend(attemptBackend)});
       this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
       // Throw on failed reinit instead of silently continuing on an unknown
       // backend. Explicit cancellation aborts before starting another window.
       const prepared=await this.manager.recover(params.model,wasmOnly);this.check();
       this.set({backend:prepared.backend});
+      this.patch(id,{backend:prepared.backend});
      }
     }
     if(!result)throw new Error('Окно не вернуло результат распознавания.');

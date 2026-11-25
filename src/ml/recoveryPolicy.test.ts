@@ -21,6 +21,9 @@ it('retries known failed Worker/inference errors and prefers WASM over GPU',()=>
  expect(isRetryableAsrError({code:'worker-failed',message:'worker unavailable'})).toBe(false);
  expect(isRetryableAsrError({code:'worker-failed',message:'Worker died unexpectedly'})).toBe(true);
  expect(isRetryableAsrError({code:'transcribe-failed',message:'unknown inference failure'})).toBe(true);
+ expect(isRetryableAsrError({code:'gpu-device-lost',message:'GPU device lost'})).toBe(true);
+ expect(isRetryableAsrError({code:'webgpu-device-lost',message:'WebGPU device lost'})).toBe(true);
+ expect(isRetryableAsrError({code:'gpu-device-lost',message:'out of memory'})).toBe(false);
  expect(preferWasmAfterFailure('webgpu')).toBe(true);
  expect(preferWasmAfterFailure('webnn')).toBe(true);
  expect(preferWasmAfterFailure('wasm')).toBe(true);
