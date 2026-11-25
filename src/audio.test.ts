@@ -37,3 +37,22 @@ it('rejects a decoder that returns invalid channel count or zero PCM samples',as
   await expect(decodeAudio(new File(['bad'],'invalid.mp3'))).rejects.toThrow('Декодер вернул некорректные параметры');
  }finally{vi.unstubAllGlobals()}
 });
+
+
+it('reuses the decoder channel buffer for 16 kHz mono instead of copying the full PCM',async()=>{
+ const {vi}=await import('vitest');
+ const {decodeAudio}=await import('./audio');
+ const samples=new Float32Array(16000);
+ samples[100]=0.4;
+ const close=vi.fn(async()=>{});
+ vi.stubGlobal('AudioContext',class{
+  decodeAudioData=async()=>({duration:1,length:samples.length,numberOfChannels:1,sampleRate:16000,getChannelData:()=>samples});
+  close=close;
+ });
+ try{
+  const result=await decodeAudio(new File(['compressed input'],'mono.mp3'));
+  expect(result).toBe(samples);
+  expect(result[100]).toBeCloseTo(0.4);
+  expect(close).toHaveBeenCalledOnce();
+ }finally{vi.unstubAllGlobals()}
+});
