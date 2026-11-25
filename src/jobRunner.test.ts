@@ -273,3 +273,26 @@ it('standalone PCM inspection does not modify a saved transcript or its checkpoi
  expect(after.segments).toEqual(savedJob.segments);
  expect(fake.transcribe).not.toHaveBeenCalled();
 });
+
+
+it('remembers WebGPU for safe WASM fallback even when watchdog cancellation clears the active backend',async()=>{
+ const {fake,store,download}=setup();
+ fake.prepare.mockImplementation(async id=>{fake.active=id;return {cached:true,backend:'webgpu'}});
+ fake.cancel.mockImplementation(()=>{
+  fake.active=null;
+  (fake as unknown as {onLifecycleChange:(e:{phase:'cancelled';model:null;backend:null;generation:number})=>void})
+   .onLifecycleChange({phase:'cancelled',model:null,backend:null,generation:99});
+ });
+ fake.transcribe.mockImplementationOnce(()=>new Promise<{start:number;end:number;text:string}[]>(()=>{}))
+  .mockImplementation(async()=>[{start:3,end:4,text:'recovered safely'}]);
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode:async()=>new Float32Array(60*16000),download,asrIdleMs:55});
+ await runner.init();
+ await runner.add([new File(['a'],'webgpu-device-lost.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ expect(fake.cancel).toHaveBeenCalledTimes(1);
+ expect(fake.recover).toHaveBeenCalledExactlyOnceWith('whisper-small',true);
+ const job=(await store.list(false)).find(j=>j.id===id)!;
+ expect(job).toMatchObject({asrComplete:true,nextWindow:3});
+ expect(job.trace?.some(e=>e.code==='window-error'&&e.backend==='webgpu'&&e.errorKind==='timeout')).toBe(true);
+});
