@@ -34,6 +34,7 @@ vi.mock('./cache',()=>({
  speakerRepos:{segmentation:'test/seg',embedding:'test/emb'}
 }));
 import {ModelManager} from './manager';
+import {checkWhisperCache} from './cache';
 afterEach(()=>{vi.useRealTimers();state.stallInit=false;state.pendingInit=false;state.resolveInit=null;state.terminatedWorkers=0});
 it('restarts failed accelerated inference with a new Worker and selects real WASM',async()=>{
  state.backends=['webgpu','wasm'];state.preferences=[];state.disposeCount=0;
@@ -136,4 +137,22 @@ it('ignores an old model-init completion after cancellation',async()=>{
  expect(manager.active).toBeNull();
  expect(manager.capabilities).toBeNull();
  expect(manager.lifecycle).toMatchObject({phase:'cancelled',backend:null,model:null});
+});
+
+it('does not report a cached active model as ready when it was cancelled during cache check',async()=>{
+ state.backends=['webgpu'];
+ const manager=new ModelManager();
+ await manager.prepare('whisper-small');
+ let release:(cached:boolean)=>void=()=>{};
+ vi.mocked(checkWhisperCache).mockImplementationOnce(()=>new Promise(resolve=>{release=resolve}));
+ const progress=vi.fn();
+ manager.onWhisperProgress=progress;
+ const pending=manager.prepare('whisper-small');
+ for(let i=0;i<8;i++)await Promise.resolve();
+ manager.cancel();
+ release(true);
+ await expect(pending).rejects.toThrow('Операция отменена');
+ expect(manager.active).toBeNull();
+ expect(manager.lifecycle.phase).toBe('cancelled');
+ expect(progress.mock.calls.some(([,result])=>result.phase==='ready')).toBe(false);
 });
