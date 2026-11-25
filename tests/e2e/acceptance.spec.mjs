@@ -178,3 +178,27 @@ test('durable FIFO restores three jobs after a reload; one click resumes only un
  await expect(page.locator('.queue-banner')).toHaveCount(0);
  expect((await snapshot(page)).every(j=>j.queueOrder===undefined)).toBe(true);
 });
+
+
+test('speaker gaps remain unlabeled; saved TXT stays downloadable and speaker retry does not rerun ASR',async({page})=>{
+ await page.evaluate(()=>localStorage.setItem('iscribe-e2e:speakerGaps','1'));
+ await loadFixture(page);
+ await add(page,'speaker-gaps-60s.wav');
+ await row(page).getByRole('button',{name:'Начать',exact:true}).click();
+ await expect(row(page)).toContainText('Текст готов · без спикера: 2 из 3',{timeout:90000});
+ await expect(row(page)).toContainText('вне интервалов: 2');
+ await expect(row(page)).toContainText('по перекрытию: 1');
+ const persisted=(await snapshot(page))[0];
+ expect(persisted).toMatchObject({asrComplete:true,nextWindow:3,stage:'partial',diagnostics:{unlabeled:2,uncovered:2,overlapMatches:1}});
+ expect(persisted.speakerSegments.map(s=>s.speaker)).toEqual(['Fixture Speaker',undefined,undefined]);
+ const plain=await downloadText(page,'Скачать TXT');
+ expect(plain.text.match(/Окно \d/g)).toHaveLength(3);
+ const before=await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'));
+ await page.evaluate(()=>localStorage.removeItem('iscribe-e2e:speakerGaps'));
+ await row(page).getByRole('button',{name:'Повторить спикеров'}).click();
+ await expect(row(page)).toContainText('Текст и спикеры готовы',{timeout:90000});
+ expect(await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'))).toBe(before);
+ const final=(await snapshot(page))[0];
+ expect(final.diagnostics.unlabeled).toBe(0);
+ expect(final.speakerSegments.every(s=>!!s.speaker)).toBe(true);
+});
