@@ -270,3 +270,30 @@ test('compact file controls keep TXT immediately available and reveal advanced t
  await expect(row(page).getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
  await expect(row(page).getByRole('button',{name:'Проверить аудио'})).toBeHidden();
 });
+
+
+test('real generated MP3 frames decode via Chromium WebCodecs without complete-file AudioContext decode',async({page})=>{
+ const base64=(await readFile(new URL('./fixtures/real-mp3-440hz.base64',import.meta.url),'utf8')).trim();
+ const result=await page.evaluate(async payload=>{
+  const mod=await import('/src/streamingMp3.ts');
+  const bytes=Uint8Array.from(atob(payload),ch=>ch.charCodeAt(0));
+  const blob=new Blob([bytes],{type:'audio/mpeg'});
+  const inspected=await mod.inspectMp3Frames(blob);
+  const codec=typeof AudioDecoder!=='undefined'&&typeof EncodedAudioChunk!=='undefined'
+   &&(await AudioDecoder.isConfigSupported({codec:'mp3',sampleRate:inspected.sampleRate,numberOfChannels:inspected.channels})).supported;
+  if(!codec)return {codec:false,frames:inspected.frames};
+  const decoder=await mod.Mp3WindowReader.open(blob,inspected);
+  try{
+   const pcm=await decoder.window(0,inspected.pcmSamples);
+   let energy=0;
+   for(const sample of pcm){if(!Number.isFinite(sample))throw new Error('Invalid decoded PCM');energy+=sample*sample}
+   return {codec:true,frames:inspected.frames,decodedSamples:pcm.length,rms:Math.sqrt(energy/pcm.length)};
+  }finally{decoder.close()}
+ },base64);
+ // MP3 support is optional per WebCodecs. A passing test must decode real
+ // compressed data; no synthetic PCM or hidden AudioContext fallback is used.
+ test.skip(!result.codec,'This Chromium build lacks native MP3 AudioDecoder support');
+ expect(result.frames).toBeGreaterThan(2);
+ expect(result.decodedSamples).toBeGreaterThan(1000);
+ expect(result.rms).toBeGreaterThan(0.005);
+});
