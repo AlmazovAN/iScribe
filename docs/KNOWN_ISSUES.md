@@ -25,4 +25,6 @@ PR-27 restores enqueued file order from IndexedDB. Heavy ML is resumed by a user
 
 PR-28 improves deterministic timeline joining but does not tune the underlying speaker models; unknown labels may remain or increase conservatively. It must not be called an accuracy improvement on the reference MP3 before actual comparison.
 
+PR-29 reports browser-observed ASR timing and main-thread JS heap samples, but does not measure GPU VRAM or total process RAM. Synthetic CI fixtures are not actual Whisper performance measurements; see `docs/PR29_BENCHMARKS.md`.
+
 No issue above is declared fixed without a reproducible test and observed outcome.
