@@ -31,4 +31,6 @@ PR-30 adds unverified hardware evidence and a runbook; it does not establish act
 
 PR-31 reduces UI density and introduces an automated distribution integrity gate, but a static package PASS cannot guarantee real Whisper inference, ChatGPT Sites publishing, or safe rollback after IndexedDB v2 migration. The footer exposes only the built commit SHA; verify it against the deployed commit. See `docs/PR31_UI_RELEASE_PREP.md`.
 
+PR-32 adds experimental MP3 streaming ASR for files >128 MB and <=512 MB while retaining the one-hour duration ceiling. Hardware reliability, upload/storage quota for a very large Blob, MP3 metadata edge cases, accurate timestamps, long-running WebCodecs and RAM peaks remain UNVERIFIED. The current diarization engine still requires complete PCM; speaker separation is explicitly disabled in large-MP3 streaming mode. See `docs/PR32_LARGE_MP3_STREAMING.md`.
+
 No issue above is declared fixed without a reproducible test and observed outcome.
