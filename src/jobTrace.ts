@@ -9,7 +9,7 @@ export type TraceCode=
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
-export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'other';
+export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
 export type TraceEvent={
  at:number;
@@ -38,6 +38,7 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
  if(error&&typeof error==='object'){
   const value=error as {code?:unknown;name?:unknown};
   if(value.name==='WorkerStalledError')return 'timeout';
+  if(value.code==='audio-validation-failed')return 'invalid-audio';
   if(value.code==='worker-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
