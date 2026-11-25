@@ -101,7 +101,7 @@ export class JobStore{
    current.onsuccess=()=>{
     try{
      const old=current.result as StoredJob|undefined;
-     const oldCount=old?(old.storageLayout===2?old.segmentCount:old.segments?.length??0):0;
+     const oldCount=old?(old.storageLayout===2?old.segmentCount??NaN:old.segments?.length??0):0;
      if(!Number.isSafeInteger(oldCount)||oldCount<0||
         job.segments.length<oldCount||(old&&job.nextWindow<old.nextWindow))
       throw new Error('Отказ от записи: сохранённый текст или контрольная точка не могут уменьшиться.');
