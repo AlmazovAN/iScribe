@@ -9,7 +9,7 @@ export function isRetryableAsrError(error:unknown):boolean {
  const {code,message}=(error as CodedError);
  const text=typeof message==='string'?message:'';
  if(NON_RETRYABLE.test(text))return false;
- if(code==='worker-failed'||code==='transcribe-failed')return true;
+ if(code==='worker-failed'||code==='transcribe-failed'||code==='gpu-device-lost'||code==='webgpu-device-lost')return true;
  return typeof code!=='string'&&TRANSIENT.test(text);
 }
 export function shouldRetryAsrWindow(error:unknown,attempt:number):boolean {
