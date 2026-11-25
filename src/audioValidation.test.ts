@@ -42,7 +42,7 @@ it('rejects gaps, overlaps with wrong step, invalid flags and tampered final win
 });
 it('checks PCM with no inference; labels silent and near-clipped windows without treating them as failure',async()=>{
  const pcm=new Float32Array(60*16000);
- pcm[0]=1;pcm[800000]=0.2;
+ pcm[0]=1;
  const updates:number[]=[];
  const result=await inspectDecodedPcm(pcm,{onProgress:(done,total)=>{updates.push(done);expect(total).toBe(3)}});
  expect(result).toMatchObject({pcmSamples:960000,durationSeconds:60,windowCount:3,nearClippedWindows:1,peakAbsolute:1});
