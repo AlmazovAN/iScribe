@@ -34,3 +34,19 @@ it('shows a diagnostic JSON action after the first recorded event',()=>{
  expect(html).toContain('Скачать журнал без аудио, текста и имени записи');
  expect(html).not.toContain('<button disabled="" title="Скачать журнал');
 });
+
+
+it('offers independent audio validation and shows stored report with unchanged TXT controls',()=>{
+ const j=createJob(new File(['a'],'meeting.mp3'),{model:'whisper-small',language:'ru',diarize:false});
+ const job={...j,audioCheck:{status:'passed' as const,checkedAt:100,report:{pcmSamples:960000,durationSeconds:60,windowCount:3,quietWindows:1,nearClippedWindows:0,peakAbsolute:0.7}}};
+ const html=renderToStaticMarkup(<JobRow job={job} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}} onInspectAudio={()=>{}}/>);
+ expect(html).toContain('Проверить аудио');
+ expect(html).toContain('PCM проверен: 3 окон');
+ expect(html).toContain('>Скачать TXT</button>');
+});
+it('does not create an unsafe window plan when metadata claims more than one hour',()=>{
+ const j=createJob(new File(['a'],'too-long.mp3'),{model:'whisper-small',language:'ru',diarize:false});
+ const job={...j,duration:Infinity};
+ const html=renderToStaticMarkup(<JobRow job={job} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}}/>);
+ expect(html).toContain('Длительность уточняется');
+});
