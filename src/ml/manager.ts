@@ -132,7 +132,7 @@ export class ModelManager{
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('preloading-speakers',null,null);
-  let createdWorker:Worker|null=null;
+  let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
   try{
    const worker=new EngineWorker();createdWorker=worker;this.speakerWorker=worker;
@@ -142,7 +142,7 @@ export class ModelManager{
     worker.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения от Worker моделей говорящих.')));
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const data=event.data;
-     if(!data||typeof data!=='object'||!('requestId' in data)||data.requestId!==requestId||!('type' in data)||generation!==this.generation)return;
+     if(stopped||!data||typeof data!=='object'||!('requestId' in data)||data.requestId!==requestId||!('type' in data)||generation!==this.generation)return;
      if(data.type==='iscribe:preload-complete'){heartbeat();resolve();return}
      if(data.type==='iscribe:preload-error'&&'message' in data&&typeof data.message==='string'){reject(new Error(data.message));return}
      if(data.type==='iscribe:preload-progress'&&'model' in data&&typeof data.model==='string'&&'status' in data&&typeof data.status==='string'){
@@ -154,7 +154,7 @@ export class ModelManager{
      }
     });
     worker.postMessage({type:'iscribe:preload',requestId});
-   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    const cached=await this.speakersCached();
    if(!cached.segmentation||!cached.embedding)throw new Error('Не подтверждён полный кеш обеих моделей говорящих. Повторите загрузку; проверьте свободное место браузера.');
@@ -162,7 +162,7 @@ export class ModelManager{
    return cached;
   }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{
-   createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
+   stopped=true;createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
    if(generation===this.generation)this.busy=false;
   }
  }
@@ -189,7 +189,7 @@ export class ModelManager{
   this.busy=true;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('diarizing',null,null);
-  let worker:Worker|null=null;
+  let worker:Worker|null=null,stopped=false;
   try{
    worker=new EngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
    const turns=await withActivityWatchdog(heartbeat=>new Promise<SpeakerTurn[]>((resolve,reject)=>{
@@ -197,7 +197,7 @@ export class ModelManager{
     worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
     worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
     worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
-     const d=event.data;if(!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
+     const d=event.data;if(stopped||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
      if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string'){
       heartbeat();
       this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
@@ -209,12 +209,12 @@ export class ModelManager{
      }
     });
     worker!.postMessage({type:'iscribe:speakers',requestId,audio});
-   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    this.phase('idle',null,null);
    return turns;
   }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
-  finally{worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
+  finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
  cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false;this.phase('cancelled',null,null)}
 }
