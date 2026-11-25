@@ -1,21 +1,46 @@
-# iScribe project status — 2026-11-25
+# iScribe — project status (2026-11-25)
 
-## Verified from GitHub
+## Integration status
 
-- PR-13, PR-14, PR-15, PR-16, PR-17, PR-18 and PR-20 were merged into `main`.
-- PR-19 was closed without merging as a duplicate.
-- Existing source includes committed ASR windows, bounded retries, watchdog, separate speaker pass and independent text export.
-- The current default ASR watchdog threshold is five minutes of visible-tab inactivity.
+- The deployed `main` contains merged PR-13–18 and PR-20; PR-19 was closed as a duplicate.
+- PR-21–31 are **stacked PRs**, not yet merged into `main`. The code of each subsequent PR builds on the previous PR branch. Passing each intermediate CI is **not** a pass on final integrated `main`.
+- PR-31: compact UI, secondary action menus, visible release SHA, user-facing file-storage errors, and a distributable-package preflight. See `docs/PR31_UI_RELEASE_PREP.md`.
+- The public ChatGPT Site `https://iscribe-alexander.politebook7.chatgpt.site/` **has not been updated as part of PR-21–31**. The GitHub Pages manual workflow is a separate deployment target and is not an automatic ChatGPT Sites publisher.
 
-## Not verified
+## Automated CI history — mocked ML, not hardware
 
-- Production deployment corresponds to the latest `main`.
-- Actual Whisper Small/WebGPU inference on the user's 14:31 / 33.3 MB MP3.
-- Offline startup after full cache population.
-- Speaker accuracy on the original 97-turn / 300-segment recording (123 unlabeled). PR-28 adds diagnostics, but reference-audio validation is still pending.
-- Runtime memory peaks and GPU fallback on real hardware.
-- New PR-25 CI and hardware-memory acceptance (CI still pending). PR-22, PR-23 and PR-24 passed their respective mock/CI suites; hardware tests remain outstanding.
+| PR | Key change | Recorded CI |
+| --- | --- | --- |
+| PR-21 | Project baseline and documentation | Baseline browser image issue; corrected in PR-22 |
+| PR-22 | Privacy-safe per-window ASR trace | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45428607603) |
+| PR-23 | Decoded PCM and window validation | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45553718206) |
+| PR-24 | ML lifecycle and stuck-Worker recovery | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45554707262) |
+| PR-25 | Append-only IndexedDB ASR checkpoints | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45555953603) |
+| PR-26 | Offline application shell and WASM cache | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45556821903) |
+| PR-27 | Durable FIFO after reload | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45652681765) |
+| PR-28 | Conservative speaker alignment | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45654520756) |
+| PR-29 | Persistent performance benchmark reports | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45656263805) |
+| PR-30 | Hardware evidence and acceptance protocol | [PASS](https://github.com/AlmazovAN/iScribe/actions/runs/45660740952) |
+| PR-31 | Final UI and release-package gate | **PENDING** until exact branch CI completes |
 
-## Next stages
+Tests above use synthetic audio and simulated inference. They confirm program logic and browser behavior, **not** true Whisper/GPU performance.
 
-PR-22: implementation on stacked PR-22; structured per-window traces, privacy-safe JSON export, and CI runner fix. Real hardware NOT TESTED. PR-23: code implemented on stacked PR-23; standalone decoded-PCM preflight, 35-window integrity, malformed timestamp guards and acceptance tests. CI/hardware validation to follow. PR-24: ML lifecycle (stacked PR-24) — explicit session status, bounded model/speaker idle guards, safe attempt-backend capture for WASM recovery. Real hardware NOT TESTED. PR-25: chunked IndexedDB v2 persistence and speaker-PCM transferable buffer (stacked PR-25). New tests and CI in progress. Full-audio decode on resume and hardware memory profiling remain unresolved. PR-26: Service Worker shell precache, separate WASM/q8 model readiness, safe cached model responses, actual production-offline browser tests (stacked PR-26). Real-device Whisper inference offline NOT TESTED. PR-27: durable FIFO queueOrder in IndexedDB v2, paused restoration after reload, one-click resume, lock-safe retry and Playwright tests (stacked PR-27). Real hardware pending. PR-28: conservative per-speaker overlap union, guarded timestamp-edge matching, explainable counts for unlabeled segments, and speaker-only retry tests (stacked PR-28). Reference audio accuracy NOT TESTED. PR-29: cumulative benchmark metrics, ASR/commit p50-p95/RTF, JS heap sampling, private export and explicitly synthetic 14:31 CI artifact (stacked PR-29). Real Whisper/GPU/RAM profiling NOT TESTED. PR-30: hardware acceptance checklist in the browser and privacy-safe JSON evidence generated from actual IndexedDB state; all real-device HW-1–HW-7 remain NOT TESTED. See docs/PR30_HARDWARE_ACCEPTANCE.md. PR-31: UI refinement.
+## Not yet verified on the user's device
+
+- Original 14:31 / 33.3 MB MP3 with **real Whisper Small on WebGPU**, all 35 windows, true text quality, and robust recovery.
+- Offline recognition using locally cached weights and ONNX/WASM on target hardware.
+- Real GPU-device-loss → WASM fallback.
+- Speaker quality on the 97-turn/300-segment/123-unlabeled historical sample (no human-labeled reference yet).
+- Browser process RAM/VRAM, 30- and 60-minute stability, actual model cold/warm benchmarks.
+- Live-site deployment correctness, service-worker update lifecycle, and migration of old IndexedDB v1 data to v2.
+
+All real-hardware gates HW-1–HW-7 are **NOT TESTED**.
+
+## Release sequence
+
+1. Complete PR-31 CI including `npm run release:check`.
+2. Integrate PR-21 → PR-22 → ... → PR-31 in order, checking branches and conflicts, without skipping dependencies.
+3. Run full CI on `main`: TypeScript, ESLint, Vitest, Vite production build, release-package preflight, normal and offline Chromium acceptance.
+4. Verify v1→v2 IndexedDB migration and rollback safety; an old v1-only build cannot access an already upgraded v2 database.
+5. Perform real HW-1/HW-2 and remaining hardware scenarios according to `docs/PR30_HARDWARE_ACCEPTANCE.md`.
+6. Only with an explicit release decision, publish using the **actual** ChatGPT Sites workflow; verify visible build SHA, HTTPS, cache, TXT and checkpoint behavior on the published URL. This work has not been performed by PR-31.
