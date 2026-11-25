@@ -1,10 +1,15 @@
 export const MAX_FILE_BYTES = 128 * 1024 * 1024;
+export const MAX_STREAM_MP3_BYTES = 512 * 1024 * 1024;
+export const isLargeMp3 = (file: Pick<File,'name'|'size'>) => /\.mp3$/i.test(file.name) && file.size>MAX_FILE_BYTES && file.size<=MAX_STREAM_MP3_BYTES;
 export const MAX_SECONDS = 3600;
 export const MAX_DECODED_BYTES = 256 * 1024 * 1024;
 export function validateFile(file: Pick<File,'size'|'name'>): void {
   if(!/\.(wav|mp3|m4a|ogg|opus|webm|aac|flac)$/i.test(file.name)) throw new Error('Выберите аудиофайл WAV, MP3, M4A, OGG, Opus, WebM, AAC или FLAC.');
   if(file.size===0) throw new Error('Выбран пустой файл.');
-  if(file.size>MAX_FILE_BYTES) throw new Error('Файл превышает ограничение 128 МБ. Разделите запись на части.');
+  if(file.size>MAX_FILE_BYTES){
+    if(!/\.mp3$/i.test(file.name)) throw new Error('Для WAV/M4A/OGG и других форматов предел 128 МБ. Потоковый режим поддерживает только MP3.');
+    if(file.size>MAX_STREAM_MP3_BYTES) throw new Error('MP3 превышает лимит потокового режима 512 МБ. Разделите запись на части.');
+  }
 }
 export function mixMono(channels: readonly Float32Array[]): Float32Array<ArrayBuffer> {
   if(!channels.length || channels.some(c=>c.length!==channels[0].length)) throw new Error('Некорректные звуковые каналы.');
@@ -14,6 +19,7 @@ export function mixMono(channels: readonly Float32Array[]): Float32Array<ArrayBu
 }
 export async function decodeAudio(file: File, signal?: AbortSignal): Promise<Float32Array> {
   validateFile(file);signal?.throwIfAborted();
+  if(isLargeMp3(file))throw new Error('MP3 свыше 128 МБ должен декодироваться по окнам. Полное декодирование отключено для защиты памяти.');
   const context=new AudioContext({sampleRate:16000});
   try {
     const bytes=await file.arrayBuffer();signal?.throwIfAborted();
