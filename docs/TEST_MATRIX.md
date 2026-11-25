@@ -10,6 +10,9 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | AUDIO-1 | Decoded PCM integrity and standalone inspection | Reject NaN/Infinity, preserve checkpoints, no Whisper started | NOT TESTED on PR-23 |
 | AUDIO-2 | 871s window boundaries | Exactly 35 windows, stable midpoint ownership | NOT TESTED on PR-23 |
 | AUDIO-3 | Browser MP3 decoder errors | Decoder failure stops processing before ASR | NOT TESTED on PR-23 |
+| ENGINE-1 | Model initialization inactivity timeout | Worker discarded and model can be retried | NOT TESTED on PR-24 |
+| ENGINE-2 | Speaker preload and diarization inactivity | Worker cleaned up; saved TXT kept | NOT TESTED on PR-24 |
+| ENGINE-3 | WebGPU attempt lost before retry | Actual prior backend retained; recovery requires WASM | NOT TESTED on PR-24 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |
