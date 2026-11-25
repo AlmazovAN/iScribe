@@ -7,7 +7,7 @@ export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
- 'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-error'|
+ 'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-alignment'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
 export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
@@ -25,6 +25,10 @@ export type TraceEvent={
  pcmSamples?:number;
  committedWindows?:number;
  segmentCount?:number;
+ unlabeled?:number;
+ ambiguous?:number;
+ uncovered?:number;
+ boundaryMatches?:number;
  errorKind?:TraceErrorKind;
 };
 export const MAX_TRACE_EVENTS=256;
@@ -76,6 +80,16 @@ export function diagnosticReport(job:Job){
   },
   lastFailure:failure,
   audioCheck:job.audioCheck??null,
+  speakerAlignment:job.diagnostics?{
+   turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,
+   invalidTurns:job.diagnostics.invalidTurns??null,mergedTurns:job.diagnostics.mergedTurns??null,
+   speakerCount:job.diagnostics.speakerCount??null,turnCoverageSeconds:job.diagnostics.turnCoverageSeconds??null,
+   segments:job.diagnostics.segments,emptyText:job.diagnostics.emptyText??null,labeled:job.diagnostics.labeled??null,
+   unlabeled:job.diagnostics.unlabeled,overlapMatches:job.diagnostics.overlapMatches??null,
+   boundaryMatches:job.diagnostics.boundaryMatches??null,ambiguous:job.diagnostics.ambiguous??null,
+   uncovered:job.diagnostics.uncovered??null,weakEvidence:job.diagnostics.weakEvidence??null,
+   invalidSegments:job.diagnostics.invalidSegments??null,zeroDuration:job.diagnostics.zeroDuration
+  }:null,
   events:job.trace??[],
   eventsLimit:MAX_TRACE_EVENTS,
   notice:'Лог не содержит аудио, текста записи, имени исходного файла и сообщений исключений.'

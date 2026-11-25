@@ -10,7 +10,7 @@ import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recogniti
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
-import {mapSpeakers} from './ml/speakers';
+import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number};
 export class JobRunner{
@@ -305,9 +305,13 @@ export class JobRunner{
    try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
    this.check();
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
-   const segments=this.job(id).segments,speakerSegments=mapSpeakers(segments,turns);
-   const unlabeled=speakerSegments.filter(s=>s.text.trim()&&!s.speaker).length;
-   this.patch(id,{speakerSegments,diagnostics:{turns:turns.length,unlabeled,segments:segments.length,zeroDuration:segments.filter(s=>s.start===s.end).length},stage:unlabeled?'partial':'done',status:unlabeled?`Текст готов · без спикера: ${unlabeled} из ${segments.length}`:'Текст и спикеры готовы',percent:100});
+   const segments=this.job(id).segments;
+   const aligned=alignSpeakers(segments,turns),speakerSegments=aligned.segments;
+   const stats=aligned.stats;
+   // Mapping diagnostics are numeric, contain no audio, speaker identifiers,
+   // transcript text or source filename. ASR checkpoints remain untouched.
+   this.traceEvent(id,'speaker-alignment','speaker',{segmentCount:stats.segments,unlabeled:stats.unlabeled,ambiguous:stats.ambiguous,uncovered:stats.uncovered,boundaryMatches:stats.boundaryMatches});
+   this.patch(id,{speakerSegments,diagnostics:stats,stage:stats.unlabeled?'partial':'done',status:stats.unlabeled?`Текст готов · без спикера: ${stats.unlabeled} из ${stats.segments}`:'Текст и спикеры готовы',percent:100});
   }else this.patch(id,{stage:'done',status:'Текст готов',percent:100});
   if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
   this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});

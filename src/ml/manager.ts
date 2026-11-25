@@ -205,8 +205,11 @@ export class ModelManager{
      }
      if(d.type==='iscribe:preload-error'&&'message' in d&&typeof d.message==='string')reject(new Error(d.message));
      if(d.type==='iscribe:speaker-result'&&'turns' in d){
-      if(!Array.isArray(d.turns)||!d.turns.every(t=>t&&typeof t==='object'&&typeof t.start==='number'&&Number.isFinite(t.start)&&typeof t.end==='number'&&Number.isFinite(t.end)&&t.end>t.start&&typeof t.speaker==='string')){reject(new Error('Некорректные интервалы диаризации.'));return}
-      heartbeat();resolve(d.turns);
+      if(!Array.isArray(d.turns)||d.turns.length>100000){reject(new Error('Некорректный список интервалов диаризации.'));return}
+      // Do not discard 96 valid turns because one result is malformed.
+      // The pure alignment stage ignores invalid intervals and counts them
+      // in the numeric diagnostic report; it never assigns from bad data.
+      heartbeat();resolve(d.turns as SpeakerTurn[]);
      }
     });
     postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});

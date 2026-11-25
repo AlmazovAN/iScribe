@@ -296,3 +296,38 @@ it('remembers WebGPU for safe WASM fallback even when watchdog cancellation clea
  expect(job).toMatchObject({asrComplete:true,nextWindow:3});
  expect(job.trace?.some(e=>e.code==='window-error'&&e.backend==='webgpu'&&e.errorKind==='timeout')).toBe(true);
 });
+
+
+it('keeps complete TXT when speaker timeline has gaps; exports numeric reasons and retries diarization without ASR',async()=>{
+ const {runner,fake,store,download,diagnosticDownload}=setup();await runner.init();
+ await runner.add([new File(['private bytes'],'SECRET-SPEAKER.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementation(async()=>[{start:3,end:4,text:'PRIVATE WORDS'}]);
+ fake.diarize.mockResolvedValueOnce([
+  {start:0,end:10,speaker:'A'},
+  {start:25,end:30,speaker:'B'},
+  {start:NaN,end:5,speaker:'malformed'}
+ ]).mockResolvedValueOnce([{start:0,end:60,speaker:'A'}]);
+ runner.enqueue(id);await finished(runner);
+ const partial=(await store.get(id,false))!;
+ expect(partial).toMatchObject({stage:'partial',asrComplete:true,nextWindow:3,diagnostics:{
+  turns:3,validTurns:2,invalidTurns:1,segments:3,labeled:2,unlabeled:1,
+  overlapMatches:2,boundaryMatches:0,uncovered:1,ambiguous:0
+ }});
+ expect(partial.speakerSegments?.map(x=>x.speaker)).toEqual(['A','B',undefined]);
+ expect(partial.segments).toHaveLength(3);
+ runner.export(id,'plain');
+ expect(download).toHaveBeenCalled();
+ runner.exportDiagnostics(id);
+ const report=diagnosticDownload.mock.calls.at(-1)?.[0];
+ expect(report?.speakerAlignment).toMatchObject({invalidTurns:1,uncovered:1,unlabeled:1});
+ expect(JSON.stringify(report)).not.toContain('SECRET-SPEAKER');
+ expect(JSON.stringify(report)).not.toContain('PRIVATE WORDS');
+ const asrCount=fake.transcribe.mock.calls.length;
+ runner.enqueue(id);await finished(runner);
+ const done=(await store.get(id,false))!;
+ expect(fake.transcribe).toHaveBeenCalledTimes(asrCount);
+ expect(fake.diarize).toHaveBeenCalledTimes(2);
+ expect(done).toMatchObject({stage:'done',asrComplete:true,nextWindow:3,diagnostics:{unlabeled:0,labeled:3}});
+ expect(done.speakerSegments).toHaveLength(3);
+});
