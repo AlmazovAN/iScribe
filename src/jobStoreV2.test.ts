@@ -124,3 +124,16 @@ it('refuses to report an orphaned or missing transcript chunk as a valid complet
  });db.close();
  await expect(store.get(j.id,false)).rejects.toThrow('Контрольная точка');
 });
+
+
+it('never persists uncommitted ASR text without advancing nextWindow',async()=>{
+ const dbName=name(),store=new JobStore(dbName),j=job();
+ await store.save(j);
+ const premature={...j,segments:[{start:0,end:1,text:'not committed'}]};
+ await expect(store.save(premature)).rejects.toThrow('без подтверждённого номера');
+ const saved=(await store.get(j.id,false))!;
+ expect(saved.nextWindow).toBe(0);
+ expect(saved.segments).toEqual([]);
+ const raw=await inspectDb(dbName);
+ expect(raw.chunks).toHaveLength(0);
+});
