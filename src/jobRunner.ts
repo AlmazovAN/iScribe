@@ -13,6 +13,7 @@ import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
 import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
+import {browserEvidenceHints,createHardwareEvidence,downloadHardwareEvidence} from './hardwareAcceptance';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number};
 export class JobRunner{
  readonly manager:ModelManager;
@@ -27,14 +28,15 @@ export class JobRunner{
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
  private benchmarkDownload:typeof downloadBenchmarkJson;
+ private hardwareDownload:typeof downloadHardwareEvidence;
  private decode:typeof decodeAudio;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
  private readonly asrIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;asrIdleMs?:number}={}){
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number}={}){
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.manager.onLifecycleChange=event=>{
    this.set({enginePhase:event.phase,backend:event.backend??'Не инициализировано'});
@@ -63,6 +65,19 @@ export class JobRunner{
   if(!job.benchmark?.runs)throw new Error('Измерения производительности ещё не выполнены.');
   const name='iscribe_benchmark_'+id.slice(0,8).replace(/[^a-z0-9]/gi,'')+'.json';
   this.benchmarkDownload(benchmarkReport(job),name);
+ }
+ async exportHardwareEvidence(id:string){
+  await this.init();
+  const job=this.job(id);
+  if(this.state.activeId===id||isRunning(job.stage)||job.stage==='queued')
+   throw new Error('Завершите текущий этап задания перед выгрузкой контрольного протокола.');
+  // Read the durable checkpoint and source from IndexedDB rather than
+  // trusting the live React snapshot. No source bytes or transcript leave.
+  const [stored,source,hints]=await Promise.all([
+   this.store.get(id,false),this.store.audio(id),browserEvidenceHints()
+  ]);
+  const report=createHardwareEvidence(job,stored,source,hints);
+  this.hardwareDownload(report,'iscribe_hardware_evidence_'+id.slice(0,8)+'.json');
  }
  private async inspectPcm(id:string,pcm:Float32Array,signal?:AbortSignal):Promise<AudioInspectionReport>{
   this.traceEvent(id,'audio-check-start','audio',{pcmSamples:pcm.length});
