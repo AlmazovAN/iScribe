@@ -4,6 +4,7 @@ import {audioDuration} from './audioMetadata';
 import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
+import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
@@ -20,14 +21,15 @@ export class JobRunner{
  private cancelled=false;
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
+ private diagnosticDownload:typeof downloadDiagnosticJson;
  private decode:typeof decodeAudio;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
  private readonly asrIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;asrIdleMs?:number}={}){
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number}={}){
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.manager.onProgress=(status,percent)=>{
    if(this.cancelled)return;
@@ -44,6 +46,10 @@ export class JobRunner{
  private set(patch:Partial<RunnerSnapshot>){this.state={...this.state,...patch};this.listeners.forEach(fn=>fn())}
  private patch(id:string,patch:Partial<Job>){this.set({jobs:this.state.jobs.map(j=>j.id===id?{...j,...patch,updated:Date.now()}:j)})}
  private job(id:string){const job=this.state.jobs.find(j=>j.id===id);if(!job)throw new Error('Задание не найдено.');return job}
+ private traceEvent(id:string,code:TraceCode,phase:TracePhase,fields:Omit<TraceEvent,'at'|'phase'|'code'>={}){
+  const job=this.job(id);
+  this.patch(id,{trace:appendTrace(job.trace,{at:Date.now(),phase,code,...fields})});
+ }
  init(){return this.initialization??=(async()=>{
   try{
    const disk=await this.store.list(false),exit=consumePageExit();
@@ -68,6 +74,7 @@ export class JobRunner{
   delete durable.volatileSegments;
   try{await this.store.save(durable)}catch(error){
    if(volatileText)this.patch(id,{volatileSegments:volatileText});
+   this.traceEvent(id,'checkpoint-error','checkpoint',{errorKind:'storage',committedWindows:this.job(id).nextWindow});
    this.set({notice:'Не удалось сохранить контрольную точку. Скачайте TXT до закрытия вкладки. '+message(error)});
    throw new Error('Ошибка локального сохранения. Номер сохранённого окна не изменён.');
   }
@@ -113,6 +120,7 @@ export class JobRunner{
      try{await this.execute(id)}catch(error){
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
+      this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
       this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure});
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
@@ -136,24 +144,38 @@ export class JobRunner{
   if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
+  this.traceEvent(id,'job-start','job',{committedWindows:this.job(id).nextWindow});
+  this.traceEvent(id,'audio-start','audio');
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
+  const audioStarted=Date.now();
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
+  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
    const windows=audioWindows(audio.length);
    // A corrupted checkpoint must never masquerade as a completed transcript.
    const initial=checkpointProgress(windows,this.job(id).nextWindow);
-   if(this.manager.active!==params.model){const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend})}
+   if(this.manager.active!==params.model){
+    this.traceEvent(id,'model-start','model');await this.persist(id);
+    const modelStarted=Date.now();const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend});
+    this.traceEvent(id,'model-ready','model',{elapsedMs:Date.now()-modelStarted,backend:traceBackend(prepared.backend)});
+   }
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend),percent:checkpointProgress(windows,index).percent});
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
+    this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
     let result:TranscriptSegment[]|undefined;
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
+     this.traceEvent(id,'window-attempt','asr',{window:index+1,totalWindows:windows.length,attempt,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
+     // Save the in-flight window metadata before invoking the Worker.
+     // A tab crash can then be diagnosed without claiming a committed result.
+     await this.persist(id);
+     const attemptStarted=Date.now();
      try{
       try{
        result=await withActivityWatchdog(heartbeat=>{
@@ -164,11 +186,15 @@ export class JobRunner{
         onTimeout:()=>this.manager.cancel()
        });
       }finally{this.asrHeartbeat=null}
-      this.check();this.patch(id,{error:undefined});break;
+      this.check();this.patch(id,{error:undefined});
+      this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:result.length,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
+      break;
      }catch(error){
+      this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
       this.check();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       const next=attempt+1,wasmOnly=preferWasmAfterFailure(this.state.backend);
+      this.traceEvent(id,'window-retry','asr',{window:index+1,totalWindows:windows.length,attempt:next,backend:traceBackend(this.state.backend)});
       this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
       // Throw on failed reinit instead of silently continuing on an unknown
       // backend. Explicit cancellation aborts before starting another window.
@@ -180,19 +206,25 @@ export class JobRunner{
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
     const after=checkpointProgress(windows,index+1);
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
+    this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1});
     this.check();
    }
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
   if(params.diarize){
+   this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
-   const turns=await this.manager.diarize(audio);this.check();
+   const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
+   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
+   this.check();
+   this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
    const segments=this.job(id).segments,speakerSegments=mapSpeakers(segments,turns);
    const unlabeled=speakerSegments.filter(s=>s.text.trim()&&!s.speaker).length;
    this.patch(id,{speakerSegments,diagnostics:{turns:turns.length,unlabeled,segments:segments.length,zeroDuration:segments.filter(s=>s.start===s.end).length},stage:unlabeled?'partial':'done',status:unlabeled?`Текст готов · без спикера: ${unlabeled} из ${segments.length}`:'Текст и спикеры готовы',percent:100});
   }else this.patch(id,{stage:'done',status:'Текст готов',percent:100});
   if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
+  this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});
   await this.persist(id);this.check();
   this.set({operation:'Формирование TXT'});
   // Browser download APIs cannot reliably report a blocked download.
@@ -208,6 +240,10 @@ export class JobRunner{
   if(this.state.busy)return;this.set({busy:true,operation:'Загрузка моделей говорящих'});this.cancelled=false;
   try{await this.exclusive(async()=>{await this.manager.preloadSpeakers();this.set({backend:'Не инициализировано'})})}catch(error){this.set({notice:message(error)})}
   finally{this.set({busy:false,operation:''});if(this.queue.length)void this.drain()}
+ }
+ exportDiagnostics(id:string){
+  const job=this.job(id);
+  this.diagnosticDownload(diagnosticReport(job),'iscribe_diagnostics_'+job.id.slice(0,8)+'.json');
  }
  export(id:string,variant:'plain'|'time'|'speakers'){
   const job=this.job(id);const segments:TranscriptSegment[]=variant==='speakers'?(job.speakerSegments??job.volatileSegments??job.segments):(job.volatileSegments??job.segments);

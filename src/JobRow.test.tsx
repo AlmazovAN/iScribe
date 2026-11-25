@@ -25,3 +25,12 @@ it('shows committed progress after interruption and flags transient unsaved text
  expect(html).toContain('окон 2/35');
  expect(html).toContain('не сохранён в браузере');
 });
+
+it('shows a diagnostic JSON action after the first recorded event',()=>{
+ const j=createJob(new File(['a'],'meeting.wav'),{model:'whisper-small',language:'ru',diarize:false});
+ const job={...j,trace:[{at:1,phase:'asr' as const,code:'window-start' as const,window:1}]};
+ const html=renderToStaticMarkup(<JobRow job={job} active={false} onStart={()=>{}} onExport={()=>{}} onCancel={()=>{}} onRemove={()=>{}} onPreview={()=>{}} onDiagnostics={()=>{}}/>);
+ expect(html).toContain('Диагностика JSON');
+ expect(html).toContain('Скачать журнал без аудио, текста и имени записи');
+ expect(html).not.toContain('<button disabled="" title="Скачать журнал');
+});

@@ -1,7 +1,7 @@
 import type {Job} from './jobs';
 import {isRunning,audioWindows} from './jobs';
 import {checkpointLabel,checkpointProgress} from './recognitionProgress';
-export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void}){
+export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,onDiagnostics}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void;onDiagnostics?:()=>void}){
  const queued=job.stage==='queued',running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
  const windows=job.duration&&job.duration>0?audioWindows(Math.round(job.duration*16000)):[];
  const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
@@ -15,6 +15,7 @@ export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview}
    <button disabled={!hasText} onClick={()=>onExport('plain')}>Скачать TXT</button>
    <button disabled={!hasText} onClick={()=>onExport('time')}>TXT + time</button>
    <button disabled={!job.speakerSegments?.some(s=>s.text.trim())} onClick={()=>onExport('speakers')}>TXT + time + speaker{job.speakerSegments&&job.stage!=='done'?' *':''}</button>
+   {(job.trace?.length||job.failure)&&<button className="secondary" onClick={onDiagnostics} disabled={!onDiagnostics} title="Скачать журнал без аудио, текста и имени записи">Диагностика JSON</button>}
    {active?<button className="cancel" onClick={onCancel}>Отменить</button>:!queued&&<button className="remove" onClick={onRemove} aria-label={`Удалить ${job.name}`} title="Удалить запись и сохранённые результаты">×</button>}
   </div>
   {!job.asrComplete&&job.nextWindow>0&&progress&&<small className="diagnostics">{checkpointLabel(progress)}</small>}

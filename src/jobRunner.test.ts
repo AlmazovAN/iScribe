@@ -4,11 +4,12 @@ vi.mock('./ml/worker?worker',()=>({default:class{}}));
 import {JobRunner} from './jobRunner';
 import {JobStore} from './jobStore';
 import {createJob} from './jobs';
+import type {diagnosticReport} from './jobTrace';
 import type {ModelManager} from './ml/manager';
 function setup(){
  const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
- const store=new JobStore(),download=vi.fn(),decode=vi.fn(async()=>new Float32Array(60*16000));
- return {fake,store,download,runner:new JobRunner({store,manager:fake as unknown as ModelManager,decode,download})};
+ const store=new JobStore(),download=vi.fn(),diagnosticDownload=vi.fn((_report:ReturnType<typeof diagnosticReport>,_filename:string)=>{void _report;void _filename}),decode=vi.fn(async()=>new Float32Array(60*16000));
+ return {fake,store,download,diagnosticDownload,runner:new JobRunner({store,manager:fake as unknown as ModelManager,decode,download,downloadDiagnostic:diagnosticDownload})};
 }
 async function finished(runner:JobRunner){await vi.waitFor(()=>expect(runner.snapshot().busy).toBe(false))}
 it('persists full ASR before speakers and keeps TXT available when speakers fail',async()=>{
@@ -198,4 +199,29 @@ it('persists the last committed checkpoint and backend when a later ASR window f
  expect(job.failure).toMatchObject({reason:'execution-error',stage:'recognizing',completedWindows:1,backend:'wasm',checkpointSeconds:30,message:'GPU worker failed'});
  const disk=(await store.list()).find(j=>j.id===id)!;
  expect(disk.failure).toMatchObject({completedWindows:1,reason:'execution-error',backend:'wasm'});
+});
+
+it('commits trace of each ASR window and exposes a redacted downloadable diagnostic report',async()=>{
+ const {runner,fake,store,diagnosticDownload}=setup();await runner.init();
+ await runner.add([new File(['private recording'],'SECRET-MEETING.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockImplementationOnce(async()=>{
+  const inFlight=(await store.list(false)).find(j=>j.id===id)!;
+  expect(inFlight.trace).toEqual(expect.arrayContaining([
+   expect.objectContaining({phase:'asr',code:'window-start',window:1,startSample:0,endSample:480000,pcmSamples:480000}),
+   expect.objectContaining({phase:'asr',code:'window-attempt',window:1,attempt:1})
+  ]));
+  return [{start:3,end:4,text:'SECRET SPOKEN WORDS'}];
+ });
+ runner.enqueue(id);await finished(runner);
+ const persisted=(await store.list(false)).find(j=>j.id===id)!;
+ expect(persisted.trace?.filter(e=>e.code==='window-result')).toHaveLength(3);
+ expect(persisted.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
+ expect(persisted.trace?.at(-1)?.code).toBe('job-complete');
+ runner.exportDiagnostics(id);
+ expect(diagnosticDownload).toHaveBeenCalledOnce();
+ const [report,filename]=diagnosticDownload.mock.calls[0];
+ expect(filename).toMatch(/^iscribe_diagnostics_[0-9a-f]{8}\.json$/);
+ expect(report.job).toMatchObject({asrComplete:true,committedWindows:3});
+ expect(JSON.stringify(report)).not.toContain('SECRET');
 });

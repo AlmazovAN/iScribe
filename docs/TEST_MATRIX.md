@@ -4,8 +4,9 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 
 | Gate | Test | Expected result | Status |
 | --- | --- | --- | --- |
-| CI-1 | npm ci, typecheck, lint, Vitest, build | All commands succeed on current SHA | NOT TESTED |
-| CI-2 | Playwright browser acceptance with deterministic ML stub | Reload, checkpoint, TXT exports pass | NOT TESTED |
+| CI-1 | npm ci, typecheck, lint, Vitest, build | All commands succeed on current SHA | NOT TESTED on PR-22 |
+| CI-2 | Playwright browser acceptance with deterministic ML stub | Reload, checkpoint, TXT exports pass | NOT TESTED on PR-22 |
+| DIAG-1 | Structured event journal and JSON export | Sanitized event log survives checkpoints; no filename/audio/transcript | NOT TESTED on PR-22 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |
