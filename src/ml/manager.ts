@@ -1,5 +1,6 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
+import {postSpeakerAudio} from './workerTransfer';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -208,7 +209,7 @@ export class ModelManager{
       heartbeat();resolve(d.turns);
      }
     });
-    worker!.postMessage({type:'iscribe:speakers',requestId,audio});
+    postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
    }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    this.phase('idle',null,null);
