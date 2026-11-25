@@ -1,6 +1,7 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,validateFile} from './audio';
 import {audioDuration} from './audioMetadata';
+import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
@@ -46,6 +47,54 @@ export class JobRunner{
  private set(patch:Partial<RunnerSnapshot>){this.state={...this.state,...patch};this.listeners.forEach(fn=>fn())}
  private patch(id:string,patch:Partial<Job>){this.set({jobs:this.state.jobs.map(j=>j.id===id?{...j,...patch,updated:Date.now()}:j)})}
  private job(id:string){const job=this.state.jobs.find(j=>j.id===id);if(!job)throw new Error('Задание не найдено.');return job}
+ private async inspectPcm(id:string,pcm:Float32Array,signal?:AbortSignal):Promise<AudioInspectionReport>{
+  this.traceEvent(id,'audio-check-start','audio',{pcmSamples:pcm.length});
+  await this.persist(id);
+  try{
+   const report=await inspectDecodedPcm(pcm,{signal,onProgress:(done,total)=>this.set({operation:`Проверка аудио: окно ${done}/${total}`})});
+   this.patch(id,{audioCheck:{status:'passed',checkedAt:Date.now(),report}});
+   this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount});
+   await this.persist(id);
+   return report;
+  }catch(error){
+   if(!this.cancelled){
+    const problem=error instanceof AudioValidationError?error.message:'Проверка PCM не завершена. Повторите проверку или проверьте декодирование.';
+    this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
+    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error)});
+    try{await this.persist(id)}catch{/* Preserve the original failure and existing checkpoint. */}
+   }
+   throw error;
+  }
+ }
+ async inspectAudio(id:string):Promise<void>{
+  if(this.state.busy||this.queue.length)throw new Error('Дождитесь завершения текущей операции перед проверкой аудио.');
+  this.job(id);
+  this.cancelled=false;this.abort=new AbortController();
+  this.set({busy:true,activeId:id,operation:'Проверка аудио'});
+  try{
+   await this.exclusive(async()=>{
+    const file=await this.store.audio(id);
+    if(!file)throw new Error('Исходное аудио недоступно в браузере.');
+    this.traceEvent(id,'audio-start','audio');await this.persist(id);
+    const started=Date.now();
+    const pcm=await this.decode(file,this.abort!.signal);
+    this.check();this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-started,pcmSamples:pcm.length});
+    await this.inspectPcm(id,pcm,this.abort!.signal);
+   });
+   this.set({notice:'Аудио проверено без запуска Whisper. Результат отображён в строке файла.'});
+  }catch(error){
+   if(!this.cancelled&&this.job(id).audioCheck?.status!=='failed'){
+    const problem=error instanceof AudioValidationError?error.message:'Не удалось декодировать или проверить аудиофайл.';
+    this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
+    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error)});
+    try{await this.persist(id)}catch{/* Browser storage may be unavailable. */}
+   }
+   this.set({notice:this.cancelled?'Проверка аудио отменена.':error instanceof AudioValidationError?error.message:'Проверка аудио не завершена. См. диагностику JSON.'});
+  }finally{
+   this.abort=null;this.set({busy:false,activeId:null,operation:''});
+   if(this.queue.length)void this.drain();
+  }
+ }
  private traceEvent(id:string,code:TraceCode,phase:TracePhase,fields:Omit<TraceEvent,'at'|'phase'|'code'>={}){
   const job=this.job(id);
   this.patch(id,{trace:appendTrace(job.trace,{at:Date.now(),phase,code,...fields})});
@@ -151,6 +200,7 @@ export class JobRunner{
   const audioStarted=Date.now();
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
   this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
+  await this.inspectPcm(id,audio,this.abort!.signal);this.check();
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
    const windows=audioWindows(audio.length);
@@ -230,7 +280,7 @@ export class JobRunner{
   // Browser download APIs cannot reliably report a blocked download.
   try{this.export(id,params.diarize?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'})}catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)})}
  }
- cancel(){if(!this.state.busy)return;this.cancelled=true;this.abort?.abort();this.manager.cancel();this.set({backend:'Не инициализировано'})}
+ cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
  async prepare(model:WhisperId){
   if(this.state.busy)return;this.set({busy:true,operation:'Подготовка модели'});this.cancelled=false;
   try{await this.exclusive(async()=>{const prepared=await this.manager.prepare(model);this.set({backend:prepared.backend})})}catch(error){this.set({notice:message(error)})}
