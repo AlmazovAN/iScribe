@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState,useSyncExternalStore} from 'react';
 import './style.css';
 import {WhisperDownloadStatus} from './WhisperDownloadStatus';
+import {OfflineReadinessPanel} from './OfflineReadinessPanel';
 import {JobRunner} from './jobRunner';
 import {JobRow} from './JobRow';
 import {useModels} from './useModels';
@@ -54,6 +55,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     </article>)}
     <article className={'model speakers '+(diarize?'enabled':'')}><label className="model-name"><strong>Разделение говорящих</strong><input type="checkbox" checked={diarize} onChange={e=>setDiarize(e.target.checked)} aria-label="Разделять говорящих"/></label><span className="tag">Pyannote + WeSpeaker</span><p>Кто говорил и когда. После получения текста.</p><div className="download-status" role="status"><strong>{modelState.speakers.ready?'Скачаны · в кэше':'Комплект из двух моделей'}</strong><span>Pyannote: {modelState.speakers.segmentation}</span><span>WeSpeaker: {modelState.speakers.embedding}</span></div><button className="secondary" disabled={state.busy||modelState.speakers.ready} onClick={()=>void runner.preloadSpeakers()}>{modelState.speakers.ready?'Готово к работе':'Скачать комплект'}</button></article>
     </div>
+    <OfflineReadinessPanel model={selected} diarize={diarize} busy={state.busy} onPrepareWasm={()=>void runner.prepare(selected,true)}/>
     {state.busy&&<p className="next-settings">Настройки применятся к следующим заданиям. Текущая обработка продолжится со своими параметрами.</p>}
    </section>
    <section className="panel audio-panel"><div className="panel-heading"><h2>Аудиозаписи <span className="count">{state.jobs.length}</span></h2><div className="heading-actions">{state.busy&&<button className="cancel" onClick={openCancel}>Отменить</button>}{state.jobs.filter(j=>j.stage==='waiting').length>1&&<button className="secondary" onClick={()=>{if(selected==='whisper-large-v3'&&!largeAllowed())return;state.jobs.filter(j=>j.stage==='waiting').forEach(j=>runner.enqueue(j.id,params))}}>Начать все</button>}</div></div>
