@@ -156,10 +156,23 @@ export class JobRunner{
   try{await this.store.remove(id);this.committedWindows.delete(id);this.set({jobs:this.state.jobs.filter(j=>j.id!==id)})}catch(error){this.set({notice:message(error)})}
  }
  enqueue(id:string,params?:JobParams){
-  const job=this.job(id);if(this.state.activeId===id||this.queue.includes(id))return;
+  const job=this.job(id);if(this.state.activeId===id)return;
+  if(this.queue.includes(id)){this.resumeQueue();return}
   // Parameters are captured on the first start. Resume retains the original.
   if(job.stage==='waiting'&&params)this.patch(id,{params:{...params}});
-  this.patch(id,{stage:'queued',status:'В очереди',error:undefined});this.queue.push(id);void this.drain();
+  const order=++this.nextQueueOrder;
+  this.queue.push(id);
+  this.patch(id,{stage:'queued',status:'В очереди',error:undefined,queueOrder:order});
+  this.set({queueCount:this.queue.length});
+  this.queueWrites=this.queueWrites.catch(()=>{}).then(()=>this.persist(id));
+  void this.drain();
+ }
+ resumeQueue(){if(this.state.ready&&!this.state.busy&&this.queue.length)void this.drain()}
+ private async ensureQueueSaved(){
+  try{await this.queueWrites}catch{
+   for(const id of this.queue)await this.persist(id);
+   this.queueWrites=Promise.resolve();
+  }
  }
  private async exclusive(task:()=>Promise<void>){
   // Web Locks prevents two tabs from running heavy models and overwriting the
