@@ -5,8 +5,9 @@ import type {TraceEvent} from './jobTrace';
 import type {AudioInspectionReport} from './audioValidation';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
 export type AudioCheck={status:'passed';checkedAt:number;report:AudioInspectionReport}|{status:'failed';checkedAt:number;problem:string};
+export type SpeakerDiagnostics={turns:number;unlabeled:number;segments:number;zeroDuration:number;validTurns?:number;invalidTurns?:number;mergedTurns?:number;speakerCount?:number;turnCoverageSeconds?:number;labeled?:number;overlapMatches?:number;boundaryMatches?:number;ambiguous?:number;uncovered?:number;weakEvidence?:number;invalidSegments?:number};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];audioCheck?:AudioCheck;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];audioCheck?:AudioCheck;diagnostics?:SpeakerDiagnostics;};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  // Queued work is durable intent, not an interrupted inference. A legacy
