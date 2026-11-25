@@ -1,6 +1,7 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {traceBackend} from './jobTrace';
+declare const __ISCRIBE_BUILD_SHA__:string;
 
 // All seven hardware gates remain unverified until a real-device operator
 // reviews them. Browser state and synthetic tests can provide *evidence* but
@@ -33,6 +34,7 @@ export type HardwareObservedContext={
 export type HardwareEvidenceReport={
  schema:'iscribe.hardware-evidence.v1';
  generatedAt:string;
+ buildRevision:string;
  provenance:'unattested-browser-job';
  verdict:'HARDWARE ACCEPTANCE NOT VERIFIED';
  browserHints:HardwareObservedContext;
@@ -131,6 +133,7 @@ export function createHardwareEvidence(
  return {
   schema:'iscribe.hardware-evidence.v1',
   generatedAt:new Date().toISOString(),
+  buildRevision:typeof __ISCRIBE_BUILD_SHA__==='string'?__ISCRIBE_BUILD_SHA__:'unavailable',
   provenance:'unattested-browser-job',
   verdict:'HARDWARE ACCEPTANCE NOT VERIFIED',
   browserHints:{
