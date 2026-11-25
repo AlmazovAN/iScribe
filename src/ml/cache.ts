@@ -33,10 +33,11 @@ function filesByRevision(urls:readonly string[],repo:string){
  }
  return revisions;
 }
-export function selectWhisperCache(urls:readonly string[],repo:string):CacheInspection{
+export function selectWhisperCache(urls:readonly string[],repo:string,requiredProfile?:CacheProfile):CacheInspection{
  for(const [revision,files] of filesByRevision(urls,repo)){
   if(!BASE.every(file=>files.has(file)))continue;
   for(const [profile,weights] of Object.entries(PROFILES) as [CacheProfile,readonly [string,string]][]){
+   if(requiredProfile&&profile!==requiredProfile)continue;
    if(!weights.every(file=>files.has(file)))continue;
    const chosen=[...BASE,...weights].map(file=>files.get(file)!);
    return {cached:true,revision,profile,urls:chosen};
@@ -47,12 +48,12 @@ export function selectWhisperCache(urls:readonly string[],repo:string):CacheInsp
 export function completeSet(urls:readonly string[],repo:string):boolean {
  return selectWhisperCache(urls,repo).cached;
 }
-export async function inspectWhisperCache(repo:string):Promise<CacheInspection>{
+export async function inspectWhisperCache(repo:string,requiredProfile?:CacheProfile):Promise<CacheInspection>{
  try{
   const cache=await caches.open(MODEL_CACHE);
   // Scan the actual cache, not only a possibly outdated v1 manifest. This
   // preserves cached weights when upgrading from previous iScribe releases.
-  const selected=selectWhisperCache((await cache.keys()).map(request=>request.url),repo);
+  const selected=selectWhisperCache((await cache.keys()).map(request=>request.url),repo,requiredProfile);
   if(!selected.cached||!selected.urls)return {cached:false};
   for(const url of selected.urls){
    const response=await cache.match(url);
@@ -65,6 +66,10 @@ export async function inspectWhisperCache(repo:string):Promise<CacheInspection>{
 }
 export async function checkWhisperCache(repo:string):Promise<boolean>{
  return (await inspectWhisperCache(repo)).cached;
+}
+// A GPU profile alone is NOT proof that the WASM fallback can start offline.
+export async function checkWhisperWasmCache(repo:string):Promise<boolean>{
+ return (await inspectWhisperCache(repo,'wasm-q8')).cached;
 }
 export async function recordWhisperCache(repo:string):Promise<boolean>{
  const inspection=await inspectWhisperCache(repo);
