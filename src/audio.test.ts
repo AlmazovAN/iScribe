@@ -11,3 +11,29 @@ it('rejects empty, oversized and unsupported files',()=>{
  expect(()=>validateFile({name:'note.exe',size:10})).toThrow();
  expect(()=>validateFile({name:'NOTE.WAV',size:100})).not.toThrow();
 });
+
+
+it('normalizes a browser MP3 decode error rather than running ASR',async()=>{
+ const {vi}=await import('vitest');
+ const {decodeAudio}=await import('./audio');
+ const close=vi.fn(async()=>{});
+ vi.stubGlobal('AudioContext',class{
+  decodeAudioData=async()=>{throw new DOMException('unsupported content','EncodingError')};
+  close=close;
+ });
+ try{
+  await expect(decodeAudio(new File(['bad compressed bytes'],'broken.mp3'))).rejects.toThrow('Браузер не смог декодировать');
+  expect(close).toHaveBeenCalledOnce();
+ }finally{vi.unstubAllGlobals()}
+});
+it('rejects a decoder that returns invalid channel count or zero PCM samples',async()=>{
+ const {vi}=await import('vitest');
+ const {decodeAudio}=await import('./audio');
+ vi.stubGlobal('AudioContext',class{
+  decodeAudioData=async()=>({duration:1,length:0,numberOfChannels:1,sampleRate:16000});
+  close=async()=>{};
+ });
+ try{
+  await expect(decodeAudio(new File(['bad'],'invalid.mp3'))).rejects.toThrow('Декодер вернул некорректные параметры');
+ }finally{vi.unstubAllGlobals()}
+});
