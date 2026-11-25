@@ -123,6 +123,26 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  await writeFile(testInfo.outputPath('synthetic-benchmark.json'),JSON.stringify({
   ...report,ciFixture:'mocked-Whisper-871s; NOT a real inference benchmark'
  },null,2));
+ await page.locator('.hardware-acceptance summary').click();
+ await expect(page.locator('.hardware-acceptance')).toContainText('Аппаратная приёмка');
+ const [evidenceDownload]=await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('button',{name:'Скачать протокол наблюдений JSON'}).click()
+ ]);
+ const evidence=JSON.parse(await readFile(await evidenceDownload.path(),'utf8'));
+ expect(evidence).toMatchObject({schema:'iscribe.hardware-evidence.v1',
+  provenance:'unattested-browser-job',verdict:'HARDWARE ACCEPTANCE NOT VERIFIED',
+  job:{expectedWindows:35,committedWindows:35,completedASR:true,
+   persistedJobFound:true,persistedCheckpointMatches:true,
+   persistedTranscriptMatches:true,savedAudioPresent:true}});
+ expect(evidence.gates).toHaveLength(7);
+ expect(evidence.gates.every(g=>g.hardwareAcceptance==='NOT TESTED')).toBe(true);
+ expect(evidence.gates.find(g=>g.id==='HW-1')?.evidence).toBe('consistent');
+ expect(JSON.stringify(evidence)).not.toContain('meeting-871s.wav');
+ expect(JSON.stringify(evidence)).not.toContain('Окно 1');
+ await writeFile(testInfo.outputPath('synthetic-hardware-evidence.json'),JSON.stringify({
+  ...evidence,ciFixture:'mocked-Whisper-871s; NOT a real hardware test'
+ },null,2));
 });
 
 test('speaker failures do not destroy complete TXT or rerun ASR on retry',async({page})=>{

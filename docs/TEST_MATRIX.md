@@ -29,6 +29,8 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | BENCH-1 | Synthetic 871s + 35 ASR windows | Window times, unique committed 871s, correct RTF and p95 | NOT TESTED on PR-29 |
 | BENCH-2 | Checkpoint timing and resume | Durable cumulative measurements, no duplicated windows after refresh | NOT TESTED on PR-29 |
 | BENCH-3 | Local benchmark JSON export | Numeric measurements with no filename, speech text or exception strings | NOT TESTED on PR-29 |
+| HW-EVIDENCE-1 | Browser and IndexedDB hardware evidence | Safely cross-check stored audio/text/checkpoints and export redacted JSON | NOT TESTED on PR-30 |
+| HW-EVIDENCE-2 | Synthetic CI anti-false-pass | All seven gates always stay NOT TESTED, even with synthetic complete 35-window output | NOT TESTED on PR-30 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |

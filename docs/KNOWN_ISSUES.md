@@ -27,4 +27,6 @@ PR-28 improves deterministic timeline joining but does not tune the underlying s
 
 PR-29 reports browser-observed ASR timing and main-thread JS heap samples, but does not measure GPU VRAM or total process RAM. Synthetic CI fixtures are not actual Whisper performance measurements; see `docs/PR29_BENCHMARKS.md`.
 
+PR-30 adds unverified hardware evidence and a runbook; it does not establish actual Whisper Small, GPU fallback, VRAM or diarization performance on the user's device. CI artifacts explicitly use mocked ML and must never be treated as real hardware acceptance.
+
 No issue above is declared fixed without a reproducible test and observed outcome.
