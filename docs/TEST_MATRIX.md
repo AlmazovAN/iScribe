@@ -31,6 +31,8 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | BENCH-3 | Local benchmark JSON export | Numeric measurements with no filename, speech text or exception strings | NOT TESTED on PR-29 |
 | HW-EVIDENCE-1 | Browser and IndexedDB hardware evidence | Safely cross-check stored audio/text/checkpoints and export redacted JSON | NOT TESTED on PR-30 |
 | HW-EVIDENCE-2 | Synthetic CI anti-false-pass | All seven gates always stay NOT TESTED, even with synthetic complete 35-window output | NOT TESTED on PR-30 |
+| UI-1 | Compact file controls | Three TXT formats visible; secondary tools accessible via details on desktop and narrow screen | NOT TESTED on PR-31 |
+| RELEASE-1 | Static package preflight | Compiled JS/CSS/ONNX-WASM, SW, licenses, relative entrypoint; no synthetic harness | NOT TESTED on PR-31 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |
@@ -38,4 +40,6 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | HW-5 | Diarization on reference audio | Measured coverage and speaker quality | NOT TESTED |
 | HW-6 | Memory and long-audio 30/60 minutes | No uncontrolled growth or lost checkpoints | NOT TESTED |
 
-For each run record commit SHA, OS/browser, GPU/RAM, model/backend, audio length, checkpoint, duration, logs (redacted), outcome and reproducibility. Keep personal audio out of GitHub.
+For earlier *automated* gates, the historical `NOT TESTED on PR-n` text above was the matrix's initial state, not the latest observed result. Source-of-truth CI links for passed PR-22–30 are in [PROJECT_STATUS.md](PROJECT_STATUS.md). Each result validates mocked or synthetic ML behavior and must not be promoted to a hardware PASS.
+
+For each real-device run record commit SHA, OS/browser, GPU/RAM, model/backend, audio length, checkpoint, duration, logs (redacted), outcome and reproducibility. Keep personal audio out of GitHub.
