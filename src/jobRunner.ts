@@ -188,29 +188,32 @@ export class JobRunner{
   if(this.state.busy)return;
   this.set({busy:true});
   try{
+   await this.ensureQueueSaved();
    this.lease=this.exclusive(async()=>{
     while(this.queue.length){
-     const id=this.queue.shift()!;this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
+     await this.ensureQueueSaved();
+     const id=this.queue[0];
+     if(!this.state.jobs.some(j=>j.id===id&&j.queueOrder!==undefined)){
+      this.queue.shift();this.set({queueCount:this.queue.length});continue;
+     }
+     this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
      try{await this.execute(id)}catch(error){
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
       this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
-      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure});
+      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure,queueOrder:undefined});
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
+     }finally{
+      this.queue.shift();this.set({queueCount:this.queue.length});
      }
     }
    });await this.lease;
   }catch(error){
-   this.set({notice:message(error)});
-   for(const id of this.queue){
-    const job=this.job(id);
-    this.patch(id,{stage:'interrupted',status:'Запуск отложен: другая вкладка занята.',
-     failure:createFailureDiagnostic(job,'execution-error',message(error),job.backend,this.committedWindows.get(id)??job.nextWindow)});
-    try{await this.persist(id)}catch{/* Keep the existing notice. */}
-   }
-   this.queue=[];
-  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:''});this.abort=null;this.lease=undefined}
+   // Do not drop persistent queue entries when another tab owns the Web Lock
+   // or the browser cannot commit queue metadata. Retry from this checkpoint.
+   this.set({notice:'Очередь сохранена, но запуск отложен. '+message(error)});
+  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -305,6 +308,8 @@ export class JobRunner{
   }else this.patch(id,{stage:'done',status:'Текст готов',percent:100});
   if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
   this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});
+  // Closing the FIFO slot is part of the successful terminal job commit.
+  this.patch(id,{queueOrder:undefined});
   await this.persist(id);this.check();
   this.set({operation:'Формирование TXT'});
   // Browser download APIs cannot reliably report a blocked download.
