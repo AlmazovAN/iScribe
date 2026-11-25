@@ -18,10 +18,30 @@ const snapshot=async(page)=>page.evaluate(async()=>new Promise((resolve,reject)=
  const request=indexedDB.open('iscribe-jobs-v1');
  request.onerror=()=>reject(request.error?.message);
  request.onsuccess=()=>{
-  const db=request.result,tx=db.transaction('jobs','readonly'),get=tx.objectStore('jobs').getAll();
-  get.onsuccess=()=>resolve(get.result);
-  get.onerror=()=>reject(get.error?.message);
-  tx.oncomplete=()=>db.close();
+  const db=request.result;
+  const tx=db.transaction(['jobs','asr-chunks-v2','speaker-results-v2'],'readonly');
+  const jobs=tx.objectStore('jobs').getAll();
+  const chunks=tx.objectStore('asr-chunks-v2').getAll();
+  const speakers=tx.objectStore('speaker-results-v2').getAll();
+  tx.onerror=()=>reject(tx.error?.message);
+  tx.oncomplete=()=>{
+   db.close();
+   try{
+    const result=jobs.result.map(job=>{
+     if(job.storageLayout!==2)return job;
+     const parts=chunks.result.filter(c=>c.id===job.id).sort((a,b)=>a.offset-b.offset);
+     const segments=[];
+     for(const part of parts){
+      if(part.offset!==segments.length)throw new Error('ASR chunk sequence broken');
+      segments.push(...part.segments);
+     }
+     if(segments.length!==job.segmentCount)throw new Error('Checkpoint/ASR segments mismatch');
+     const speakerSegments=speakers.result.find(s=>s.id===job.id)?.segments;
+     return {...job,segments,speakerSegments};
+    });
+    resolve(result);
+   }catch(error){reject(error.message)}
+  };
  };
 }));
 const downloadText=async(page,label)=>{
