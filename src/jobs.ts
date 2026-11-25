@@ -6,9 +6,13 @@ import type {AudioInspectionReport} from './audioValidation';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
 export type AudioCheck={status:'passed';checkedAt:number;report:AudioInspectionReport}|{status:'failed';checkedAt:number;problem:string};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];audioCheck?:AudioCheck;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];audioCheck?:AudioCheck;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
+ // Queued work is durable intent, not an interrupted inference. A legacy
+ // queued record without an order cannot safely be auto-inserted in a FIFO.
+ if(job.stage==='queued'&&typeof job.queueOrder==='number'&&Number.isSafeInteger(job.queueOrder)&&job.queueOrder>0)
+  return {...job,status:'В очереди · восстановлено после перезагрузки'};
  if(!isRunning(job.stage)&&job.stage!=='queued')return job;
  const explanation=observedExit
   ? 'Зафиксирован выход со страницы (pagehide). Неизвестно, была ли это перезагрузка, закрытие или переход.'

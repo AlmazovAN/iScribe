@@ -20,6 +20,9 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | OFFLINE-1 | Production shell with ONNX runtime | Load online, disconnect, reload and recover saved job in Chromium | NOT TESTED on PR-26 |
 | OFFLINE-2 | Model q8 WASM profile | GPU-only cache must NOT satisfy WASM fallback readiness | NOT TESTED on PR-26 |
 | OFFLINE-3 | Model fetch offline | Exact cached response, missing file failure, Range safety | NOT TESTED on PR-26 |
+| QUEUE-1 | Durable FIFO across reload | Pending jobs retain stored position, first interrupted job keeps checkpoint | NOT TESTED on PR-27 |
+| QUEUE-2 | Resume restored queue | One click processes pending jobs in order, no duplicate ASR | NOT TESTED on PR-27 |
+| QUEUE-3 | Cross-tab lock denial | No inference; queued entries remain available to retry | NOT TESTED on PR-27 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |

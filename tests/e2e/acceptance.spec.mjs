@@ -133,3 +133,48 @@ test('speaker failures do not destroy complete TXT or rerun ASR on retry',async(
  expect(await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'))).toBe(count);
  await expect(row(page).getByRole('button',{name:'TXT + time + speaker'})).toBeEnabled();
 });
+
+
+test('durable FIFO restores three jobs after a reload; one click resumes only unfinished windows',async({page})=>{
+ await page.evaluate(()=>localStorage.setItem('iscribe-e2e:pauseAt','2'));
+ await loadFixture(page);
+ const names=['queue-one-60s.wav','queue-two-60s.wav','queue-three-60s.wav'];
+ for(let i=0;i<names.length;i++){
+  await page.locator('input[type=file]').setInputFiles({
+   name:names[i],mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
+  });
+  await expect(row(page)).toHaveCount(i+1);
+ }
+ for(let i=0;i<names.length;i++)
+  await row(page).nth(i).getByRole('button',{name:'Начать',exact:true}).click();
+ await expect.poll(async()=>((await snapshot(page)).find(j=>j.name===names[0])?.nextWindow)).toBe(1);
+ await expect.poll(async()=>((await snapshot(page)).filter(j=>j.queueOrder!==undefined)).length).toBe(3);
+ const before=await snapshot(page);
+ expect(before.filter(j=>j.queueOrder).sort((a,b)=>a.queueOrder-b.queueOrder).map(j=>j.name)).toEqual(names);
+ expect(before.find(j=>j.name===names[0])?.segments).toHaveLength(1);
+ await page.reload();
+ await expect(page.getByRole('button',{name:'Продолжить очередь'})).toBeVisible();
+ await expect(page.locator('.queue-banner')).toContainText('Очередь: 3 заданий');
+ expect((await snapshot(page)).find(j=>j.name===names[0])?.nextWindow).toBe(1);
+ await expect(page.locator('.file-row[aria-label="queue-two-60s.wav"]')).toContainText('В очереди · №2');
+ await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"]')).toContainText('В очереди · №3');
+ // Opening the page never triggers costly ML work automatically.
+ const pausedCalls=await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'));
+ await page.waitForTimeout(150);
+ expect(await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'))).toBe(pausedCalls);
+ await page.evaluate(()=>localStorage.removeItem('iscribe-e2e:pauseAt'));
+ await page.getByRole('button',{name:'Продолжить очередь'}).click();
+ await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"]')).toContainText('Текст и спикеры готовы',{timeout:90000});
+ const after=await snapshot(page);
+ expect(after).toHaveLength(3);
+ for(const name of names){
+  const job=after.find(j=>j.name===name);
+  expect(job).toMatchObject({stage:'done',asrComplete:true,nextWindow:3});
+  expect(job.segments.map(s=>s.text)).toEqual(['Окно 1','Окно 2','Окно 3']);
+  expect(job.queueOrder).toBeUndefined();
+ }
+ await expect(page.locator('.queue-banner')).toHaveCount(0);
+ await page.reload();
+ await expect(page.locator('.queue-banner')).toHaveCount(0);
+ expect((await snapshot(page)).every(j=>j.queueOrder===undefined)).toBe(true);
+});

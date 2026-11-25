@@ -46,9 +46,9 @@ it('storage failure stops the pipeline before speakers while preserving in-memor
  runner.enqueue(id);await finished(runner);expect(fake.diarize).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.segments).toHaveLength(0);expect(runner.snapshot().jobs.find(j=>j.id===id)!.nextWindow).toBe(0);expect(runner.snapshot().jobs.find(j=>j.id===id)!.volatileSegments).toHaveLength(1);expect(runner.snapshot().notice).toContain('Не удалось сохранить');
 });
 it('a denied cross-tab lock starts no inference and leaves a resumable job',async()=>{
- const {runner,fake}=setup();await runner.init();await runner.add([new File(['a'],'other-tab.wav')],{model:'whisper-small',language:'ru',diarize:false});const id=runner.snapshot().jobs.at(-1)!.id;
+ const {runner,fake,store}=setup();await runner.init();await runner.add([new File(['a'],'other-tab.wav')],{model:'whisper-small',language:'ru',diarize:false});const id=runner.snapshot().jobs.at(-1)!.id;
  vi.stubGlobal('navigator',{locks:{request:async(_name:string,_opts:unknown,callback:(lock:null)=>Promise<void>)=>callback(null)}});
- try{runner.enqueue(id);await finished(runner);expect(fake.prepare).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.stage).toBe('interrupted');expect(runner.snapshot().notice).toContain('другой вкладке')}finally{vi.unstubAllGlobals()}
+ try{runner.enqueue(id);await finished(runner);expect(fake.prepare).not.toHaveBeenCalled();expect(runner.snapshot().jobs.find(j=>j.id===id)!.stage).toBe('queued');expect(runner.snapshot().jobs.find(j=>j.id===id)!.queueOrder).toBeGreaterThan(0);expect(runner.snapshot().queueCount).toBe(1);expect(runner.snapshot().notice).toContain('другой вкладке')}finally{vi.unstubAllGlobals();await store.remove(id)}
 });
 
 it('ignores 30-second engine percentages and reports committed progress for the complete audio',async()=>{

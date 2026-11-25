@@ -21,4 +21,6 @@ PR-25 upgrades the same IndexedDB database to version 2 using lazy per-job migra
 
 PR-26 pre-caches only same-origin, versioned application assets; model weights remain under Transformers CacheStorage. Browser quota/eviction, production deployment and real inference still need testing.
 
+PR-27 restores enqueued file order from IndexedDB. Heavy ML is resumed by a user click, not run automatically on page load. A failed IndexedDB write may leave only an in-memory queue; do not claim persistence in that case.
+
 No issue above is declared fixed without a reproducible test and observed outcome.

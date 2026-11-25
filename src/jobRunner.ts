@@ -12,13 +12,15 @@ import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {mapSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
-export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string};
+export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number};
 export class JobRunner{
  readonly manager:ModelManager;
  private store:JobStore;
- private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:''};
+ private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0};
  private listeners=new Set<()=>void>();
  private queue:string[]=[];
+ private nextQueueOrder=0;
+ private queueWrites:Promise<void>=Promise.resolve();
  private cancelled=false;
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
@@ -106,8 +108,15 @@ export class JobRunner{
   try{
    const disk=await this.store.list(false),exit=consumePageExit();
    const jobs=disk.map(j=>recoverJob(j,exit?.jobId===j.id?exit.event:null));
+   // Only explicitly enqueued work is automatically restored; in-flight ASR
+   // becomes interrupted but retains its position for one-click resume.
+   const ordered=jobs.filter(j=>typeof j.queueOrder==='number'&&Number.isSafeInteger(j.queueOrder)&&j.queueOrder>0&&
+    (j.stage==='queued'||j.stage==='interrupted'))
+    .sort((a,b)=>a.queueOrder!-b.queueOrder!||a.id.localeCompare(b.id));
+   this.queue=ordered.map(j=>j.id);
+   this.nextQueueOrder=Math.max(0,...disk.map(j=>typeof j.queueOrder==='number'&&Number.isSafeInteger(j.queueOrder)?j.queueOrder:0));
    for(const job of disk)this.committedWindows.set(job.id,job.nextWindow);
-   this.set({jobs});
+   this.set({jobs,queueCount:this.queue.length});
    // Store the reconstructed stop diagnostic after reload, not in an unload handler.
    for(let i=0;i<jobs.length;i++)if(disk[i].stage!==jobs[i].stage){
     try{await this.store.save(jobs[i])}catch(error){this.set({notice:'Не удалось сохранить диагностику восстановления: '+message(error)})}
@@ -147,10 +156,26 @@ export class JobRunner{
   try{await this.store.remove(id);this.committedWindows.delete(id);this.set({jobs:this.state.jobs.filter(j=>j.id!==id)})}catch(error){this.set({notice:message(error)})}
  }
  enqueue(id:string,params?:JobParams){
-  const job=this.job(id);if(this.state.activeId===id||this.queue.includes(id))return;
+  const job=this.job(id);if(this.state.activeId===id)return;
+  if(this.queue.includes(id)){this.resumeQueue();return}
   // Parameters are captured on the first start. Resume retains the original.
   if(job.stage==='waiting'&&params)this.patch(id,{params:{...params}});
-  this.patch(id,{stage:'queued',status:'В очереди',error:undefined});this.queue.push(id);void this.drain();
+  const order=++this.nextQueueOrder;
+  this.queue.push(id);
+  this.patch(id,{stage:'queued',status:'В очереди',error:undefined,queueOrder:order});
+  this.set({queueCount:this.queue.length});
+  this.queueWrites=this.queueWrites.then(()=>this.persist(id));
+  // Keep the rejection for ensureQueueSaved() while immediately observing it
+  // so a quota failure cannot become a global unhandledrejection event.
+  void this.queueWrites.catch(()=>{});
+  void this.drain();
+ }
+ resumeQueue(){if(this.state.ready&&!this.state.busy&&this.queue.length)void this.drain()}
+ private async ensureQueueSaved(){
+  try{await this.queueWrites}catch{
+   for(const id of this.queue)await this.persist(id);
+   this.queueWrites=Promise.resolve();
+  }
  }
  private async exclusive(task:()=>Promise<void>){
   // Web Locks prevents two tabs from running heavy models and overwriting the
@@ -166,29 +191,32 @@ export class JobRunner{
   if(this.state.busy)return;
   this.set({busy:true});
   try{
+   await this.ensureQueueSaved();
    this.lease=this.exclusive(async()=>{
     while(this.queue.length){
-     const id=this.queue.shift()!;this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
+     await this.ensureQueueSaved();
+     const id=this.queue[0];
+     if(!this.state.jobs.some(j=>j.id===id&&j.queueOrder!==undefined)){
+      this.queue.shift();this.set({queueCount:this.queue.length});continue;
+     }
+     this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
      try{await this.execute(id)}catch(error){
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
       this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
-      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure});
+      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure,queueOrder:undefined});
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
+     }finally{
+      this.queue.shift();this.set({queueCount:this.queue.length});
      }
     }
    });await this.lease;
   }catch(error){
-   this.set({notice:message(error)});
-   for(const id of this.queue){
-    const job=this.job(id);
-    this.patch(id,{stage:'interrupted',status:'Запуск отложен: другая вкладка занята.',
-     failure:createFailureDiagnostic(job,'execution-error',message(error),job.backend,this.committedWindows.get(id)??job.nextWindow)});
-    try{await this.persist(id)}catch{/* Keep the existing notice. */}
-   }
-   this.queue=[];
-  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:''});this.abort=null;this.lease=undefined}
+   // Do not drop persistent queue entries when another tab owns the Web Lock
+   // or the browser cannot commit queue metadata. Retry from this checkpoint.
+   this.set({notice:'Запуск очереди отложен. Если причина в хранилище, очередь могла не сохраниться — не закрывайте страницу до устранения ошибки. '+message(error)});
+  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -283,6 +311,8 @@ export class JobRunner{
   }else this.patch(id,{stage:'done',status:'Текст готов',percent:100});
   if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
   this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});
+  // Closing the FIFO slot is part of the successful terminal job commit.
+  this.patch(id,{queueOrder:undefined});
   await this.persist(id);this.check();
   this.set({operation:'Формирование TXT'});
   // Browser download APIs cannot reliably report a blocked download.
