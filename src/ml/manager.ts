@@ -38,9 +38,14 @@ export class ModelManager{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   // Selecting the already active model must not dispose its ONNX session.
   if(this.active===id&&this.client&&this.capabilities?.active&&(!options.wasmOnly||this.capabilities.active==='wasm')){
+   // Cache inspection is asynchronous. The active session may be cancelled or
+   // replaced before it completes; never resurrect an old ready status.
+   const generation=this.generation,client=this.client,backend=this.capabilities.active;
    const cached=await this.cached(id);
+   if(generation!==this.generation||this.client!==client||this.active!==id)
+    throw new Error('Операция отменена или модель изменена.');
    this.onWhisperProgress(id,{phase:'ready',cachedBefore:cached,cachedAfter:cached,httpRequests:0});
-   return {cached,backend:this.capabilities.active};
+   return {cached,backend};
   }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
