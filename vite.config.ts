@@ -1,8 +1,11 @@
 import {defineConfig} from 'vite';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {readFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
 import {offlineAssetsFromBundle,renderOfflineWorker} from './scripts/offline-manifest.mjs';
-export default defineConfig({base:'./',worker:{format:'es'},plugins:[{
+let revision='unavailable';
+try{revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim()}catch{/* Source archive without git metadata. */}
+export default defineConfig({base:'./',define:{__ISCRIBE_BUILD_SHA__:JSON.stringify(revision)},worker:{format:'es'},plugins:[{
  name:'compressed-wasm-transport',
  generateBundle(_options,bundle){
   for(const [name,asset] of Object.entries(bundle)){
