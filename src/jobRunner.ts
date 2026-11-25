@@ -212,7 +212,7 @@ export class JobRunner{
   }catch(error){
    // Do not drop persistent queue entries when another tab owns the Web Lock
    // or the browser cannot commit queue metadata. Retry from this checkpoint.
-   this.set({notice:'Очередь сохранена, но запуск отложен. '+message(error)});
+   this.set({notice:'Запуск очереди отложен. Если причина в хранилище, очередь могла не сохраниться — не закрывайте страницу до устранения ошибки. '+message(error)});
   }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
