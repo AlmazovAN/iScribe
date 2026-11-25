@@ -12,6 +12,7 @@ import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
+import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number};
 export class JobRunner{
  readonly manager:ModelManager;
@@ -25,14 +26,15 @@ export class JobRunner{
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
+ private benchmarkDownload:typeof downloadBenchmarkJson;
  private decode:typeof decodeAudio;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
  private readonly asrIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number}={}){
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;asrIdleMs?:number}={}){
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.manager.onLifecycleChange=event=>{
    this.set({enginePhase:event.phase,backend:event.backend??'Не инициализировано'});
@@ -52,11 +54,23 @@ export class JobRunner{
  private set(patch:Partial<RunnerSnapshot>){this.state={...this.state,...patch};this.listeners.forEach(fn=>fn())}
  private patch(id:string,patch:Partial<Job>){this.set({jobs:this.state.jobs.map(j=>j.id===id?{...j,...patch,updated:Date.now()}:j)})}
  private job(id:string){const job=this.state.jobs.find(j=>j.id===id);if(!job)throw new Error('Задание не найдено.');return job}
+ private bench(id:string,update:(previous:JobBenchmark)=>JobBenchmark){
+  const next=sampleMainThreadHeap(update(this.job(id).benchmark??emptyBenchmark()));
+  this.patch(id,{benchmark:next});
+ }
+ exportBenchmark(id:string){
+  const job=this.job(id);
+  if(!job.benchmark?.runs)throw new Error('Измерения производительности ещё не выполнены.');
+  const name='iscribe_benchmark_'+id.slice(0,8).replace(/[^a-z0-9]/gi,'')+'.json';
+  this.benchmarkDownload(benchmarkReport(job),name);
+ }
  private async inspectPcm(id:string,pcm:Float32Array,signal?:AbortSignal):Promise<AudioInspectionReport>{
   this.traceEvent(id,'audio-check-start','audio',{pcmSamples:pcm.length});
   await this.persist(id);
   try{
+   const started=benchmarkNow();
    const report=await inspectDecodedPcm(pcm,{signal,onProgress:(done,total)=>this.set({operation:`Проверка аудио: окно ${done}/${total}`})});
+   this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
    this.patch(id,{audioCheck:{status:'passed',checkedAt:Date.now(),report}});
    this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount});
    await this.persist(id);
@@ -200,7 +214,13 @@ export class JobRunner{
       this.queue.shift();this.set({queueCount:this.queue.length});continue;
      }
      this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
-     try{await this.execute(id)}catch(error){
+     const runStarted=benchmarkNow();
+     try{
+      await this.execute(id);
+      this.bench(id,b=>addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted));
+      await this.persist(id);
+     }catch(error){
+      this.bench(id,b=>({...addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted),failedRuns:b.failedRuns+1}));
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
       this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
@@ -224,12 +244,15 @@ export class JobRunner{
   if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
+  const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
+  this.bench(id,b=>({...b,runs:b.runs+1,resumedRuns:b.resumedRuns+(resumed?1:0)}));
   this.traceEvent(id,'job-start','job',{committedWindows:this.job(id).nextWindow});
   this.traceEvent(id,'audio-start','audio');
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
-  const audioStarted=Date.now();
+  const audioStarted=Date.now(),decodeStarted=benchmarkNow();
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
+  this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
   this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
   await this.inspectPcm(id,audio,this.abort!.signal);this.check();
   this.set({operation:'Подготовка модели'});
@@ -240,7 +263,12 @@ export class JobRunner{
    const initial=checkpointProgress(windows,this.job(id).nextWindow);
    if(this.manager.active!==params.model){
     this.traceEvent(id,'model-start','model');await this.persist(id);
-    const modelStarted=Date.now();const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend});
+    const modelStarted=Date.now(),modelMeasured=benchmarkNow();
+    let prepared:Awaited<ReturnType<ModelManager['prepare']>>;
+    try{prepared=await this.manager.prepare(params.model)}finally{
+     this.bench(id,b=>addBenchmarkTiming(b,'modelInitMs',benchmarkNow()-modelMeasured));
+    }
+    this.check();this.set({backend:prepared.backend});
     this.traceEvent(id,'model-ready','model',{elapsedMs:Date.now()-modelStarted,backend:traceBackend(prepared.backend)});
    }
    this.set({operation:'Распознавание'});
@@ -251,7 +279,7 @@ export class JobRunner{
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
-    let result:TranscriptSegment[]|undefined;
+    let result:TranscriptSegment[]|undefined,successfulAttemptMs=0;
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
      this.traceEvent(id,'window-attempt','asr',{window:index+1,totalWindows:windows.length,attempt,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
@@ -259,7 +287,7 @@ export class JobRunner{
      // A tab crash can then be diagnosed without claiming a committed result.
      await this.persist(id);
      const attemptBackend=this.manager.capabilities?.active??this.state.backend;
-     const attemptStarted=Date.now();
+     const attemptStarted=Date.now(),attemptMeasured=benchmarkNow();
      try{
       try{
        result=await withActivityWatchdog(heartbeat=>{
@@ -271,9 +299,13 @@ export class JobRunner{
        });
       }finally{this.asrHeartbeat=null}
       this.check();this.patch(id,{error:undefined});
+      successfulAttemptMs=benchmarkNow()-attemptMeasured;
+      this.bench(id,b=>({...addBenchmarkTiming(b,'asrAttemptMs',successfulAttemptMs),attempts:b.attempts+1}));
       this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:result.length,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
       break;
      }catch(error){
+      const elapsed=benchmarkNow()-attemptMeasured;
+      this.bench(id,b=>({...addBenchmarkTiming(b,'asrAttemptMs',elapsed),attempts:b.attempts+1,failedAttempts:b.failedAttempts+1}));
       this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
       this.check();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
@@ -283,6 +315,7 @@ export class JobRunner{
       // Throw on failed reinit instead of silently continuing on an unknown
       // backend. Explicit cancellation aborts before starting another window.
       const prepared=await this.manager.recover(params.model,wasmOnly);this.check();
+      this.bench(id,b=>({...b,workerRecoveries:b.workerRecoveries+1}));
       this.set({backend:prepared.backend});
       this.patch(id,{backend:prepared.backend});
      }
@@ -290,7 +323,11 @@ export class JobRunner{
     if(!result)throw new Error('Окно не вернуло результат распознавания.');
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
     const after=checkpointProgress(windows,index+1);
+    const checkpointStarted=benchmarkNow();
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
+    const checkpointMs=benchmarkNow()-checkpointStarted;
+    const uniqueAudioSeconds=(window.end-(index===0?window.start:windows[index-1].end))/16000;
+    this.bench(id,b=>recordWindowCommit(b,index+1,successfulAttemptMs,checkpointMs,uniqueAudioSeconds));
     this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1});
     this.check();
    }
@@ -302,8 +339,10 @@ export class JobRunner{
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
+   const speakerMeasured=benchmarkNow();
    try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
    this.check();
+   this.bench(id,b=>addBenchmarkTiming(b,'speakerMs',benchmarkNow()-speakerMeasured));
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
    const segments=this.job(id).segments;
    const aligned=alignSpeakers(segments,turns),speakerSegments=aligned.segments;
