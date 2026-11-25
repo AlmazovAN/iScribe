@@ -52,6 +52,8 @@ export class FixtureManager{
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(enabled('failSpeakers'))throw new Error('Synthetic diarization failure');
+  // Deterministic diarization gaps for browser acceptance. No real ML is used.
+  if(enabled('speakerGaps'))return [{start:0,end:10,speaker:'Fixture Speaker'}];
   return [{start:0,end:audio.length/SAMPLE_RATE,speaker:'Fixture Speaker'}];
  }
  async recover(id:WhisperId,_wasmOnly:boolean){
