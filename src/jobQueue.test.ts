@@ -10,7 +10,7 @@ function setup(){
  const store=new JobStore('iscribe-pr27-'+crypto.randomUUID());
  const fake={
   active:null as string|null,
-  onProgress:(_text:string,_percent:number|null)=>{},
+  onProgress:(_text:string,_percent:number|null)=>{void _text;void _percent},
   prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),
   recover:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),
   transcribe:vi.fn(async()=>[{start:3,end:4,text:'recognized'}]),
