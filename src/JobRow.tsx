@@ -1,7 +1,7 @@
 import type {Job} from './jobs';
 import {isRunning,audioWindows} from './jobs';
 import {checkpointLabel,checkpointProgress} from './recognitionProgress';
-export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,onDiagnostics,onInspectAudio,checking=false,inspectDisabled=false}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void;onDiagnostics?:()=>void;onInspectAudio?:()=>void;checking?:boolean;inspectDisabled?:boolean}){
+export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,onDiagnostics,onInspectAudio,checking=false,inspectDisabled=false,queuePosition}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void;onDiagnostics?:()=>void;onInspectAudio?:()=>void;checking?:boolean;inspectDisabled?:boolean;queuePosition?:number}){
  const queued=job.stage==='queued',running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
  const duration=job.duration,validDuration=typeof duration==='number'&&Number.isFinite(duration)&&duration>0&&duration<=3600;
  const windows=validDuration?audioWindows(Math.round(duration*16000)):[];
@@ -12,7 +12,7 @@ export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,
   <div className="file-state"><span role="status">{job.status}</span>{(running||queued||(!job.asrComplete&&job.nextWindow>0))&&<progress max={100} value={job.stage==='recognizing'||!running?progress?.percent??undefined:job.percent??undefined} aria-label={`Обработка ${job.name}`}/>}<small>{job.params.model.replace('whisper-','Whisper ')} · {job.params.language}{job.asrComplete?' · текст готов':hasText?' · промежуточный текст':''}</small></div>
   <div className="file-actions">
    {(!running&&!queued&&!checking&&(job.stage==='waiting'||retry))&&<button className="start" onClick={onStart}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
-   {queued&&<span className="queued">В очереди</span>}
+   {queued&&<span className="queued">В очереди{queuePosition?` · №${queuePosition}`:''}</span>}
    <button disabled={!hasText} onClick={()=>onExport('plain')}>Скачать TXT</button>
    <button disabled={!hasText} onClick={()=>onExport('time')}>TXT + time</button>
    <button disabled={!job.speakerSegments?.some(s=>s.text.trim())} onClick={()=>onExport('speakers')}>TXT + time + speaker{job.speakerSegments&&job.stage!=='done'?' *':''}</button>
