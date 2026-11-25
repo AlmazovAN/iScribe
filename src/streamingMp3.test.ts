@@ -8,7 +8,7 @@ function file(frames:number,extra?:Uint8Array){
  const chunks:Uint8Array[]=[];
  if(extra)chunks.push(extra);
  for(let i=0;i<frames;i++)chunks.push(frame());
- return new Blob(chunks,{type:'audio/mpeg'});
+ return new Blob(chunks.map(part=>part.slice().buffer as ArrayBuffer),{type:'audio/mpeg'});
 }
 afterEach(()=>vi.unstubAllGlobals());
 it('parses MPEG-1 Layer III frame headers with frame-aligned 1152-sample accounting',()=>{
@@ -29,9 +29,9 @@ it('streams ID3v2 and frame bytes from Blob slices without reading entire source
 it('rejects broken frames, changes in sample rate, and clipped MPEG frames',async()=>{
  await expect(inspectMp3Frames(new Blob([Uint8Array.of(1,2,3)]))).rejects.toThrow('MP3');
  const bad=frame();bad[2]=0x94; // switch to 48 kHz
- await expect(inspectMp3Frames(new Blob([frame(),bad]))).rejects.toThrow('частоту');
+ await expect(inspectMp3Frames(new Blob([frame().buffer as ArrayBuffer,bad.buffer as ArrayBuffer]))).rejects.toThrow('частоту');
  const incomplete=frame().slice(0,80);
- await expect(inspectMp3Frames(new Blob([incomplete]))).rejects.toThrow('посреди кадра');
+ await expect(inspectMp3Frames(new Blob([incomplete.buffer as ArrayBuffer]))).rejects.toThrow('посреди кадра');
 });
 it('rejects durations beyond the existing 60-minute window limit',async()=>{
  const head=frame();
