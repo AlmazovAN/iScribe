@@ -16,6 +16,7 @@ export type SpeakerAlignmentStats={
  speakerCount:number;
  turnCoverageSeconds:number;
  segments:number;
+ emptyText:number;
  labeled:number;
  unlabeled:number;
  overlapMatches:number;
@@ -76,12 +77,17 @@ export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readon
   turns:turns.length,validTurns:prepared.validTurns,invalidTurns:prepared.invalidTurns,
   mergedTurns:valid.length,speakerCount:prepared.speakerCount,
   turnCoverageSeconds:timelineCoverage(valid),segments:segments.length,
-  labeled:0,unlabeled:0,overlapMatches:0,boundaryMatches:0,
+  emptyText:0,labeled:0,unlabeled:0,overlapMatches:0,boundaryMatches:0,
   ambiguous:0,uncovered:0,weakEvidence:0,invalidSegments:0,zeroDuration:0
  };
  const result=segments.map(segment=>{
   // An old speaker label must never survive a new, unsuccessful alignment.
   const {speaker:_stale,...plain}=segment;void _stale;
+  // Empty ASR placeholders are not missing speaker assignments. Preserve
+  // the previous runner's semantics: count only text-bearing unknowns.
+  if(typeof segment.text!=='string'||!segment.text.trim()){
+   stats.emptyText++;return plain;
+  }
   if(!Number.isFinite(segment.start)||!Number.isFinite(segment.end)||
      segment.start<0||segment.end<segment.start){
    stats.invalidSegments++;stats.unlabeled++;return plain;
