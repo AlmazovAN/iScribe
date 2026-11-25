@@ -156,15 +156,15 @@ test('durable FIFO restores three jobs after a reload; one click resumes only un
  await expect(page.getByRole('button',{name:'Продолжить очередь'})).toBeVisible();
  await expect(page.locator('.queue-banner')).toContainText('Очередь: 3 заданий');
  expect((await snapshot(page)).find(j=>j.name===names[0])?.nextWindow).toBe(1);
- await expect(row(page).nth(1)).toContainText('В очереди · №2');
- await expect(row(page).nth(2)).toContainText('В очереди · №3');
+ await expect(page.locator('.file-row[aria-label="queue-two-60s.wav"]')).toContainText('В очереди · №2');
+ await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"]')).toContainText('В очереди · №3');
  // Opening the page never triggers costly ML work automatically.
  const pausedCalls=await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'));
  await page.waitForTimeout(150);
  expect(await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'))).toBe(pausedCalls);
  await page.evaluate(()=>localStorage.removeItem('iscribe-e2e:pauseAt'));
  await page.getByRole('button',{name:'Продолжить очередь'}).click();
- await expect(row(page).nth(2)).toContainText('Текст и спикеры готовы',{timeout:90000});
+ await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"]')).toContainText('Текст и спикеры готовы',{timeout:90000});
  const after=await snapshot(page);
  expect(after).toHaveLength(3);
  for(const name of names){
