@@ -84,7 +84,7 @@ export function diagnosticReport(job:Job){
    turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,
    invalidTurns:job.diagnostics.invalidTurns??null,mergedTurns:job.diagnostics.mergedTurns??null,
    speakerCount:job.diagnostics.speakerCount??null,turnCoverageSeconds:job.diagnostics.turnCoverageSeconds??null,
-   segments:job.diagnostics.segments,labeled:job.diagnostics.labeled??null,
+   segments:job.diagnostics.segments,emptyText:job.diagnostics.emptyText??null,labeled:job.diagnostics.labeled??null,
    unlabeled:job.diagnostics.unlabeled,overlapMatches:job.diagnostics.overlapMatches??null,
    boundaryMatches:job.diagnostics.boundaryMatches??null,ambiguous:job.diagnostics.ambiguous??null,
    uncovered:job.diagnostics.uncovered??null,weakEvidence:job.diagnostics.weakEvidence??null,
