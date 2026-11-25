@@ -10,6 +10,8 @@ import {useProtection} from './useProtection';
 import {formatTranscript} from './formatTranscript';
 import type {WhisperId} from './ml/manager';
 import type {JobParams} from './jobs';
+declare const __ISCRIBE_BUILD_SHA__:string;
+const buildRevision=typeof __ISCRIBE_BUILD_SHA__==='string'&&__ISCRIBE_BUILD_SHA__!=='unavailable'?__ISCRIBE_BUILD_SHA__.slice(0,7):'недоступен';
 const engineLabels={idle:'Не инициализировано',initializing:'Инициализация',ready:'Готова',transcribing:'Распознавание',recovering:'Восстановление Worker','preloading-speakers':'Загрузка спикеров',diarizing:'Диаризация',cancelled:'Отменено',error:'Ошибка'} as const;
 const models=[{id:'whisper-tiny',name:'Whisper Tiny',tag:'Быстрые заметки',description:'Короткие записи и проверка устройства.'},{id:'whisper-small',name:'Whisper Small',tag:'По умолчанию',description:'Встречи и повседневная работа.'},{id:'whisper-large-v3',name:'Whisper Large v3',tag:'Экспериментальная',description:'Полная модель. Несколько ГБ и высокий расход памяти.'}] as const;
 export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
@@ -38,13 +40,14 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
   if((job.stage==='waiting'?selected:job.params.model)==='whisper-large-v3'&&!largeAllowed())return;
   runner.enqueue(id,params);
  };
- const add=(files:FileList|File[])=>{setError('');void runner.add(Array.from(files),params);if(navigator.storage?.persist)void navigator.storage.persist().catch(()=>false)};
+ const add=(files:FileList|File[])=>{setError('');void runner.add(Array.from(files),params).catch(e=>setError(e instanceof Error?e.message:'Не удалось сохранить аудиозапись.'));if(navigator.storage?.persist)void navigator.storage.persist().catch(()=>false)};
  const download=(id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadDiagnostics=(id:string)=>{try{runner.exportDiagnostics(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadBenchmark=(id:string)=>{try{runner.exportBenchmark(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadHardware=(id:string)=>runner.exportHardwareEvidence(id);
  const inspectAudio=(id:string)=>{setError('');void runner.inspectAudio(id).catch(e=>setError(e instanceof Error?e.message:String(e)))};
  const chosen=state.jobs.find(j=>j.id===previewId)??state.jobs.find(j=>j.id===state.activeId)??state.jobs.at(-1);
+ const queuePositions=new Map(state.jobs.filter(job=>job.queueOrder!==undefined).sort((a,b)=>(a.queueOrder??0)-(b.queueOrder??0)).map((job,index)=>[job.id,index+1]));
  let preview='';try{if(chosen)preview=formatTranscript(chosen.speakerSegments??chosen.volatileSegments??chosen.segments,{timestamps:true,diarize:!!chosen.speakerSegments})}catch{preview='Не удалось сформировать предпросмотр. Проверьте временные метки.'}
  return <div className="app">
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><span className="local"><i/>Обработка на вашем устройстве</span></header>
@@ -65,7 +68,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     {state.queueCount>0&&<div className="queue-banner" role="status"><span>Очередь: {state.queueCount} {state.queueCount===1?'задание':'заданий'}{!state.busy?' · восстановлена':''}</span>{!state.busy&&<button className="start" onClick={()=>runner.resumeQueue()}>Продолжить очередь</button>}</div>}
     <div className={'drop '+(drag?'drag':'')} onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);if(state.ready)add(e.dataTransfer.files)}}><span className="audio-icon" aria-hidden="true">≋</span><div><h3>Перетащите аудиофайлы сюда</h3><p>Или выберите файлы на компьютере</p></div><button className="secondary" disabled={!state.ready} onClick={()=>input.current?.click()}>Выбрать файлы</button><input ref={input} type="file" multiple accept="audio/*,.mp3,.wav,.m4a,.ogg,.opus,.webm,.aac,.flac" aria-label="Выбрать аудиозаписи" onChange={e=>{if(e.target.files)add(e.target.files);e.target.value=''}}/></div>
     {!state.ready&&<p role="status">Восстанавливаем сохранённые задания…</p>}
-    <div className="file-list">{state.jobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onCancel={openCancel} onRemove={()=>setRemoveId(job.id)} onPreview={()=>setPreviewId(job.id)} onDiagnostics={()=>downloadDiagnostics(job.id)} onBenchmark={()=>downloadBenchmark(job.id)} onInspectAudio={()=>inspectAudio(job.id)} queuePosition={job.queueOrder===undefined?undefined:state.jobs.filter(j=>j.queueOrder!==undefined).sort((a,b)=>(a.queueOrder??0)-(b.queueOrder??0)).findIndex(j=>j.id===job.id)+1} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')} inspectDisabled={state.busy}/>)}</div>
+    <div className="file-list">{state.jobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onCancel={openCancel} onRemove={()=>setRemoveId(job.id)} onPreview={()=>setPreviewId(job.id)} onDiagnostics={()=>downloadDiagnostics(job.id)} onBenchmark={()=>downloadBenchmark(job.id)} onInspectAudio={()=>inspectAudio(job.id)} queuePosition={queuePositions.get(job.id)} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')} inspectDisabled={state.busy}/>)}</div>
     {!state.jobs.length&&state.ready&&<p className="empty-list">Добавленные записи появятся здесь. До 128 МБ и одного часа на файл.</p>}
    </section>
    <HardwareAcceptancePanel job={chosen} onExport={downloadHardware} busy={state.busy}/>
@@ -74,8 +77,8 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
    {chosen&&<section className="panel result"><div className="panel-heading"><h2>Текст записи</h2><span className="preview-name">{chosen.name}</span></div>{!chosen.asrComplete&&preview&&<p className="note">Промежуточный текст. Распознавание ещё не завершено.</p>}<div className={preview?'transcript':'empty'}>{preview||'Текст появится по мере распознавания.'}</div></section>}
    <p className="privacy">Аудио и результаты сохраняются в этом браузере на вашем устройстве. Перезагрузка остановит вычисления; сохранённую работу можно продолжить. Не очищайте данные сайта до скачивания результатов.</p>
   </main>
-  <footer><strong>iScribe</strong><span>Локально. Под вашим контролем.</span><a href={`${import.meta.env.BASE_URL}THIRD_PARTY_NOTICES.txt`} target="_blank" rel="noreferrer">Модели и лицензии</a></footer>
+  <footer><strong>iScribe</strong><span>Локально. Под вашим контролем.</span><span className="release-id" title="Сборка не прошла аппаратную приёмку">Тестовая сборка · {buildRevision}</span><a href={`${import.meta.env.BASE_URL}THIRD_PARTY_NOTICES.txt`} target="_blank" rel="noreferrer">Модели и лицензии</a></footer>
   <dialog ref={cancelDialog} onCancel={()=>setCancelOpen(false)} onClose={()=>setCancelOpen(false)}><h2>Отменить расшифровку?</h2><p>Текущая обработка будет остановлена. Уже полученный текст останется доступен. Следующие задания очереди продолжат обрабатываться.</p><div className="dialog-actions"><button className="start" autoFocus onClick={()=>setCancelOpen(false)}>Продолжить обработку</button><button className="cancel" onClick={()=>{if(runner.snapshot().activeId===cancelTarget)runner.cancel();else setError('Задача уже завершена. Следующая задача не отменена.');setCancelOpen(false)}}>Отменить задачу</button></div></dialog>
-  <dialog ref={removeDialog} onCancel={()=>setRemoveId(null)} onClose={()=>setRemoveId(null)}><h2>Удалить запись и результаты?</h2><p>Исходное аудио и сохранённый текст этой записи будут удалены из браузера.</p><div className="dialog-actions"><button className="secondary" autoFocus onClick={()=>setRemoveId(null)}>Оставить</button><button className="cancel" onClick={()=>{if(removeId)void runner.remove(removeId);setRemoveId(null)}}>Удалить</button></div></dialog>
+  <dialog ref={removeDialog} onCancel={()=>setRemoveId(null)} onClose={()=>setRemoveId(null)}><h2>Удалить запись и результаты?</h2><p>Исходное аудио и сохранённый текст этой записи будут удалены из браузера.</p><div className="dialog-actions"><button className="secondary" autoFocus onClick={()=>setRemoveId(null)}>Оставить</button><button className="cancel" onClick={()=>{if(removeId)void runner.remove(removeId).catch(e=>setError(e instanceof Error?e.message:'Не удалось удалить запись.'));setRemoveId(null)}}>Удалить</button></div></dialog>
  </div>;
 }
