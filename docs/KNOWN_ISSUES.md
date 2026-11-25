@@ -29,4 +29,6 @@ PR-29 reports browser-observed ASR timing and main-thread JS heap samples, but d
 
 PR-30 adds unverified hardware evidence and a runbook; it does not establish actual Whisper Small, GPU fallback, VRAM or diarization performance on the user's device. CI artifacts explicitly use mocked ML and must never be treated as real hardware acceptance.
 
+PR-31 reduces UI density and introduces an automated distribution integrity gate, but a static package PASS cannot guarantee real Whisper inference, ChatGPT Sites publishing, or safe rollback after IndexedDB v2 migration. The footer exposes only the built commit SHA; verify it against the deployed commit. See `docs/PR31_UI_RELEASE_PREP.md`.
+
 No issue above is declared fixed without a reproducible test and observed outcome.
