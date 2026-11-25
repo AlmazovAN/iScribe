@@ -18,4 +18,4 @@
 
 ## Next stages
 
-PR-22: implementation on stacked PR-22; structured per-window traces, privacy-safe JSON export, and CI runner fix. Real hardware NOT TESTED. PR-23: window and decode validation. PR-24: ML lifecycle. PR-25: memory/storage. PR-26: offline readiness. PR-27: queue recovery. PR-28: diarization. PR-29: benchmarking. PR-30: hardware acceptance. PR-31: UI refinement.
+PR-22: implementation on stacked PR-22; structured per-window traces, privacy-safe JSON export, and CI runner fix. Real hardware NOT TESTED. PR-23: code implemented on stacked PR-23; standalone decoded-PCM preflight, 35-window integrity, malformed timestamp guards and acceptance tests. CI/hardware validation to follow. PR-24: ML lifecycle. PR-25: memory/storage. PR-26: offline readiness. PR-27: queue recovery. PR-28: diarization. PR-29: benchmarking. PR-30: hardware acceptance. PR-31: UI refinement.

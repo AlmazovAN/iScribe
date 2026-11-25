@@ -18,7 +18,8 @@ export async function decodeAudio(file: File, signal?: AbortSignal): Promise<Flo
   try {
     const bytes=await file.arrayBuffer();signal?.throwIfAborted();
     const decoded=await context.decodeAudioData(bytes);signal?.throwIfAborted();
-    if(!Number.isFinite(decoded.duration)||decoded.duration<=0) throw new Error('В записи нет аудиоданных.');
+    if(!Number.isFinite(decoded.duration)||decoded.duration<=0||!Number.isSafeInteger(decoded.length)||decoded.length<=0||!Number.isSafeInteger(decoded.numberOfChannels)||decoded.numberOfChannels<1||!Number.isFinite(decoded.sampleRate)||decoded.sampleRate<=0)
+      throw new Error('Декодер вернул некорректные параметры аудио. Проверьте файл.');
     if(decoded.duration>MAX_SECONDS) throw new Error('Для этого выпуска ограничение — один час. Разделите запись на части.');
     if(decoded.length*decoded.numberOfChannels*4>MAX_DECODED_BYTES) throw new Error('Для декодирования нужно слишком много памяти. Разделите запись.');
     // Reuse the decoder's mono buffer during resampling, rather than making

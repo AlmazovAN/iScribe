@@ -2,9 +2,11 @@ import type {TranscriptSegment} from '@yourdevice/engine';
 import type {WhisperId} from './ml/manager';
 import {createFailureDiagnostic,type JobFailure,type PageExitEvent} from './jobDiagnostics';
 import type {TraceEvent} from './jobTrace';
+import type {AudioInspectionReport} from './audioValidation';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
+export type AudioCheck={status:'passed';checkedAt:number;report:AudioInspectionReport}|{status:'failed';checkedAt:number;problem:string};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];audioCheck?:AudioCheck;diagnostics?:{turns:number;unlabeled:number;segments:number;zeroDuration:number};};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  if(!isRunning(job.stage)&&job.stage!=='queued')return job;
@@ -21,12 +23,18 @@ export function createJob(file:File,params:JobParams):Job{
 // Same 30 s / 5 s overlap and midpoint cuts as the pinned engine. A checkpoint
 // is committed ONLY after a whole window: interrupted windows are replayed.
 export function audioWindows(samples:number){
+ if(!Number.isSafeInteger(samples)||samples<0||samples>3600*16000)throw new Error('Некорректная длина PCM: допустимо до одного часа при 16 кГц.');
  const out:{start:number;end:number;first:boolean;last:boolean}[]=[];
  for(let start=0;start<samples;start+=25*16000){const end=Math.min(start+30*16000,samples);out.push({start,end,first:start===0,last:end===samples});if(end===samples)break}return out;
 }
 export function absoluteSegments(segments:TranscriptSegment[],window:ReturnType<typeof audioWindows>[number]){
  const offset=window.start/16000;
- return segments.map(s=>({...s,start:s.start+offset,end:s.end+offset})).filter(s=>{
+ return segments.map(s=>{
+  if(!s||!Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start<0||s.end<s.start||
+     s.end>(window.end-window.start)/16000+1)
+   throw new Error('Некорректные временные метки ASR в текущем окне. Контрольная точка не изменена.');
+  return {...s,start:s.start+offset,end:s.end+offset};
+ }).filter(s=>{
   const mid=(s.start+s.end)/2;return (window.first||mid>=offset+2.5)&&(window.last||mid<window.end/16000-2.5);
  });
 }

@@ -5,11 +5,11 @@ import {expectedWindows} from './jobDiagnostics';
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'job-start'|'audio-start'|'audio-ready'|'model-start'|'model-ready'|
+ 'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
-export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'other';
+export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
 export type TraceEvent={
  at:number;
@@ -38,6 +38,7 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
  if(error&&typeof error==='object'){
   const value=error as {code?:unknown;name?:unknown};
   if(value.name==='WorkerStalledError')return 'timeout';
+  if(value.code==='audio-validation-failed')return 'invalid-audio';
   if(value.code==='worker-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
@@ -74,6 +75,7 @@ export function diagnosticReport(job:Job){
    backend:traceBackend(job.backend)
   },
   lastFailure:failure,
+  audioCheck:job.audioCheck??null,
   events:job.trace??[],
   eventsLimit:MAX_TRACE_EVENTS,
   notice:'Лог не содержит аудио, текста записи, имени исходного файла и сообщений исключений.'
