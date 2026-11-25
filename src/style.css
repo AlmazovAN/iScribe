@@ -73,3 +73,6 @@ header{height:72px}
  .release-id{display:none}
 }
 @media(prefers-reduced-motion:reduce){button{transition:none}}
+
+/* PR-32: show large-MP3 mode before the user starts expensive inference. */
+.large-mp3-note{font-size:11px;line-height:1.55;color:#687a6d;margin:0 0 11px;padding:8px 10px;background:#f8faf7;border:1px solid #e5ece2;border-radius:8px}
