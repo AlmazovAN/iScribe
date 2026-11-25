@@ -91,3 +91,14 @@ it('gaps and point segments are explicit, and mapped array is not mutated',()=>{
  const stats=alignSpeakers(transcript,turns).stats;
  expect(stats).toMatchObject({overlapMatches:2,zeroDuration:2,ambiguous:1,uncovered:1,unlabeled:2});
 });
+
+
+it('does not treat blank ASR placeholders as missing speech labels',()=>{
+ const result=alignSpeakers([
+  {start:0,end:0.5,text:'   '},
+  {start:1,end:2,text:'Audible speech'},
+  {start:4,end:5,text:'Uncovered words'}
+ ],[{start:1,end:2,speaker:'A'}]);
+ expect(result.segments.map(x=>x.speaker)).toEqual([undefined,'A',undefined]);
+ expect(result.stats).toMatchObject({segments:3,emptyText:1,labeled:1,unlabeled:1,uncovered:1});
+});
