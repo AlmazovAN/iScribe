@@ -109,3 +109,27 @@ it('legacy queued job without a durable order requires explicit re-enqueue',()=>
  expect(recoverJob({...job,stage:'queued'}).stage).toBe('interrupted');
  expect(recoverJob({...job,stage:'queued',queueOrder:2}).stage).toBe('queued');
 });
+
+
+it('one failed enqueue cannot be bypassed by later saved positions',async()=>{
+ const {store,fake,runner,params}=setup();await runner.init();
+ await runner.add([new File(['a'],'quota-first.wav'),new File(['b'],'quota-second.wav')],params);
+ const [first,second]=runner.snapshot().jobs.slice(-2);
+ const original=store.save.bind(store);
+ const spy=vi.spyOn(store,'save').mockImplementation(async(job,file)=>{
+  if(job.stage==='queued'&&job.id===first.id)throw new Error('synthetic quota');
+  return original(job,file);
+ });
+ runner.enqueue(first.id);
+ runner.enqueue(second.id);
+ await finished(runner);
+ expect(fake.prepare).not.toHaveBeenCalled();
+ expect(runner.snapshot().queueCount).toBe(2);
+ expect(runner.snapshot().notice).toContain('не сохраниться');
+ expect((await store.get(first.id,false))?.queueOrder).toBeUndefined();
+ spy.mockRestore();
+ runner.resumeQueue();await finished(runner);
+ expect((await store.get(first.id,false))?.stage).toBe('done');
+ expect((await store.get(second.id,false))?.stage).toBe('done');
+ expect(runner.snapshot().queueCount).toBe(0);
+});
