@@ -1,5 +1,6 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
-import {decodeAudio,validateFile} from './audio';
+import {decodeAudio,validateFile,isLargeMp3} from './audio';
+import {inspectMp3Frames,Mp3WindowReader} from './streamingMp3';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
@@ -111,6 +112,7 @@ export class JobRunner{
     if(!file)throw new Error('Исходное аудио недоступно в браузере.');
     this.traceEvent(id,'audio-start','audio');await this.persist(id);
     const started=Date.now();
+    if(isLargeMp3(file))throw new Error('Для MP3 свыше 128 МБ отдельная полная проверка PCM недоступна. Каждое окно проверяется перед распознаванием.');
     const pcm=await this.decode(file,this.abort!.signal);
     this.check();this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-started,pcmSamples:pcm.length});
     await this.inspectPcm(id,pcm,this.abort!.signal);
@@ -266,14 +268,26 @@ export class JobRunner{
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
   const audioStarted=Date.now(),decodeStarted=benchmarkNow();
-  const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
+  const largeMp3=isLargeMp3(file);
+  // Scan MP3 headers using bounded Blob slices. Large source never enters
+  // full-buffer browser decode; only current 30-second PCM is held in RAM.
+  const overview=largeMp3?await inspectMp3Frames(file,this.abort!.signal):null;
+  const audio=largeMp3?null:await this.decode(file,this.abort!.signal);
+  this.check();
+  const pcmSamples=overview?.pcmSamples??audio!.length;
+  this.patch(id,{duration:pcmSamples/16000});
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
-  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
-  await this.inspectPcm(id,audio,this.abort!.signal);this.check();
+  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples});
+  if(audio)await this.inspectPcm(id,audio,this.abort!.signal);
+  else this.set({operation:'Большой MP3: проверка PCM каждого окна перед Whisper'});
+  this.check();
+  let stream:Mp3WindowReader|null=null;
+  try{
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
-   const windows=audioWindows(audio.length);
+   const windows=audioWindows(pcmSamples);
+   if(largeMp3)stream=await Mp3WindowReader.open(file,overview!,this.abort!.signal);
    // A corrupted checkpoint must never masquerade as a completed transcript.
    const initial=checkpointProgress(windows,this.job(id).nextWindow);
    if(this.manager.active!==params.model){
@@ -290,6 +304,10 @@ export class JobRunner{
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
+    const windowPcm=stream?await stream.window(window.start,window.end,this.abort!.signal):audio!.slice(window.start,window.end);
+    for(let sample=0;sample<windowPcm.length;sample++){
+     if(!Number.isFinite(windowPcm[sample]))throw new AudioValidationError(index+1,window.start+sample,'invalid-sample');
+    }
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend),percent:checkpointProgress(windows,index).percent});
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
@@ -307,7 +325,7 @@ export class JobRunner{
       try{
        result=await withActivityWatchdog(heartbeat=>{
         this.asrHeartbeat=heartbeat;
-        return this.manager.transcribe(audio.slice(window.start,window.end),false,()=>{},params.language);
+        return this.manager.transcribe(windowPcm,false,()=>{},params.language);
        },{
         timeoutMs:this.asrIdleMs,pollMs:Math.min(1000,Math.max(5,this.asrIdleMs/4)),signal:this.abort!.signal,
         onTimeout:()=>this.manager.cancel()
@@ -349,13 +367,17 @@ export class JobRunner{
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
-  if(params.diarize){
+  if(params.diarize&&largeMp3){
+   // The existing speaker engine needs whole-record PCM; never allocate it
+   // or claim speaker accuracy on a large MP3. ASR checkpoints stay durable.
+   this.patch(id,{stage:'partial',status:'Текст готов. Для MP3 свыше 128 МБ разделение говорящих пока недоступно.',percent:100});
+  }else if(params.diarize){
    this.set({operation:'Разделение говорящих'});
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
    const speakerMeasured=benchmarkNow();
-   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
+   try{turns=await this.manager.diarize(audio!)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
    this.check();
    this.bench(id,b=>addBenchmarkTiming(b,'speakerMs',benchmarkNow()-speakerMeasured));
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
@@ -374,7 +396,8 @@ export class JobRunner{
   await this.persist(id);this.check();
   this.set({operation:'Формирование TXT'});
   // Browser download APIs cannot reliably report a blocked download.
-  try{this.export(id,params.diarize?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'})}catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)})}
+  try{this.export(id,params.diarize&&!largeMp3?'speakers':'plain');this.set({notice:largeMp3?'Большой MP3 распознан потоково. TXT доступен; диаризация больших файлов пока недоступна.':'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'})}catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)})}
+  }finally{stream?.close()}
  }
  cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
  async prepare(model:WhisperId,wasmOnly=false){
