@@ -26,6 +26,9 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | SPEAKER-1 | Mixed valid/malformed/overlapping speaker intervals | Count rejected intervals, union duplicates and avoid over-weighting one speaker | NOT TESTED on PR-28 |
 | SPEAKER-2 | Edge gaps and near speaker ties | Only bounded 80 ms / 250 ms edge recovery; unknown remains unknown | NOT TESTED on PR-28 |
 | SPEAKER-3 | Partial speakers and retry | Redacted reason counts saved; TXT survives; no repeat ASR on retry | NOT TESTED on PR-28 |
+| BENCH-1 | Synthetic 871s + 35 ASR windows | Window times, unique committed 871s, correct RTF and p95 | NOT TESTED on PR-29 |
+| BENCH-2 | Checkpoint timing and resume | Durable cumulative measurements, no duplicated windows after refresh | NOT TESTED on PR-29 |
+| BENCH-3 | Local benchmark JSON export | Numeric measurements with no filename, speech text or exception strings | NOT TESTED on PR-29 |
 | HW-1 | Real Whisper Small, ru, 14:31 MP3 | 35 windows complete; TXT export | NOT TESTED |
 | HW-2 | Reload after two committed windows | Resume without duplicate text | NOT TESTED |
 | HW-3 | Real GPU error and WASM fallback | Bounded retry, truthful backend | NOT TESTED |
