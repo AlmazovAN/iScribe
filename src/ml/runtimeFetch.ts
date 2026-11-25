@@ -39,3 +39,33 @@ export function observedWhisperHttpFetch(original:RuntimeFetch,onRequest:(repo:s
   return original(input,init);
  };
 }
+
+
+// Cache-first only while explicitly offline; when connectivity is available,
+// let Transformers.js handle its own requests and versioned model caching.
+// A failed online request may also fall back to an *exact* cached response.
+// Never fabricate Range/206 replies from whole-file cached weights.
+export function offlineModelFetch(original:RuntimeFetch):RuntimeFetch{
+ return async(input,init)=>{
+  let url:URL;
+  try{url=new URL(String(input))}catch{return original(input,init)}
+  const eligible=url.protocol==='https:'&&url.hostname==='huggingface.co'&&
+    url.pathname.startsWith('/onnx-community/')&&url.pathname.includes('/resolve/');
+  if(!eligible||(init?.method??'GET').toUpperCase()!=='GET'||
+     new Headers(init?.headers).has('Range'))return original(input,init);
+  const cached=async()=>{
+   if(typeof caches==='undefined')return null;
+   try{
+    const hit=await (await caches.open('transformers-cache')).match(url.href);
+    return hit?.ok?hit:null;
+   }catch{return null}
+  };
+  if(typeof navigator!=='undefined'&&navigator.onLine===false){
+   const hit=await cached();
+   if(hit)return hit;
+   throw new Error('Нет сети и в локальном кэше отсутствует файл модели: '+url.pathname.split('/').at(-1));
+  }
+  try{return await original(input,init)}
+  catch(error){return await cached()??Promise.reject(error)}
+ };
+}
