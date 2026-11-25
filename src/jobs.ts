@@ -11,7 +11,7 @@ export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  // Queued work is durable intent, not an interrupted inference. A legacy
  // queued record without an order cannot safely be auto-inserted in a FIFO.
- if(job.stage==='queued'&&Number.isSafeInteger(job.queueOrder)&&job.queueOrder!>0)
+ if(job.stage==='queued'&&typeof job.queueOrder==='number'&&Number.isSafeInteger(job.queueOrder)&&job.queueOrder>0)
   return {...job,status:'В очереди · восстановлено после перезагрузки'};
  if(!isRunning(job.stage)&&job.stage!=='queued')return job;
  const explanation=observedExit
