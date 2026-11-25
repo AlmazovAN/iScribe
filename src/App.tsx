@@ -8,6 +8,7 @@ import {useProtection} from './useProtection';
 import {formatTranscript} from './formatTranscript';
 import type {WhisperId} from './ml/manager';
 import type {JobParams} from './jobs';
+const engineLabels={idle:'Не инициализировано',initializing:'Инициализация',ready:'Готова',transcribing:'Распознавание',recovering:'Восстановление Worker','preloading-speakers':'Загрузка спикеров',diarizing:'Диаризация',cancelled:'Отменено',error:'Ошибка'} as const;
 const models=[{id:'whisper-tiny',name:'Whisper Tiny',tag:'Быстрые заметки',description:'Короткие записи и проверка устройства.'},{id:'whisper-small',name:'Whisper Small',tag:'По умолчанию',description:'Встречи и повседневная работа.'},{id:'whisper-large-v3',name:'Whisper Large v3',tag:'Экспериментальная',description:'Полная модель. Несколько ГБ и высокий расход памяти.'}] as const;
 export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const [runner]=useState(()=>createRunner?createRunner():new JobRunner());
@@ -61,7 +62,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     <div className="file-list">{state.jobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onCancel={openCancel} onRemove={()=>setRemoveId(job.id)} onPreview={()=>setPreviewId(job.id)} onDiagnostics={()=>downloadDiagnostics(job.id)} onInspectAudio={()=>inspectAudio(job.id)} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')} inspectDisabled={state.busy}/>)}</div>
     {!state.jobs.length&&state.ready&&<p className="empty-list">Добавленные записи появятся здесь. До 128 МБ и одного часа на файл.</p>}
    </section>
-   <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ASR: {state.backend} · спикеры: WASM</span></div>
+   <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ML: {engineLabels[state.enginePhase]} · ASR: {state.backend} · спикеры: WASM</span></div>
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}
    {chosen&&<section className="panel result"><div className="panel-heading"><h2>Текст записи</h2><span className="preview-name">{chosen.name}</span></div>{!chosen.asrComplete&&preview&&<p className="note">Промежуточный текст. Распознавание ещё не завершено.</p>}<div className={preview?'transcript':'empty'}>{preview||'Текст появится по мере распознавания.'}</div></section>}
    <p className="privacy">Аудио и результаты сохраняются в этом браузере на вашем устройстве. Перезагрузка остановит вычисления; сохранённую работу можно продолжить. Не очищайте данные сайта до скачивания результатов.</p>
