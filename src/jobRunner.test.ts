@@ -244,7 +244,7 @@ it('checks audio independently without starting Whisper and persists the PCM rep
 });
 
 it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints remain intact',async()=>{
- const {runner,fake,store,decode}=setup();await runner.init();
+ const {runner,fake,store,decode}=setup();
  const file=new File(['source'],'invalid-pcm.wav');
  const original=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
  await store.save({...original,stage:'interrupted',nextWindow:1,segments:[{start:3,end:4,text:'saved'}]},file);
@@ -261,7 +261,7 @@ it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints re
 });
 
 it('standalone PCM inspection does not modify a saved transcript or its checkpoint',async()=>{
- const {runner,fake,store}=setup();await runner.init();
+ const {runner,fake,store}=setup();
  const file=new File(['source'],'checkpoint-inspection.wav');
  const job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
  const savedJob={...job,stage:'interrupted' as const,nextWindow:1,segments:[{start:3,end:4,text:'already saved'}]};
