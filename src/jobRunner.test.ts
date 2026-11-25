@@ -225,3 +225,51 @@ it('commits trace of each ASR window and exposes a redacted downloadable diagnos
  expect(report.job).toMatchObject({asrComplete:true,committedWindows:3});
  expect(JSON.stringify(report)).not.toContain('SECRET');
 });
+
+
+it('checks audio independently without starting Whisper and persists the PCM report',async()=>{
+ const {runner,fake,store,diagnosticDownload}=setup();await runner.init();
+ await runner.add([new File(['audio'],'inspect.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ await runner.inspectAudio(id);
+ expect(fake.prepare).not.toHaveBeenCalled();
+ expect(fake.transcribe).not.toHaveBeenCalled();
+ expect(fake.diarize).not.toHaveBeenCalled();
+ const saved=(await store.list(false)).find(j=>j.id===id)!;
+ expect(saved).toMatchObject({stage:'waiting',nextWindow:0,asrComplete:false,audioCheck:{status:'passed',report:{pcmSamples:960000,windowCount:3,quietWindows:3}}});
+ expect(saved.trace?.some(e=>e.code==='audio-check-pass')).toBe(true);
+ runner.exportDiagnostics(id);
+ const report=diagnosticDownload.mock.calls.at(-1)?.[0];
+ expect(report?.audioCheck?.status).toBe('passed');
+});
+
+it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints remain intact',async()=>{
+ const {runner,fake,store,decode}=setup();await runner.init();
+ const file=new File(['source'],'invalid-pcm.wav');
+ const original=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...original,stage:'interrupted',nextWindow:1,segments:[{start:3,end:4,text:'saved'}]},file);
+ const pcm=new Float32Array(60*16000);pcm[800000]=NaN;
+ decode.mockResolvedValueOnce(pcm);
+ await runner.init();runner.enqueue(original.id);await finished(runner);
+ expect(fake.prepare).not.toHaveBeenCalled();
+ expect(fake.transcribe).not.toHaveBeenCalled();
+ const saved=(await store.list(false)).find(j=>j.id===original.id)!;
+ expect(saved.nextWindow).toBe(1);
+ expect(saved.segments).toHaveLength(1);
+ expect(saved.audioCheck).toMatchObject({status:'failed'});
+ expect(saved.trace?.some(e=>e.code==='audio-check-error')).toBe(true);
+});
+
+it('standalone PCM inspection does not modify a saved transcript or its checkpoint',async()=>{
+ const {runner,fake,store}=setup();await runner.init();
+ const file=new File(['source'],'checkpoint-inspection.wav');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
+ const savedJob={...job,stage:'interrupted' as const,nextWindow:1,segments:[{start:3,end:4,text:'already saved'}]};
+ await store.save(savedJob,file);await runner.init();
+ await runner.inspectAudio(job.id);
+ const after=(await store.list(false)).find(j=>j.id===job.id)!;
+ expect(after.nextWindow).toBe(1);
+ expect(after.stage).toBe('interrupted');
+ expect(after.segments).toEqual(savedJob.segments);
+ expect(fake.transcribe).not.toHaveBeenCalled();
+});
