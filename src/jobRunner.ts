@@ -164,7 +164,7 @@ export class JobRunner{
   this.queue.push(id);
   this.patch(id,{stage:'queued',status:'В очереди',error:undefined,queueOrder:order});
   this.set({queueCount:this.queue.length});
-  this.queueWrites=this.queueWrites.catch(()=>{}).then(()=>this.persist(id));
+  this.queueWrites=this.queueWrites.then(()=>this.persist(id));
   void this.drain();
  }
  resumeQueue(){if(this.state.ready&&!this.state.busy&&this.queue.length)void this.drain()}
