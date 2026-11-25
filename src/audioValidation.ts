@@ -1,4 +1,5 @@
-import {audioWindows,type AudioWindow} from './jobs';
+import {audioWindows} from './jobs';
+import type {AudioWindow} from './recognitionProgress';
 
 export const PCM_SAMPLE_RATE=16000;
 export const MAX_PCM_SAMPLES=3600*PCM_SAMPLE_RATE;
