@@ -109,6 +109,7 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  expect(speakers.text).toContain('[SPEAKER_00]: Окно 1');
  expect(speakers.text).toContain('Окно 35');
  expect(speakers.text.match(/Окно \d+/g)).toHaveLength(35);
+ await row(page).locator('.file-tools > summary').click();
  const benchmark=await downloadText(page,'Бенчмарк JSON');
  const report=JSON.parse(benchmark.text);
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',source:'browser-observed-timings',
@@ -235,4 +236,37 @@ test('speaker gaps remain unlabeled; saved TXT stays downloadable and speaker re
  const final=(await snapshot(page))[0];
  expect(final.diagnostics.unlabeled).toBe(0);
  expect(final.speakerSegments.every(s=>!!s.speaker)).toBe(true);
+});
+
+
+test('compact file controls keep TXT immediately available and reveal advanced tools on demand at desktop and mobile widths',async({page})=>{
+ await loadFixture(page);
+ await add(page,'compact-ui-60s.wav');
+ const file=row(page);
+ await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeDisabled();
+ await expect(file.getByRole('button',{name:'Начать',exact:true})).toBeVisible();
+ await expect(file.getByRole('button',{name:'Проверить аудио'})).toBeHidden();
+ await file.locator('.file-tools > summary').click();
+ await expect(file.getByRole('button',{name:'Проверить аудио'})).toBeVisible();
+ await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeVisible();
+ await file.locator('.file-tools > summary').click();
+ await file.getByRole('button',{name:'Начать',exact:true}).click();
+ await expect(file).toContainText('Текст и спикеры готовы',{timeout:90000});
+ await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
+ await expect(file.locator('.row-details > summary')).toBeVisible();
+ await file.locator('.row-details > summary').click();
+ await expect(file.locator('.row-detail-content')).toBeVisible();
+ await file.locator('.file-tools > summary').click();
+ await expect(file.getByRole('button',{name:'Диагностика JSON'})).toBeVisible();
+ await expect(file.getByRole('button',{name:'Бенчмарк JSON'})).toBeVisible();
+ await page.setViewportSize({width:390,height:844});
+ await expect(file.getByRole('button',{name:'TXT + time',exact:true})).toBeVisible();
+ await expect(file.getByRole('button',{name:'TXT + time + speaker',exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1)).toBe(true);
+ const plain=await downloadText(page,'Скачать TXT');
+ expect(plain.text).toContain('Окно 3');
+ await page.reload();
+ await expect(row(page)).toHaveCount(1);
+ await expect(row(page).getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
+ await expect(row(page).getByRole('button',{name:'Проверить аудио'})).toBeHidden();
 });
