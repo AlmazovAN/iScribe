@@ -3,11 +3,12 @@ import {isRunning,audioWindows} from './jobs';
 import {checkpointLabel,checkpointProgress} from './recognitionProgress';
 export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,onDiagnostics,onInspectAudio,checking=false,inspectDisabled=false}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void;onDiagnostics?:()=>void;onInspectAudio?:()=>void;checking?:boolean;inspectDisabled?:boolean}){
  const queued=job.stage==='queued',running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
- const windows=job.duration&&Number.isFinite(job.duration)&&job.duration>0&&job.duration<=3600?audioWindows(Math.round(job.duration*16000)):[];
+ const duration=job.duration,validDuration=typeof duration==='number'&&Number.isFinite(duration)&&duration>0&&duration<=3600;
+ const windows=validDuration?audioWindows(Math.round(duration*16000)):[];
  const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
  const retry=job.stage==='partial'||job.stage==='error'||job.stage==='interrupted'||job.stage==='cancelled';
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
-  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{job.duration?`${Math.floor(job.duration/60)} мин ${Math.floor(job.duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ</small></div></div>
+  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ</small></div></div>
   <div className="file-state"><span role="status">{job.status}</span>{(running||queued||(!job.asrComplete&&job.nextWindow>0))&&<progress max={100} value={job.stage==='recognizing'||!running?progress?.percent??undefined:job.percent??undefined} aria-label={`Обработка ${job.name}`}/>}<small>{job.params.model.replace('whisper-','Whisper ')} · {job.params.language}{job.asrComplete?' · текст готов':hasText?' · промежуточный текст':''}</small></div>
   <div className="file-actions">
    {(!running&&!queued&&!checking&&(job.stage==='waiting'||retry))&&<button className="start" onClick={onStart}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
