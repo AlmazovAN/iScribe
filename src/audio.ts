@@ -25,7 +25,9 @@ export async function decodeAudio(file: File, signal?: AbortSignal): Promise<Flo
     // Reuse the decoder's mono buffer during resampling, rather than making
     // another full-length Float32Array copy. Mixed stereo has its own buffer.
     const mono=decoded.numberOfChannels===1?decoded.getChannelData(0):mixMono(Array.from({length:decoded.numberOfChannels},(_,i)=>decoded.getChannelData(i)));
-    if(decoded.sampleRate===16000)return decoded.numberOfChannels===1?mono.slice():mono;
+    // AudioBuffer channel data remains owned by the returned Float32Array view,
+    // even after AudioContext.close(). Do not duplicate up to 230 MB of PCM.
+    if(decoded.sampleRate===16000)return mono;
     const offline=new OfflineAudioContext(1,Math.ceil(decoded.duration*16000),16000);
     const buffer=offline.createBuffer(1,mono.length,decoded.sampleRate);buffer.copyToChannel(mono,0);
     const source=offline.createBufferSource();source.buffer=buffer;source.connect(offline.destination);source.start();

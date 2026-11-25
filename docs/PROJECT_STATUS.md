@@ -1,4 +1,4 @@
-# iScribe project status — 2026-11-24
+# iScribe project status — 2026-11-25
 
 ## Verified from GitHub
 
@@ -14,8 +14,8 @@
 - Offline startup after full cache population.
 - Speaker accuracy on the original 97-turn / 300-segment recording (123 unlabeled).
 - Runtime memory peaks and GPU fallback on real hardware.
-- Current CI and real-device test outcomes for this documentation-only PR.
+- New PR-25 CI and hardware-memory acceptance (CI still pending). PR-22, PR-23 and PR-24 passed their respective mock/CI suites; hardware tests remain outstanding.
 
 ## Next stages
 
-PR-22: implementation on stacked PR-22; structured per-window traces, privacy-safe JSON export, and CI runner fix. Real hardware NOT TESTED. PR-23: code implemented on stacked PR-23; standalone decoded-PCM preflight, 35-window integrity, malformed timestamp guards and acceptance tests. CI/hardware validation to follow. PR-24: ML lifecycle (stacked PR-24) — explicit session status, bounded model/speaker idle guards, safe attempt-backend capture for WASM recovery. Real hardware NOT TESTED. PR-25: memory/storage. PR-26: offline readiness. PR-27: queue recovery. PR-28: diarization. PR-29: benchmarking. PR-30: hardware acceptance. PR-31: UI refinement.
+PR-22: implementation on stacked PR-22; structured per-window traces, privacy-safe JSON export, and CI runner fix. Real hardware NOT TESTED. PR-23: code implemented on stacked PR-23; standalone decoded-PCM preflight, 35-window integrity, malformed timestamp guards and acceptance tests. CI/hardware validation to follow. PR-24: ML lifecycle (stacked PR-24) — explicit session status, bounded model/speaker idle guards, safe attempt-backend capture for WASM recovery. Real hardware NOT TESTED. PR-25: chunked IndexedDB v2 persistence and speaker-PCM transferable buffer (stacked PR-25). New tests and CI in progress. Full-audio decode on resume and hardware memory profiling remain unresolved. PR-26: offline readiness. PR-27: queue recovery. PR-28: diarization. PR-29: benchmarking. PR-30: hardware acceptance. PR-31: UI refinement.
