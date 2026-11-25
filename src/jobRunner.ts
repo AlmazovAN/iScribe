@@ -201,6 +201,7 @@ export class JobRunner{
   const audio=await this.decode(file,this.abort!.signal);this.check();this.patch(id,{duration:audio.length/16000});
   this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
   await this.inspectPcm(id,audio,this.abort!.signal);this.check();
+  this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
    const windows=audioWindows(audio.length);
@@ -211,6 +212,7 @@ export class JobRunner{
     const modelStarted=Date.now();const prepared=await this.manager.prepare(params.model);this.check();this.set({backend:prepared.backend});
     this.traceEvent(id,'model-ready','model',{elapsedMs:Date.now()-modelStarted,backend:traceBackend(prepared.backend)});
    }
+   this.set({operation:'Распознавание'});
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
@@ -263,6 +265,7 @@ export class JobRunner{
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
   if(params.diarize){
+   this.set({operation:'Разделение говорящих'});
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
