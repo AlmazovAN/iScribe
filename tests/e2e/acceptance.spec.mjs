@@ -129,8 +129,8 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  await writeFile(testInfo.outputPath('synthetic-benchmark.json'),JSON.stringify({
   ...report,ciFixture:'mocked-Whisper-871s; NOT a real inference benchmark'
  },null,2));
- await page.locator('.hardware-acceptance summary').click();
- await expect(page.locator('.hardware-acceptance')).toContainText('Аппаратная приёмка');
+ await page.locator('.hardware-acceptance:not(.performance-comparison) > summary').click();
+ await expect(page.locator('.hardware-acceptance:not(.performance-comparison)')).toContainText('Аппаратная приёмка');
  const [evidenceDownload]=await Promise.all([
   page.waitForEvent('download'),
   page.getByRole('button',{name:'Скачать протокол наблюдений JSON'}).click()
@@ -256,7 +256,7 @@ test('diagnostics follow runtime status and keep TXT controls on the file row',a
  await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeHidden();
  await panel.locator(':scope > summary').click();
  await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeVisible();
- await expect(panel.locator('.hardware-acceptance summary')).toContainText('Аппаратная приёмка');
+ await expect(panel.locator('.hardware-acceptance:not(.performance-comparison) > summary')).toContainText('Аппаратная приёмка');
  await expect(file.getByRole('button',{name:'Проверить аудио'})).toHaveCount(0);
  await file.getByRole('button',{name:'Начать',exact:true}).click();
  await expect(file).toContainText('Текст и спикеры готовы',{timeout:90000});

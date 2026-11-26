@@ -16,11 +16,11 @@ test('imports independent synthetic baseline/candidate reports, rejects duplicat
  await page.locator('.hardware-acceptance > summary').first().click();
  const panel=page.locator('.performance-comparison');
  await panel.locator(':scope > summary').click();
- const hardware=panel.getByLabel('Hardware JSON',{exact:true}),legacy=panel.getByLabel('Benchmark JSON (старая сборка)',{exact:true});
+ const hardware=panel.locator('input[data-testid="perf-hardware-json"]'),legacy=panel.locator('input[data-testid="perf-benchmark-json"]');
  const add=panel.getByRole('button',{name:'Добавить прогон'});
  async function importRun(group,n,wall){
   const suffix=n.toString(16).padStart(8,'0'),f=reports(group,wall);
-  await panel.getByLabel('Группа',{exact:true}).selectOption(group);
+  await panel.locator('select').filter({has:page.locator('option[value="baseline"]')}).selectOption(group);
   await hardware.setInputFiles(json('iscribe_hardware_evidence_'+suffix+'.json',f.evidence));
   if(group==='baseline')await legacy.setInputFiles(json('iscribe_benchmark_'+suffix+'.json',f.benchmark));
   await add.click();

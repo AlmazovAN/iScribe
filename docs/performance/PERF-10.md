@@ -52,3 +52,6 @@ Use real production bundle and same representative audio. Prioritize T02 (14:31 
 ## Status
 
 Candidate prepared, final CI and source merge not yet recorded in this document; use exact GitHub checks and PR state. Final hardware acceptance NOT TESTED. Public ChatGPT Sites/Pages not deployed.
+
+## Urgent source integration
+Owner requested urgent main integration before final CI confirmation. Previous run 45886909294 passed verify (typecheck/lint/Vitest), but four browser tests failed on ambiguous or exact labels after new controls were introduced. Scoped selectors corrected in this commit; rerun required. Source merge is explicitly not a tested release; do not deploy production or claim hardware acceptance. If GitHub required checks block merge, preserve protections.
