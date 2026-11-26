@@ -8,14 +8,15 @@ import {createJob,isRunning,audioWindows,absoluteSegments,recoverJob,type Job,ty
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow} from './recognitionProgress';
-import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
-import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
+import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery} from './ml/recoveryPolicy';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
 import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 import {browserEvidenceHints,createHardwareEvidence,downloadHardwareEvidence} from './hardwareAcceptance';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading'};
+type StreamSession={audio:StreamedAudio};
 export class JobRunner{
  readonly manager:ModelManager;
  private store:JobStore;
@@ -39,13 +40,15 @@ export class JobRunner{
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
  private readonly asrIdleMs:number;
+ private readonly streamOpenIdleMs:number;
  private readonly streamDecodeIdleMs:number;
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number}={}){
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
   this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
+  this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
   this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;
   this.streamResampleIdleMs=options.streamResampleIdleMs??DEFAULT_STREAM_RESAMPLE_IDLE_MS;
   this.streamPcmIdleMs=options.streamPcmIdleMs??DEFAULT_STREAM_PCM_IDLE_MS;
@@ -319,7 +322,32 @@ export class JobRunner{
  }
  private readAudio(file:File){
   const signal=this.abort!.signal;
-  return usesStreamedAudio(file.size)?this.openStream(file,signal):this.decode(file,signal);
+  return usesStreamedAudio(file.size)?this.openGuardedStream(file,signal):this.decode(file,signal);
+ }
+ // Every decoder opening owns a separate abort signal. A late resolution
+ // after timeout/cancellation is disposed and cannot become the active decoder.
+ private async openGuardedStream(file:File,parent:AbortSignal):Promise<StreamedAudio>{
+  parent.throwIfAborted();
+  const controller=new AbortController();
+  const abort=()=>controller.abort();
+  parent.addEventListener('abort',abort,{once:true});
+  try{
+   const audio=await withActivityWatchdog(async()=>{
+    const opened=await this.openStream(file,controller.signal);
+    if(controller.signal.aborted){opened.close();controller.signal.throwIfAborted()}
+    return opened;
+   },{
+    timeoutMs:this.streamOpenIdleMs,pollMs:Math.min(1000,Math.max(5,this.streamOpenIdleMs/4)),
+    signal:parent,onTimeout:abort,timeoutError:()=>new StreamDecodeStalledError('open')
+   });
+   if(parent.aborted){audio.close();parent.throwIfAborted()}
+   let closed=false;
+   return {...audio,close:()=>{
+    if(closed)return;closed=true;
+    parent.removeEventListener('abort',abort);
+    try{audio.close()}finally{controller.abort()}
+   }};
+  }catch(error){parent.removeEventListener('abort',abort);controller.abort();throw error}
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -335,15 +363,17 @@ export class JobRunner{
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
   const audioStarted=Date.now(),decodeStarted=benchmarkNow();
   const audio=await this.readAudio(file);
-  try{await this.executeAudio(id,audio,audioStarted,decodeStarted)}
-  finally{if(!(audio instanceof Float32Array))audio.close()}
+  const session=audio instanceof Float32Array?undefined:{audio};
+  try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,session)}
+  finally{session?.audio.close()}
  }
- private async readCheckedStreamWindow(id:string,audio:StreamedAudio,window:AudioWindow,index:number,total:number,inspection=false){
-  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,decoderId:audio.decoderId,attempt:1,committedWindows:this.job(id).nextWindow};
+ private async readCheckedStreamWindow(id:string,audio:StreamedAudio,window:AudioWindow,index:number,total:number,inspection=false,attempt=1){
+  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,decoderId:audio.decoderId,attempt,committedWindows:this.job(id).nextWindow};
   const operation=(label:string)=>this.set({operation:(inspection?'Проверка аудио · ':'')+label+' · окно '+(index+1)+'/'+total});
   const signal=this.abort!.signal;
   const decodeStarted=benchmarkNow();
   let streamStage:StreamStage='decode',accepting=true;
+  let pendingTrace:Promise<void>|undefined;
   operation('Декодирование');
   this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage,jsHeapBytes:traceHeapBytes()});
   await this.persist(id);this.check();
@@ -360,7 +390,8 @@ export class JobRunner{
      streamStage='resample';operation('Преобразование в PCM 16 кГц');
     }
     this.traceEvent(id,code,'audio',{...fields,...detail,jsHeapBytes:traceHeapBytes()});
-    await this.persist(id);
+    pendingTrace=this.persist(id);
+    await pendingTrace;
    },heartbeat),{
     timeoutMs:this.streamDecodeIdleMs,
     pollMs:Math.min(1000,Math.max(5,Math.min(this.streamDecodeIdleMs,this.streamResampleIdleMs)/4)),
@@ -368,6 +399,10 @@ export class JobRunner{
     timeoutError:()=>new StreamDecodeStalledError(streamStage)
    });
   }catch(error){
+   accepting=false;
+   // An already-started metadata transaction must settle before another
+   // attempt can write a newer snapshot. Storage failure is not retryable.
+   if(pendingTrace)await pendingTrace;
    this.traceEvent(id,'window-error','audio',{...fields,streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),jsHeapBytes:traceHeapBytes()});
    throw error;
   }finally{accepting=false}
@@ -390,7 +425,47 @@ export class JobRunner{
   this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,pcmSamples:pcm.length});
   return {pcm,report};
  }
- private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number){
+ private async readRecoverableStreamWindow(id:string,session:StreamSession,file:File,window:AudioWindow,index:number,total:number){
+  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow};
+  let attempt=1;
+  for(;;){
+   this.check();
+   try{
+    const result=await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
+    if(attempt>1)this.traceEvent(id,'stream-recovered','audio',{...fields,attempt,decoderId:session.audio.decoderId,recoveryCount:this.job(id).streamRecovery?.totalRecoveries});
+    return result;
+   }catch(error){
+    this.check();
+    const budget=reserveStreamRecovery(error,index+1,this.job(id).streamRecovery);
+    if(!budget){
+     if(error instanceof StreamDecodeStalledError){
+      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error.stage,errorKind:'timeout',recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
+     }
+     throw error;
+    }
+    // Consume the budget durably BEFORE opening another decoder. No retry
+    // can reset it, including a reload/automatic queue restoration.
+    this.patch(id,{streamRecovery:budget,status:'Восстановление декодера · окно '+(index+1)+'/'+total+' · попытка 2/2'});
+    this.set({operation:'Восстановление потокового декодера'});
+    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:attempt+1,decoderId:session.audio.decoderId,recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error)});
+    await this.persist(id);this.check();
+    const length=session.audio.length;
+    session.audio.close();
+    try{
+     session.audio=await this.openGuardedStream(file,this.abort!.signal);
+     this.check();
+     if(session.audio.length!==length)throw new Error('Длительность аудио изменилась при восстановлении. Контрольная точка сохранена.');
+     attempt++;
+     this.traceEvent(id,'stream-reopen-ready','audio',{...fields,attempt,decoderId:session.audio.decoderId,recoveryCount:budget.totalRecoveries});
+     await this.persist(id);this.check();
+    }catch(openError){
+     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt:attempt===1?2:attempt,streamStage:'open',errorKind:traceErrorKind(openError),recoveryCount:budget.totalRecoveries});
+     throw openError;
+    }
+   }
+  }
+ }
+ private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,session?:StreamSession){
   const streamed=!(audio instanceof Float32Array);
   this.check();this.patch(id,{duration:audio.length/16000});
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
@@ -420,8 +495,9 @@ export class JobRunner{
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
-    const pcm=streamed?(await this.readCheckedStreamWindow(id,audio,window,index,windows.length)).pcm:audio.subarray(window.start,window.end);
+    const pcm=streamed?(await this.readRecoverableStreamWindow(id,session!,file,window,index,windows.length)).pcm:audio.subarray(window.start,window.end);
     this.set({operation:'Распознавание'});
+    this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
     let result:TranscriptSegment[]|undefined,successfulAttemptMs=0;
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
