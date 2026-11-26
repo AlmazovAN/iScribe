@@ -18,6 +18,7 @@ import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,
 import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE_MS,candidates,chooseBackend,isBackend,normalizedText,resourceFailure,type BackendCalibration,type CalibrationSample} from './performance/backendPolicy';
 import {observeWasmThreads} from './performance/wasmThreads';
 import {AsrPayloadPool,emptyMemoryObservations,observePayload,shouldReleaseAfterQueue} from './performance/memoryPolicy';
+import {emptyStorageUi,ProgressGate,shouldPersistStreamEvent,type StorageUiObservations} from './performance/storageUiPolicy';
 import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
@@ -52,6 +53,10 @@ export class JobRunner{
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
+ private readonly progressGate=new ProgressGate();
+ // Keep suppressed progress counters off the hot UI path. Flush on normal
+ // durable writes, never trigger another notification for a dropped update.
+ private suppressedProgress=new Map<string,number>();
  private readonly asrIdleMs:number;
  private readonly streamOpenIdleMs:number;
  private readonly streamDecodeIdleMs:number;
@@ -72,23 +77,31 @@ export class JobRunner{
   this.streamRotateWindows=options.streamRotateWindows??DEFAULT_STREAM_ROTATE_WINDOWS;
   if(!Number.isSafeInteger(this.streamRotateWindows)||this.streamRotateWindows<1)throw new Error('Некорректный интервал ротации декодера.');
   this.manager.onLifecycleChange=event=>{
+   this.progressGate.reset();
    this.set({enginePhase:event.phase,backend:event.backend??'Не инициализировано'});
   };
   this.manager.onProgress=(status,percent)=>{
    if(this.cancelled)return;
    const id=this.state.activeId;
-   if(!id){this.set({operation:status});return}
+   if(!id){if(this.progressGate.allow('manual:'+this.state.enginePhase,benchmarkNow()))this.set({operation:status});return}
    // Engine callbacks report progress INSIDE a 30s window. Never replace the
    // persisted whole-recording checkpoint or its percent with this value.
-   if(this.job(id).stage==='recognizing'){this.asrHeartbeat?.();return}
-   this.patch(id,{status,percent:this.job(id).stage==='speakers'?percent:null});
+   const stage=this.job(id).stage;
+   if(stage==='recognizing'){this.asrHeartbeat?.();return}
+   if(!this.progressGate.allow(id+':'+stage,benchmarkNow())){
+    this.suppressedProgress.set(id,(this.suppressedProgress.get(id)??0)+1);return;
+   }
+   this.patch(id,{status,percent:stage==='speakers'?percent:null});
   };
  }
  subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener)}};
  snapshot=()=>this.state;
  setBackendCalibration(enabled:boolean){if(!this.state.busy)this.set({calibrateNext:enabled})}
  setPerformanceMode(mode:PerformanceMode){this.resources.select(mode);this.set({performanceMode:this.resources.selected})}
- private set(patch:Partial<RunnerSnapshot>){this.state={...this.state,...patch};this.listeners.forEach(fn=>fn())}
+ private set(patch:Partial<RunnerSnapshot>){
+  if((Object.keys(patch) as (keyof RunnerSnapshot)[]).every(key=>Object.is(this.state[key],patch[key])))return;
+  this.state={...this.state,...patch};this.listeners.forEach(fn=>fn());
+ }
  private patch(id:string,patch:Partial<Job>){this.set({jobs:this.state.jobs.map(j=>j.id===id?{...j,...patch,updated:Date.now()}:j)})}
  private job(id:string){const job=this.state.jobs.find(j=>j.id===id);if(!job)throw new Error('Задание не найдено.');return job}
  private bench(id:string,update:(previous:JobBenchmark)=>JobBenchmark){
@@ -98,6 +111,14 @@ export class JobRunner{
  private perf(id:string,key:PerfTimingKey,ms:number){
   const b=this.job(id).benchmark;if(!b?.profiler)return;
   this.bench(id,current=>({...current,profiler:addPerfTiming(current.profiler!,key,ms)}));
+ }
+ private storageUi(id:string,key:keyof Omit<StorageUiObservations,'version'>,count=1){
+  if(!this.job(id).benchmark)return;
+  this.bench(id,b=>{const current=b.storageUi??emptyStorageUi();return {...b,storageUi:{...current,[key]:current[key]+count}}});
+ }
+ private flushProgressCounters(id:string){
+  const count=this.suppressedProgress.get(id)??0;this.suppressedProgress.delete(id);
+  if(count)this.storageUi(id,'suppressedProgressUpdates',count);
  }
  private async timedMetadata(id:string){
   const started=benchmarkNow();
@@ -270,12 +291,14 @@ export class JobRunner{
   finally{this.set({ready:true})}
  })()}
  private async persist(id:string){
+  this.flushProgressCounters(id);
   try{const job={...this.job(id)};delete job.volatileSegments;await this.store.save(job);this.committedWindows.set(id,job.nextWindow)}catch(error){this.set({notice:'Не удалось сохранить результат в браузере. Скачайте доступный TXT. '+message(error)});throw new Error('Ошибка локального сохранения. Текст остаётся доступен в этой вкладке.')}
  }
  // Persist the text and nextWindow in ONE transaction, THEN publish progress.
  // If the transaction fails, keep the uncommitted text only in the open tab
  // for immediate export; it is never considered part of the durable checkpoint.
  private async commit(id:string,patch:Partial<Job>,volatileText?:TranscriptSegment[]){
+  this.flushProgressCounters(id);
   const durable:Job={...this.job(id),...patch,updated:Date.now()};
   delete durable.volatileSegments;
   try{await this.store.save(durable)}catch(error){
@@ -415,6 +438,7 @@ export class JobRunner{
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
      }finally{
+      this.suppressedProgress.delete(id);this.progressGate.reset();
       this.manager.resourcePolicy=null;this.queue.shift();this.set({activeId:null,activeResourcePolicy:null,queueCount:this.queue.length});
      }
     }
@@ -525,10 +549,10 @@ export class JobRunner{
   const signal=this.abort!.signal;
   const decodeStarted=benchmarkNow();
   let streamStage:StreamStage='decode',accepting=true;
-  let pendingTrace:Promise<void>|undefined;
+  let pendingTrace:Promise<void>|undefined,lastTraceWrite=benchmarkNow();
   operation('Декодирование');
   this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage,jsHeapBytes:traceHeapBytes()});
-  await this.persist(id);this.check();
+  await this.persist(id);this.check();lastTraceWrite=benchmarkNow();
   let pcm:Float32Array;
   try{
    pcm=await withActivityWatchdog((heartbeat,beginStage)=>audio.read(window,async event=>{
@@ -546,8 +570,9 @@ export class JobRunner{
      if(code==='stream-resample-end')this.perf(id,'streamResample',detail.elapsedMs);
     }
     this.traceEvent(id,code,'audio',{...fields,...detail,jsHeapBytes:traceHeapBytes()});
-    pendingTrace=this.persist(id);
-    await pendingTrace;
+    if(shouldPersistStreamEvent(code,benchmarkNow(),lastTraceWrite,inspection)){
+     pendingTrace=this.persist(id);await pendingTrace;lastTraceWrite=benchmarkNow();
+    }else this.storageUi(id,'deferredMetadataWrites');
    },heartbeat,part!==undefined),{
     timeoutMs:this.streamDecodeIdleMs,
     pollMs:Math.min(1000,Math.max(5,Math.min(this.streamDecodeIdleMs,this.streamResampleIdleMs)/4)),
@@ -886,7 +911,9 @@ export class JobRunner{
     if(streamed){
      this.set({operation:'Сохранение контрольной точки'});
      this.traceEvent(id,'checkpoint-start','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:this.job(id).nextWindow});
-     await this.timedMetadata(id);this.check();
+     // This marker travels in the atomic checkpoint transaction below.
+     // The previous durable in-flight attempt remains available on crash.
+     this.storageUi(id,'deferredMetadataWrites');this.check();
     }
     const checkpointStarted=benchmarkNow();
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);

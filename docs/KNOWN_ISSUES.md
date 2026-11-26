@@ -61,3 +61,5 @@ PERF-04: file-origin standalone remains one WASM thread. Isolated local server u
 PERF-05: prefetch disabled for unknown/low memory hints; reported device memory is not free RAM. Prefetch timing overlaps ASR and native decoder memory is not measured. Existing queued windows may drain after a profile change; failure retires lookahead.
 
 PERF-06: actual engine transport and standalone WASM binary clone remain unchanged. Idle model release may add initialization time on subsequent jobs. Browser/OS memory reclamation is not guaranteed by disposal.
+
+PERF-07: abrupt tab loss can omit deferred noncritical trace events since the last durable transaction; text/checkpoints and retry reservations remain atomic. Whole-transcript immutable append and full visible log rendering on opening remain.
