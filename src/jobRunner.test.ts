@@ -589,3 +589,61 @@ it('rotates standalone audio inspection without invoking Whisper or advancing th
  expect(fake.prepare).not.toHaveBeenCalled();expect(fake.transcribe).not.toHaveBeenCalled();
  await store.remove(job.id);
 });
+
+
+it('probes only window 41 with both strategies without touching ASR or retry budget',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'window-inspection.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ const budget={window:41,windowRecoveries:2,totalRecoveries:3};
+ await store.save({...job,stage:'interrupted',nextWindow:40,segments:[{start:3,end:4,text:'saved'}],streamRecovery:budget},file);
+ const whole=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
+ const split=vi.fn<StreamedAudio['read']>(async(w,_observe,_beat,strict)=>{
+  expect(strict).toBe(true);return new Float32Array(w.end-w.start);
+ });
+ const close1=vi.fn(),close2=vi.fn(),length=3834*16000;
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length,decoderId:1,read:whole,close:close1})
+  .mockResolvedValueOnce({length,decoderId:2,read:split,close:close2});
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream});
+ await runner.init();await runner.inspectWindow(job.id,41,'whole');await runner.inspectWindow(job.id,41,'split');
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'interrupted',nextWindow:40,streamRecovery:budget});
+ expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
+ expect(saved.audioCheck).toBeUndefined();expect(saved.benchmark).toBeUndefined();
+ expect(whole.mock.calls.map(c=>c[0].start)).toEqual([1000*16000]);
+ expect(split.mock.calls.map(c=>c[0].start)).toEqual([1000,1005,1010,1015,1020,1025].map(x=>x*16000));
+ expect(saved.windowInspections).toEqual([
+  expect.objectContaining({window:41,strategy:'whole',status:'passed',startSample:16000000,endSample:16480000,completedParts:1}),
+  expect.objectContaining({window:41,strategy:'split',status:'passed',completedParts:6,report:expect.objectContaining({pcmSamples:480000})})
+ ]);
+ expect(fake.prepare).not.toHaveBeenCalled();expect(fake.transcribe).not.toHaveBeenCalled();
+ expect(close1).toHaveBeenCalledOnce();expect(close2).toHaveBeenCalledOnce();
+ await store.remove(job.id);
+});
+
+it('records a failed split probe and rejects invalid window numbers without advancing ASR',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'window-probe-failure.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'interrupted',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ let calls=0;
+ const read=vi.fn<StreamedAudio['read']>(async w=>{
+  if(++calls===3)return new Promise(()=>{});
+  return new Float32Array(w.end-w.start);
+ });
+ const openStream=vi.fn<typeof openStreamedAudio>(async()=>({length:3834*16000,decoderId:1,read,close:vi.fn()}));
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ await runner.init();
+ await expect(runner.inspectWindow(job.id,0,'whole')).rejects.toThrow();
+ expect(openStream).not.toHaveBeenCalled();
+ await runner.inspectWindow(job.id,41,'split');
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'interrupted',nextWindow:40});
+ expect(saved.windowInspections).toEqual([expect.objectContaining({window:41,status:'failed',strategy:'split',completedParts:2,errorKind:'timeout',failureStage:'decode'})]);
+ expect(saved.streamRecovery).toBeUndefined();expect(fake.transcribe).not.toHaveBeenCalled();
+ await runner.inspectWindow(job.id,155,'whole');
+ expect(read).toHaveBeenCalledTimes(3);
+ expect((await store.get(job.id,false))?.windowInspections).toEqual([expect.objectContaining({window:155,status:'failed',errorKind:'invalid-audio',totalWindows:154})]);
+ await store.remove(job.id);
+});
