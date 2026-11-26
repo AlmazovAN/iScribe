@@ -131,3 +131,6 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-09-U | Validate input, reject incomparable/resumed runs, median and privacy | NOT TESTED |
 | PERF-09-R | Combined hardware/benchmark export with first run context | NOT TESTED |
 | PERF-09-H | T01–T10 real device and external quality/resource observations | NOT TESTED |
+
+## PERF-10 release candidate
+The initial PERF-01–09 NOT TESTED entries above describe status at creation; see exact-head automated run IDs in [PERF-10](performance/PERF-10.md). PERF-01–08 have passed; PERF-09 selectors corrected, rerun required. Final candidate full CI must pass before source integration. Hardware entries remain NOT TESTED. New comparison browser test imports synthetic independent reports, tests median, duplicate protection and redaction. No genuine ML performance claim.

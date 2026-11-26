@@ -52,7 +52,7 @@ No issue above is declared fixed without a reproducible test and observed outcom
 
 PERF-01: browser resource hints and host wall-clock measurements are not CPU/GPU utilization or full process memory; effective WASM threads and transfer time remain unknown. See [PERF-01](performance/PERF-01.md).
 
-PERF-02: browser device memory is a coarse hint, not free memory. Mode pacing is implemented; backend, thread and prefetch optimization remains pending PERF-03–05. The maximum mode does not bypass safeguards.
+PERF-02: browser device memory is a coarse hint, not free memory. Mode pacing, provider calibration, WASM configuration and bounded prefetch are implemented in PERF-02–05; real speed and power effects remain unverified. The maximum mode does not bypass safeguards.
 
 PERF-03: provider-specific dtype remains controlled by the engine; single-fragment exact text agreement is not a quality guarantee. GPU adapter preference and GPU buffer residency have not been implemented. Calibration may need additional model files and should be run on representative speech.
 
@@ -67,3 +67,5 @@ PERF-07: abrupt tab loss can omit deferred noncritical trace events since the la
 PERF-08: streamed diarization remains unavailable. Engine exposes coarse speaker progress, not separate kernel timings; GPU/NN speaker providers and batched embeddings are not enabled. Actual WASM parallelism and diarization accuracy require hardware testing.
 
 PERF-09: legacy baseline exports lack first-run build context; require manual verification. Comparator uses same size/duration and operator confirmation, not audio hash/device attestation. Real hardware and quality tests remain NOT TESTED. Comparison state is tab-local.
+
+PERF-10: real hardware gates T01–T10/HW-1–7 remain NOT TESTED; no production deployment authorized by automatic CI. Independent isolated origin, mandatory old model cache verification, no automatic migration/transfer between origins. Browser/protocol observations are not proof of actual model execution. Integrated source merge is not a hardware-accepted release.

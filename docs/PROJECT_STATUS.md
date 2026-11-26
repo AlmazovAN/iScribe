@@ -69,7 +69,7 @@ Stacked PRs #36–41 plus PR-07 cover the 41/154 stall, stage watchdogs, two dur
 Optional performance profiler in Benchmark JSON and Diagnostics, preserving v1 jobs and checkpoint semantics. See [PERF-01](performance/PERF-01.md). No hardware acceptance or speedup claimed.
 
 ## PERF-02 (candidate; depends on PERF-01)
-Three existing buttons now persist preference and control checkpoint-boundary pacing; targets for future WASM/prefetch are not runtime settings yet. See [PERF-02](performance/PERF-02.md). No hardware speedup or energy savings claimed.
+Three existing buttons now persist preference and control checkpoint-boundary pacing; WASM/prefetch targets are subsequently wired in PERF-04/05. See [PERF-02](performance/PERF-02.md). No hardware speedup or energy savings claimed.
 
 ## PERF-03 (candidate)
 Opt-in local backend comparison and cached selection for medium/max, retaining bounded WASM recovery. See [PERF-03](performance/PERF-03.md). Real hardware results pending.
@@ -91,3 +91,6 @@ Speaker WASM thread policy, indexed alignment and progress-milestone diagnostics
 
 ## PERF-09 (candidate; depends on PERF-08)
 Local comparative benchmark imports, run provenance, combined evidence export and T01–T10 protocol. See [PERF-09](performance/PERF-09.md). Actual hardware results NOT TESTED.
+
+## PERF-10 — integrated candidate
+PERF-01–08 exact-head CI PASS; PERF-09 original CI failed due to ambiguous file/scenario test selectors, corrected in 2ac6983. Final integration CI and actual hardware gate are independent. See [PERF-10](performance/PERF-10.md) for verified run IDs, remaining limits and local commands. Older integration notes above are historical; the final candidate is based on main dfdd1ebcabdae45e3a3ba3c4e003929e3c832785. Do not equate source integration with publication.
