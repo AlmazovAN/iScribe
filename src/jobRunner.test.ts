@@ -357,15 +357,15 @@ it.each(['decode','resample'] as const)('stops a stalled streamed window 41 at %
  expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',phase:'audio',window:41,streamStage:stage,errorKind:'timeout'})]));
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(read).toHaveBeenCalledTimes(2);
- expect(openStream).toHaveBeenCalledTimes(2);
- expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
+ expect(read).toHaveBeenCalledTimes(3);
+ expect(openStream).toHaveBeenCalledTimes(3);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
  expect(close).toHaveBeenCalled();
  // A fresh runner must not reset the persisted retry allowance.
  const resumed=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:100,streamResampleIdleMs:40});
  await resumed.init();resumed.enqueue(job.id);await finished(resumed);
- expect(openStream).toHaveBeenCalledTimes(3);
- expect(read).toHaveBeenCalledTimes(3);
+ expect(openStream).toHaveBeenCalledTimes(4);
+ expect(read).toHaveBeenCalledTimes(4);
  expect((await store.get(job.id,false))?.nextWindow).toBe(40);
  await store.remove(job.id);
 });
@@ -457,5 +457,60 @@ it('does not reopen a decoder after invalid PCM',async()=>{
  expect(openStream).toHaveBeenCalledOnce();
  expect(fake.transcribe).not.toHaveBeenCalled();
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',streamStage:'pcm-check',errorKind:'invalid-audio'})]));
+ await store.remove(job.id);
+});
+
+
+it.each(['success','short-part','stall-part'] as const)('uses split fallback at window 41: %s',async(scenario)=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'stream-split.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const stalled=vi.fn<StreamedAudio['read']>(()=>new Promise(()=>{}));
+ const starts:number[]=[],length=1028*16000;
+ const read=vi.fn<StreamedAudio['read']>(async(window,_observe,_beat,strict)=>{
+  expect(strict).toBe(true);
+  starts.push(window.start);
+  const part=starts.length;
+  if(part===3&&scenario==='stall-part')return new Promise(()=>{});
+  const pcm=new Float32Array(window.end-window.start-(part===3&&scenario==='short-part'?1:0));
+  pcm.fill(part/10);return pcm;
+ });
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length,decoderId:1,read:stalled,close:vi.fn()})
+  .mockResolvedValueOnce({length,decoderId:2,read:stalled,close:vi.fn()})
+  .mockImplementationOnce(async()=>{
+   const durable=(await store.get(job.id,false))!;
+   expect(durable.nextWindow).toBe(40);
+   expect(durable.streamRecovery?.totalRecoveries).toBe(2);
+   return {length,decoderId:3,read,close:vi.fn()};
+  });
+ // Capture the actual PCM given to Whisper; every part must occupy its
+ // original sample range, including the short final fragment.
+ const actual:Float32Array[]=[];
+ fake.transcribe.mockImplementation(async()=>[{start:3,end:4,text:'fallback'}]);
+ const original=fake.transcribe;
+ const manager={...fake,transcribe:vi.fn(async(pcm:Float32Array)=>{actual.push(pcm);return original()})};
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(openStream).toHaveBeenCalledTimes(3);
+ expect(stalled).toHaveBeenCalledTimes(2);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(saved.segments[0].text).toBe('saved');
+ if(scenario==='success'){
+  expect(starts).toEqual([1000,1005,1010,1015,1020,1025].map(x=>x*16000));
+  expect(actual).toHaveLength(1);expect(actual[0]).toHaveLength(28*16000);
+  for(let i=0;i<6;i++)expect(actual[0][i*80000]).toBeCloseTo((i+1)/10);
+  expect(saved).toMatchObject({stage:'done',asrComplete:true,nextWindow:41});
+  expect(saved.segments).toHaveLength(2);
+  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-split-ready',window:41,pcmSamples:448000})]));
+ }else{
+  expect(starts).toHaveLength(3);expect(actual).toHaveLength(0);
+  expect(saved).toMatchObject({stage:'error',nextWindow:40});
+  expect(saved.segments).toHaveLength(1);
+ }
  await store.remove(job.id);
 });
