@@ -72,7 +72,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  <div className="app" hidden={colab==='open'}>
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><div className="local-header-actions"><span className="local"><i/>Обработка на вашем устройстве</span><button ref={colabButton} type="button" onClick={()=>setColab('open')}>Google Drive / Colab</button></div></header>
   <main>
-   <section className="intro"><p className="eyebrow">ИЗ ЗАПИСИ — В ТЕКСТ</p><h1>Слова остаются.<span> Всё лишнее — уходит.</span></h1><p>Добавьте записи. Получайте текст, время и спикеров — по мере готовности.</p></section>
+   <section className="intro"><p className="eyebrow">ИЗ ЗАПИСИ — В ТЕКСТ</p><h1>Лишнее уходит.<span> Нужное остаётся</span></h1><p>Добавьте записи. Получайте текст, время и спикеров — по мере готовности.</p></section>
    <section className="panel model-panel" aria-label="Модели и настройки"><div className="panel-heading"><h2>Модель распознавания</h2><label className="language">Язык <select value={language} onChange={e=>setLanguage(e.target.value as 'ru'|'en')}><option value="ru">Русский</option><option value="en">English</option></select></label></div>
     <div className="models">{models.map(m=><article className={'model '+(selected===m.id?'selected':'')} key={m.id}>
      <label className="model-name"><input type="radio" name="model" checked={selected===m.id} onChange={()=>setSelected(m.id)}/><strong>{m.name}</strong></label><span className="tag">{m.tag}</span><p>{m.description}</p>
