@@ -9,7 +9,7 @@ import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
-import {DEFAULT_ASR_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -38,9 +38,11 @@ export class JobRunner{
  private committedWindows=new Map<string,number>();
  private asrHeartbeat:(()=>void)|null=null;
  private readonly asrIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number}={}){
+ private readonly streamDecodeIdleMs:number;
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamDecodeIdleMs?:number}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
+  this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;
   this.manager.onLifecycleChange=event=>{
    this.set({enginePhase:event.phase,backend:event.backend??'Не инициализировано'});
   };
@@ -360,7 +362,24 @@ export class JobRunner{
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
     const decodeStarted=benchmarkNow();
-    const pcm=streamed?await audio.read(window):audio.subarray(window.start,window.end);
+    // The streaming decoder runs BEFORE ASR's own watchdog. Bound this phase
+     // independently, otherwise a stuck Mediabunny iterator can hang forever.
+     // Resume creates a fresh decoder at the last committed IndexedDB window.
+     let pcm:Float32Array;
+     if(streamed){
+      try{
+       pcm=await withActivityWatchdog(()=>audio.read(window),{
+        timeoutMs:this.streamDecodeIdleMs,
+        pollMs:Math.min(1000,Math.max(5,this.streamDecodeIdleMs/4)),
+        signal:this.abort!.signal,
+        onTimeout:()=>audio.close(),
+        timeoutError:()=>new StreamDecodeStalledError()
+       });
+      }catch(error){
+       this.traceEvent(id,'window-error','audio',{window:index+1,totalWindows:windows.length,errorKind:traceErrorKind(error),committedWindows:this.job(id).nextWindow});
+       throw error;
+      }
+     }else pcm=audio.subarray(window.start,window.end);
     if(streamed){
      this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
      const validationStarted=benchmarkNow();

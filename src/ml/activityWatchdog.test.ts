@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {DEFAULT_ASR_IDLE_MS,MAX_ASR_WINDOW_SAMPLES,WorkerStalledError,withActivityWatchdog} from './activityWatchdog';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,MAX_ASR_WINDOW_SAMPLES,StreamDecodeStalledError,WorkerStalledError,withActivityWatchdog} from './activityWatchdog';
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals()});
 it('allows slow but responsive foreground inference without killing the worker',async()=>{
  vi.useFakeTimers();
@@ -56,4 +56,20 @@ it('honours user cancellation immediately and does not call the timeout handler'
  await assertion;
  await vi.advanceTimersByTimeAsync(100);
  expect(timeout).not.toHaveBeenCalled();
+});
+
+it('stops a stalled streaming decoder with a distinct error and preserves caller checkpoint ownership',async()=>{
+ vi.useFakeTimers();
+ const close=vi.fn();
+ const read=vi.fn(()=>new Promise<Float32Array>(()=>{}));
+ const result=withActivityWatchdog(()=>read(),{
+  timeoutMs:60,pollMs:10,visibility:null,onTimeout:close,
+  timeoutError:()=>new StreamDecodeStalledError()
+ });
+ const assertion=expect(result).rejects.toMatchObject({code:'stream-decode-stalled',name:'StreamDecodeStalledError'});
+ await vi.advanceTimersByTimeAsync(75);
+ await assertion;
+ expect(close).toHaveBeenCalledOnce();
+ expect(read).toHaveBeenCalledOnce();
+ expect(DEFAULT_STREAM_DECODE_IDLE_MS).toBe(120000);
 });

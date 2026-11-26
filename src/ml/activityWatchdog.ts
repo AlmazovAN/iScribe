@@ -2,10 +2,15 @@
 // may freeze legitimate inference, so elapsed wall-clock time is not proof
 // that a worker is stuck. Heartbeats must represent actual model progress.
 export const DEFAULT_ASR_IDLE_MS=5*60*1000;
+export const DEFAULT_STREAM_DECODE_IDLE_MS=2*60*1000;
 export const MAX_ASR_WINDOW_SAMPLES=30*16000;
 export class WorkerStalledError extends Error{
  readonly code='worker-failed';
  constructor(){super('ASR Worker не отвечает слишком долго при активной вкладке. Попытка восстановить текущее окно.');this.name='WorkerStalledError'}
+}
+export class StreamDecodeStalledError extends Error{
+ readonly code='stream-decode-stalled';
+ constructor(){super('Потоковый декодер аудио не отвечает. Сохранённые окна не затронуты; продолжите задание с последней контрольной точки.');this.name='StreamDecodeStalledError'}
 }
 type Visibility=Pick<Document,'visibilityState'|'addEventListener'|'removeEventListener'>;
 export interface WatchdogOptions{
@@ -14,6 +19,7 @@ export interface WatchdogOptions{
  signal?:AbortSignal;
  visibility?:Visibility|null;
  onTimeout:()=>void;
+ timeoutError?:()=>Error;
 }
 export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,options:WatchdogOptions):Promise<T>{
  const timeoutMs=options.timeoutMs??DEFAULT_ASR_IDLE_MS;
@@ -42,7 +48,7 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,op
     // Terminate the old worker BEFORE the caller retries. Any late result
     // from the disposed EngineClient cannot be treated as a checkpoint.
     try{options.onTimeout()}catch{/* Still fail the current attempt. */}
-    settle(new WorkerStalledError());
+    settle(options.timeoutError?.()??new WorkerStalledError());
    }
   };
   const onVisibility=()=>{
