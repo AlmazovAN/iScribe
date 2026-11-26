@@ -49,3 +49,15 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 For earlier *automated* gates, the historical `NOT TESTED on PR-n` text above was the matrix's initial state, not the latest observed result. Source-of-truth CI links for passed PR-22–30 are in [PROJECT_STATUS.md](PROJECT_STATUS.md). Each result validates mocked or synthetic ML behavior and must not be promoted to a hardware PASS.
 
 For each real-device run record commit SHA, OS/browser, GPU/RAM, model/backend, audio length, checkpoint, duration, logs (redacted), outcome and reproducibility. Keep personal audio out of GitHub.
+
+
+## Streaming recovery — PR-07
+| Gate | Expected | Status at PR creation |
+| --- | --- | --- |
+| STR-1 | PR-06 integrated typecheck/lint/Vitest | PASS, 161/161, run 45803738028 |
+| STR-2 | PR-07 exact SHA typecheck/lint/Vitest | Pending CI |
+| STR-3 | Real Chromium WAV window 41 whole/split, durable JSON, no ML | Pending CI |
+| STR-4 | Real 48→16 kHz resampling and split PCM comparison | Pending CI |
+| STR-5 | Standalone/web builds, release preflight, offline browser tests | Pending CI |
+| HW-S1–6 | Real original MP3/Whisper Small and resource measurements | NOT TESTED |
+See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and criteria.
