@@ -718,3 +718,31 @@ it('defers speculative decoder failure until preceding window commits and uses e
  expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
  await store.remove(job.id);
 });
+
+it('coalesces streamed completion metadata but commits every window and preserves trace',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'storage-ui.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(job,file);Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const resources=new ResourceManager(null);
+ vi.spyOn(resources,'policy').mockReturnValue({...resources.policy(),targetPrefetchWindows:0,pauseRatio:0,maxPauseMs:0});
+ const read=vi.fn<StreamedAudio['read']>(async(w,observe)=>{
+  await observe?.({code:'stream-samples',streamStage:'decode',packets:1});
+  await observe?.({code:'stream-read-end',streamStage:'decode',elapsedMs:1});
+  await observe?.({code:'stream-resample-start',streamStage:'resample'});
+  await observe?.({code:'stream-resample-end',streamStage:'resample',elapsedMs:1});
+  return new Float32Array(w.end-w.start);
+ });
+ const runner=new JobRunner({store,resources,manager:fake as unknown as ModelManager,openStream:async()=>({length:60*16000,decoderId:1,read,close:()=>{}})});
+ await runner.init();const writes=vi.spyOn(store,'save');runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{storageUi:{deferredMetadataWrites:12}}});
+ expect(saved.segments).toHaveLength(3);
+ expect(saved.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
+ expect(saved.trace?.filter(e=>e.code==='stream-resample-end')).toHaveLength(3);
+ // A completion event is stored with the next critical stage, not omitted.
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===1&&j.segments.length===1)).toBe(true);
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===2&&j.segments.length===2)).toBe(true);
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===3&&j.segments.length===3)).toBe(true);
+ await store.remove(job.id);
+});

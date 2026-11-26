@@ -1,4 +1,4 @@
-import {useEffect,useRef,useState,useSyncExternalStore} from 'react';
+import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from 'react';
 import './style.css';
 import {ColabWorkspace} from './ColabWorkspace';
 import {WhisperDownloadStatus} from './WhisperDownloadStatus';
@@ -39,15 +39,15 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  useEffect(()=>{if(colab==='closed')colabButton.current?.focus()},[colab]);
  useEffect(()=>{if(cancelOpen)cancelDialog.current?.showModal();else cancelDialog.current?.close()},[cancelOpen]);
  useEffect(()=>{if(removeId)removeDialog.current?.showModal();else removeDialog.current?.close()},[removeId]);
- const params:JobParams={model:selected,language,diarize};
- const largeAllowed=()=>window.confirm('Whisper Large v3 — экспериментальная модель. Несколько ГБ загрузки и высокий расход памяти могут привести к закрытию вкладки. Продолжить?');
- const start=(id:string)=>{
-  const job=state.jobs.find(j=>j.id===id)!;
+ const params=useMemo<JobParams>(()=>({model:selected,language,diarize}),[selected,language,diarize]);
+ const largeAllowed=useCallback(()=>window.confirm('Whisper Large v3 — экспериментальная модель. Несколько ГБ загрузки и высокий расход памяти могут привести к закрытию вкладки. Продолжить?'),[]);
+ const start=useCallback((id:string)=>{
+  const job=runner.snapshot().jobs.find(j=>j.id===id);if(!job)return;
   if((job.stage==='waiting'?selected:job.params.model)==='whisper-large-v3'&&!largeAllowed())return;
   runner.enqueue(id,params);
- };
+ },[runner,params,selected,largeAllowed]);
  const add=(files:FileList|File[])=>{setError('');void runner.add(Array.from(files),params).catch(e=>setError(e instanceof Error?e.message:'Не удалось сохранить аудиозапись.'));if(navigator.storage?.persist)void navigator.storage.persist().catch(()=>false)};
- const download=(id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}};
+ const download=useCallback((id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}},[runner]);
  const downloadDiagnostics=(id:string)=>{try{runner.exportDiagnostics(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadBenchmark=(id:string)=>{try{runner.exportBenchmark(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadHardware=(id:string)=>runner.exportHardwareEvidence(id);
@@ -60,11 +60,12 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const outsideQueue=state.jobs.filter(job=>!queuePositions.has(job.id));
  const orderedJobs=[...queue,...outsideQueue.filter(job=>!job.asrComplete),
   ...outsideQueue.filter(job=>job.asrComplete).sort((a,b)=>a.updated-b.updated)];
- const trash=(id:string)=>{
-  if(state.activeId===id)openCancel();
-  else if(queuePositions.has(id))runner.dequeue(id);
+ const trash=useCallback((id:string)=>{
+  const current=runner.snapshot();
+  if(current.activeId===id){setCancelTarget(id);setCancelOpen(true)}
+  else if(current.jobs.some(j=>j.id===id&&j.queueOrder!==undefined&&j.stage!=='done'))runner.dequeue(id);
   else setRemoveId(id);
- };
+ },[runner]);
  const speakerButton=state.speakerDownload==='pending'?(state.activeId?'После текущей записи':'После текущей операции'):
   state.speakerDownload==='loading'?'Загрузка комплекта…':
   modelState.speakers.ready?'Скачано':'Скачать комплект';
@@ -87,7 +88,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     {state.queueCount>0&&<div className="queue-banner" role="status"><span>Очередь: {state.queueCount} {state.queueCount===1?'задание':'заданий'}{!state.busy?' · восстановлена':''}</span>{!state.busy&&<button className="start" onClick={()=>runner.resumeQueue()}>Продолжить очередь</button>}</div>}
     <div className={'drop '+(drag?'drag':'')} onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);if(state.ready)add(e.dataTransfer.files)}}><span className="audio-icon" aria-hidden="true">≋</span><div><h3>Перетащите аудиофайлы сюда</h3><p>Или выберите файлы на компьютере</p></div><button className="secondary" disabled={!state.ready} onClick={()=>input.current?.click()}>Выбрать файлы</button><input ref={input} type="file" multiple accept="audio/*,.mp3,.wav,.m4a,.ogg,.opus,.webm,.aac,.flac" aria-label="Выбрать аудиозаписи" onChange={e=>{if(e.target.files)add(e.target.files);e.target.value=''}}/></div>
     {!state.ready&&<p role="status">Восстанавливаем сохранённые задания…</p>}
-    <div className="file-list">{orderedJobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onTrash={()=>trash(job.id)} onPreview={()=>setPreviewId(job.id)} queuePosition={queuePositions.get(job.id)} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')}/>)}</div>
+    <div className="file-list">{orderedJobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={start} onExport={download} onTrash={trash} onPreview={setPreviewId} queuePosition={queuePositions.get(job.id)} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')}/>)}</div>
     {!state.jobs.length&&state.ready&&<p className="empty-list">Добавленные записи появятся здесь. До 500 МБ. Свыше 128 МБ — потоковое распознавание без разметки спикеров.</p>}
    </section>
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}

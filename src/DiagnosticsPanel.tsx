@@ -1,4 +1,4 @@
-import {useState,type ReactNode} from 'react';
+import {useMemo,useState,type ReactNode} from 'react';
 import {expectedWindows} from './jobDiagnostics';
 import {formatTime} from './formatTranscript';
 import {benchmarkReport} from './benchmark';
@@ -49,13 +49,14 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
  onHardware:(id:string)=>Promise<void>;children:ReactNode;
 }){
  const [selection,setSelection]=useState<{id:string;value:string}|null>(null);
+ const [logOpen,setLogOpen]=useState(false);
  const total=expectedWindows(job?.duration);
  const defaultWindow=job?Math.max(1,Math.min(job.nextWindow+1,total??Infinity)):1;
  const inputValue=selection?.id===job?.id?selection?.value??String(defaultWindow):String(defaultWindow);
  const windowNumber=Number(inputValue);
  const valid=Number.isSafeInteger(windowNumber)&&Number.isSafeInteger((windowNumber-1)*25*16000)&&windowNumber>=1&&(total===null||windowNumber<=total);
  const blocked=busy||!job||isRunning(job.stage)||job.stage==='queued'||!valid;
- const benchmark=job?.benchmark?.runs?benchmarkReport(job):null;
+ const benchmark=useMemo(()=>job?.benchmark?.runs?benchmarkReport(job):null,[job]);
  const profiler=benchmark?.performanceProfiler;
  const metrics=benchmark?.timingsMs;
  const measuredStages=metrics?Object.entries(metrics).filter(([key,value])=>key!=='jobRuns'&&typeof value==='number'&&value>0).sort((a,b)=>Number(b[1])-Number(a[1])):[];
@@ -111,6 +112,10 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
      <p>Целевые параметры: WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
      <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы, выбор проверенного бэкенда в начале задания и настройка потоков WASM. Предварительная подготовка применяется для потокового аудио в пределах профиля.</p>
     </details>}
+    {benchmark?.storageUiOptimization&&<details aria-label="Storage & UI Optimization"><summary>Storage &amp; UI Optimization</summary>
+     <p>Промежуточных записей объединено со следующими обязательными сохранениями: {benchmark.storageUiOptimization.deferredMetadataWrites} · пропущено частых обновлений прогресса: {benchmark.storageUiOptimization.suppressedProgressUpdates}.</p>
+     <p>Контрольные точки, ошибки и резервирование восстановления не откладываются. Счётчики не являются замером числа перерисовок React или задержки IndexedDB.</p>
+    </details>}
     {benchmark?.memoryOptimization&&<details aria-label="Memory Optimization"><summary>Memory Optimization</summary>
      <p>Новых буферов ASR: {benchmark.memoryOptimization.payloadAllocations} · повторно использовано: {benchmark.memoryOptimization.payloadReuses} · отсоединено при успешной передаче: {benchmark.memoryOptimization.detachedPayloads}.</p>
      <p>Скопировано PCM: {Math.round(benchmark.memoryOptimization.payloadCopyBytes/1000)} кб · наибольший буфер передачи: {Math.round(benchmark.memoryOptimization.peakPayloadBytes/1000)} кб.</p>
@@ -134,9 +139,9 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {job.failure&&<p aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null? ' / '+job.failure.totalWindows:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?' из '+Math.round(job.failure.durationSeconds)+' с':''} · backend: {job.failure.backend??'неизвестен'}{job.failure.observedExit==='pagehide'?' · зафиксирован выход со страницы (не обязательно перезагрузка)':''} · {job.failure.message}</p>}
     {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}
    </div>}
-   <details className="diagnostics-log">
+   <details className="diagnostics-log" onToggle={e=>setLogOpen(e.currentTarget.open)}>
     <summary>Журнал логирования{events.length>0&&<span>{events.length}</span>}</summary>
-    {events.length>0?<ol aria-label="События выбранной записи">
+    {logOpen&&(events.length>0?<ol aria-label="События выбранной записи">
      {[...events].reverse().map((event,index)=>{
       const details=eventDetails(event);
       return <li key={event.at+'-'+index}>
@@ -144,7 +149,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
        <div><strong>{labels[event.code]??event.code}</strong>{details&&<small>{details}</small>}</div>
       </li>;
      })}
-    </ol>:<p>{job?'События появятся после проверки аудио или запуска распознавания.':'Выберите запись, чтобы открыть журнал.'}</p>}
+    </ol>:<p>{job?'События появятся после проверки аудио или запуска распознавания.':'Выберите запись, чтобы открыть журнал.'}</p>)}
     {job&&(events.length>0||job.failure)&&<button type="button" onClick={()=>onLog(job.id)} title="Скачать журнал без аудио, текста и имени записи">Скачать журнал JSON</button>}
    </details>
    <HardwareAcceptancePanel job={job} onExport={onHardware} busy={busy}/>

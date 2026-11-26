@@ -82,3 +82,6 @@ Bounded streamed-audio lookahead integrated with Resource Manager, no parallel d
 
 ## PERF-06 (candidate; depends on PERF-05)
 Direct resampling-buffer mixing, bounded reusable ASR dispatch storage, explicit ASR Worker cleanup and conservative idle release. See [PERF-06](performance/PERF-06.md). Actual RAM savings pending hardware validation.
+
+## PERF-07 (candidate; depends on PERF-06)
+Coalesced intermediate trace writes, immediate atomic checkpoints, stable memoized queue rows, throttled noncritical engine progress and lazy closed log rendering. See [PERF-07](performance/PERF-07.md). Real-device savings pending.

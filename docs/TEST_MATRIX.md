@@ -108,3 +108,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-06-U | Direct mixing/resampling, detached buffer rejection, transfer scope, idle release | NOT TESTED |
 | PERF-06-R | Reuse during ASR and intact checkpoints; existing recovery regression | NOT TESTED |
 | PERF-06-H | Actual peak RAM/VRAM and sample accuracy during long recordings/queue | NOT TESTED |
+
+## PERF-07
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-07-U | Trace flush decision and stage-aware UI progress limiter | NOT TESTED |
+| PERF-07-R | Sequential streaming commits and trace persist after coalescing | NOT TESTED |
+| PERF-07-H | Actual transaction latency, React render cost, RTF on real device | NOT TESTED |
