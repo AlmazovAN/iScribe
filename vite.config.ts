@@ -10,6 +10,8 @@ export default defineConfig(({mode})=>{
  const standalone=mode==='standalone';
  return {
  base:'./',
+ // Separate opt-in loopback origin; do not change production Pages or file://.
+ preview:mode==='isolated'?{headers:{'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'require-corp'}}:undefined,
  publicDir:standalone?false:'public',
  define:{
   __ISCRIBE_BUILD_SHA__:JSON.stringify(revision),

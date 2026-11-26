@@ -33,7 +33,7 @@ export function observeWindowPolicy(previous:ResourceObservations|undefined,poli
 export function observeResourcePause(previous:ResourceObservations,ms:number):ResourceObservations{
  return Number.isFinite(ms)&&ms>=0?{...previous,pauseCount:previous.pauseCount+1,pauseMs:previous.pauseMs+ms}:previous;
 }
-export function resourceReport(value:ResourceObservations|undefined){
+export function resourceReport(value:ResourceObservations|undefined,wasmThreadPolicy=false){
  if(!value)return null;
  const p=value.lastPolicy;
  return {version:1,windowCounts:{eco:value.windowCounts.eco,medium:value.windowCounts.medium,max:value.windowCounts.max},
@@ -41,6 +41,6 @@ export function resourceReport(value:ResourceObservations|undefined){
  lastPolicy:{requested:p.requested,effective:p.effective,targetWasmThreads:p.targetWasmThreads,targetPrefetchWindows:p.targetPrefetchWindows,
  pauseRatio:p.pauseRatio,maxPauseMs:p.maxPauseMs,reasons:p.reasons},
  pauseCount:value.pauseCount,pauseMs:Math.round(value.pauseMs*100)/100,
- applied:{boundaryPacing:true,wasmThreadPolicy:false,prefetchPolicy:false,backendSelectionPolicy:true},
- limitation:'Thread and prefetch targets are planned, not applied. Counts refer to windows admitted to processing, including interrupted windows. Pause time is observed wall time; not measured CPU/GPU utilization.'};
+ applied:{boundaryPacing:true,wasmThreadPolicy,prefetchPolicy:false,backendSelectionPolicy:true},
+ limitation:'WASM thread policy is confirmed only for observed WASM attempts with a Worker configuration message; prefetch remains a planned target. Counts refer to windows admitted to processing, including interrupted windows. Pause time is observed wall time; not measured CPU/GPU utilization.'};
 }

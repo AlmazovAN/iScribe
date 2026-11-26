@@ -9,6 +9,7 @@
     "test": "npm run prepare:engine && vitest run src scripts",
     "build": "npm run prepare:engine && vite build --mode standalone",
     "build:web": "npm run prepare:engine && vite build --outDir dist-web",
+    "serve:isolated": "vite preview --mode isolated --outDir dist-web --host 127.0.0.1 --port 4175 --strictPort",
     "release:check": "node scripts/release-preflight.mjs --standalone",
     "release:check:web": "node scripts/release-preflight.mjs dist-web",
     "prepare:engine": "node scripts/patch-engine.mjs"
