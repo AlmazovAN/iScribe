@@ -6,6 +6,7 @@ import {expectedWindows} from './jobDiagnostics';
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|
  'stream-split-start'|'stream-split-part-ready'|'stream-split-ready'|
  'stream-recovery-start'|'stream-reopen-ready'|'stream-recovered'|'stream-recovery-stop'|
  'stream-read-start'|'stream-samples'|'stream-read-end'|'stream-resample-start'|'stream-resample-end'|'stream-pcm-check-start'|'stream-pcm-check-end'|'checkpoint-start'|
@@ -29,6 +30,9 @@ export type TraceEvent={
  pcmSamples?:number;
  decoderId?:number;
  recoveryCount?:number;
+ decoderWindows?:number;
+ rotationCount?:number;
+ closeReason?:'rotation'|'recovery'|'finish'|'error'|'cancel';
  strategy?:'whole'|'split';
  part?:number;
  totalParts?:number;
