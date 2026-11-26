@@ -36,7 +36,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    throw new Error('Некорректные параметры аудиодорожки.');
   const sink=new AudioSampleSink(track);
 
-  async function read(window:AudioWindow,observe?:StreamReadObserver,onProgress?:()=>void):Promise<Float32Array>{
+  async function read(window:AudioWindow,observe?:StreamReadObserver,onProgress?:()=>void,strictCoverage=false):Promise<Float32Array>{
    if(closed)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
    signal?.throwIfAborted();
    // Decode a little before the boundary to warm up the decoder and resampler.
@@ -54,9 +54,13 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
      if(sample.sampleRate!==rate||!Number.isFinite(sample.timestamp)||sample.numberOfChannels<1)
       throw new Error('Аудиодорожка меняет формат внутри записи.');
      const offset=Math.round((sample.timestamp-startTime)*rate);
-     const first=Math.max(0,-offset);
+     const first=Math.max(0,-offset,strictCoverage?furthestFrame-offset:0);
      const last=Math.min(sample.numberOfFrames,mono.length-offset);
      if(last<=first)continue;
+     // Recovery subwindows must not silently synthesize missing audio.
+     // Allow gaps in decoder warm-up, but reject uncovered requested frames.
+     if(strictCoverage&&offset+first>Math.max(furthestFrame,Math.floor((window.start-start)*rate/PCM_SAMPLE_RATE)))
+      throw new Error('Неполное покрытие аудиоданных в резервном фрагменте.');
      covered=true;
      const plane=new Float32Array(last-first);
      for(let channel=0;channel<sample.numberOfChannels;channel++){
@@ -75,6 +79,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    checkOpen();
    if(observe){await observe({code:'stream-read-end',streamStage:'decode',...stats()});checkOpen();}
    if(!covered)throw new Error('Декодер не вернул данные для текущего окна.');
+   if(strictCoverage&&furthestFrame<mono.length)throw new Error('Резервный фрагмент декодирован не полностью.');
    const outputLength=window.end-start;
    if(rate===PCM_SAMPLE_RATE)return mono.subarray(window.start-start,outputLength);
    const resampleStarted=performance.now();
