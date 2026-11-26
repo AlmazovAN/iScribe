@@ -6,7 +6,7 @@ import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {diagnosticReport} from './jobTrace';
 import type {ModelManager} from './ml/manager';
-import type {StreamedAudio} from './streamedAudio';
+import type {StreamedAudio,openStreamedAudio} from './streamedAudio';
 function setup(){
  const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),diagnosticDownload=vi.fn((_report:ReturnType<typeof diagnosticReport>,_filename:string)=>{void _report;void _filename}),decode=vi.fn(async()=>new Float32Array(60*16000));
@@ -347,7 +347,8 @@ it.each(['decode','resample'] as const)('stops a stalled streamed window 41 at %
   if(stage==='resample')await observe?.({code:'stream-resample-start',streamStage:'resample',sourceSampleRate:44100});
   return new Promise<Float32Array>(()=>{});
  });
- const openStream=vi.fn(async()=>({length:3834*16000,decoderId:1,read,close}));
+ let decoderId=0;
+ const openStream=vi.fn(async()=>({length:3834*16000,decoderId:++decoderId,read,close}));
  const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:100,streamResampleIdleMs:40});
  await runner.init();runner.enqueue(job.id);await finished(runner);
  const saved=(await store.get(job.id,false))!;
@@ -356,7 +357,53 @@ it.each(['decode','resample'] as const)('stops a stalled streamed window 41 at %
  expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',phase:'audio',window:41,streamStage:stage,errorKind:'timeout'})]));
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(read).toHaveBeenCalledTimes(1);
+ expect(read).toHaveBeenCalledTimes(2);
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
  expect(close).toHaveBeenCalled();
+ // A fresh runner must not reset the persisted retry allowance.
+ const resumed=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:100,streamResampleIdleMs:40});
+ await resumed.init();resumed.enqueue(job.id);await finished(resumed);
+ expect(openStream).toHaveBeenCalledTimes(3);
+ expect(read).toHaveBeenCalledTimes(3);
+ expect((await store.get(job.id,false))?.nextWindow).toBe(40);
+ await store.remove(job.id);
+});
+
+
+it('reopens a fresh decoder at window 41 and commits each remaining window exactly once',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'stream-recover.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ let late:(pcm:Float32Array)=>void=()=>{};
+ const oldRead=vi.fn<StreamedAudio['read']>(()=>new Promise(resolve=>{late=resolve}));
+ const newRead=vi.fn<StreamedAudio['read']>(async window=>new Float32Array(window.end-window.start));
+ const oldClose=vi.fn(),newClose=vi.fn(),length=1055*16000;
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length,decoderId:1,read:oldRead,close:oldClose})
+  .mockImplementationOnce(async()=>{
+   const durable=(await store.get(job.id,false))!;
+   expect(durable.nextWindow).toBe(40);
+   expect(durable.streamRecovery?.totalRecoveries).toBe(1);
+   expect(oldClose).toHaveBeenCalledOnce();
+   return {length,decoderId:2,read:newRead,close:newClose};
+  });
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ late(new Float32Array(480000));
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',asrComplete:true,nextWindow:42});
+ expect(saved.segments).toHaveLength(3);
+ expect(saved.segments[0].text).toBe('saved');
+ expect(oldRead.mock.calls[0][0].start).toBe(1000*16000);
+ expect(newRead.mock.calls.map(c=>c[0].start)).toEqual([1000*16000,1025*16000]);
+ expect(fake.transcribe).toHaveBeenCalledTimes(2);
+ expect(fake.prepare).toHaveBeenCalledTimes(1);
+ expect(fake.recover).not.toHaveBeenCalled();
+ expect(newClose).toHaveBeenCalledOnce();
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovered',window:41,decoderId:2,attempt:2})]));
  await store.remove(job.id);
 });
