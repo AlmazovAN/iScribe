@@ -2,10 +2,11 @@ import {ADTS,AudioSampleSink,BlobSource,FLAC,Input,MP3,MP4,OGG,QTFF,WAVE,WEBM} f
 import {inspectDecodedPcm,PCM_SAMPLE_RATE,type AudioInspectionReport} from './audioValidation';
 import {audioWindows} from './jobs';
 import type {AudioWindow} from './recognitionProgress';
+import {openRecoverableStream} from './ml/streamRecovery';
 
 const formats=[MP3,WAVE,MP4,QTFF,OGG,WEBM,ADTS,FLAC];
 
-export async function openStreamedAudio(file:File,signal?:AbortSignal){
+async function openRawStreamedAudio(file:File,signal:AbortSignal){
  signal?.throwIfAborted();
  const input=new Input({source:new BlobSource(file),formats});
  let closed=false;
@@ -68,6 +69,10 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
   }
   return {length,read,close};
  }catch(error){close();throw error}
+}
+
+export function openStreamedAudio(file:File,signal:AbortSignal=new AbortController().signal,timeoutMs?:number){
+ return openRecoverableStream<AudioWindow>(decoderSignal=>openRawStreamedAudio(file,decoderSignal),signal,timeoutMs);
 }
 
 export type StreamedAudio=Awaited<ReturnType<typeof openStreamedAudio>>;
