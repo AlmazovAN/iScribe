@@ -1,5 +1,6 @@
+import {StreamDecodeStalledError} from './activityWatchdog';
 import {expect,it} from 'vitest';
-import {MAX_ASR_WINDOW_ATTEMPTS,isRetryableAsrError,shouldRetryAsrWindow,preferWasmAfterFailure} from './recoveryPolicy';
+import {MAX_ASR_WINDOW_ATTEMPTS,MAX_STREAM_JOB_RECOVERIES,reserveStreamRecovery,isRetryableAsrError,shouldRetryAsrWindow,preferWasmAfterFailure} from './recoveryPolicy';
 it('bounds inference restarts to two retries per window',()=>{
  const fault={code:'worker-failed',message:'worker crashed'};
  expect(MAX_ASR_WINDOW_ATTEMPTS).toBe(3);
@@ -28,4 +29,22 @@ it('retries known failed Worker/inference errors and prefers WASM over GPU',()=>
  expect(preferWasmAfterFailure('webnn')).toBe(true);
  expect(preferWasmAfterFailure('wasm')).toBe(true);
  expect(preferWasmAfterFailure('Не инициализировано')).toBe(false);
+});
+
+
+it('allows two different recoveries per window and five total per job',()=>{
+ const fault=new StreamDecodeStalledError();
+ let state=reserveStreamRecovery(fault,41);
+ expect(state).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
+ state=reserveStreamRecovery(fault,41,state!);
+ expect(state).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(reserveStreamRecovery(fault,41,state!)).toBeNull();
+ for(let window=42;window<=44;window++)state=reserveStreamRecovery(fault,window,state!);
+ expect(state?.totalRecoveries).toBe(MAX_STREAM_JOB_RECOVERIES);
+ expect(reserveStreamRecovery(fault,45,state!)).toBeNull();
+});
+it('never retries opening, PCM, cancellation, storage or arbitrary errors',()=>{
+ for(const error of [new StreamDecodeStalledError('open'),new StreamDecodeStalledError('pcm-check'),new Error('storage'),new Error('decode'),new DOMException('aborted','AbortError')])
+  expect(reserveStreamRecovery(error,41)).toBeNull();
+ expect(reserveStreamRecovery(new StreamDecodeStalledError('resample'),41)).not.toBeNull();
 });

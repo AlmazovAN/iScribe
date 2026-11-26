@@ -1,5 +1,5 @@
 import {afterEach,expect,it,vi} from 'vitest';
-import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,MAX_ASR_WINDOW_SAMPLES,StreamDecodeStalledError,WorkerStalledError,withActivityWatchdog} from './activityWatchdog';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,MAX_ASR_WINDOW_SAMPLES,StreamDecodeStalledError,WorkerStalledError,withActivityWatchdog} from './activityWatchdog';
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals()});
 it('allows slow but responsive foreground inference without killing the worker',async()=>{
  vi.useFakeTimers();
@@ -72,4 +72,37 @@ it('stops a stalled streaming decoder with a distinct error and preserves caller
  expect(close).toHaveBeenCalledOnce();
  expect(read).toHaveBeenCalledOnce();
  expect(DEFAULT_STREAM_DECODE_IDLE_MS).toBe(120000);
+});
+
+
+it('starts a new independent inactivity budget at the resample boundary',async()=>{
+ vi.useFakeTimers();
+ let heartbeat=()=>{},beginStage=(_ms:number)=>{void _ms};
+ let stage:'decode'|'resample'='decode';
+ const close=vi.fn();
+ const result=withActivityWatchdog<void>((beat,begin)=>{heartbeat=beat;beginStage=begin;return new Promise(()=>{})},{
+  timeoutMs:100,pollMs:5,visibility:null,onTimeout:close,timeoutError:()=>new StreamDecodeStalledError(stage)
+ });
+ const assertion=expect(result).rejects.toMatchObject({name:'StreamDecodeStalledError',stage:'resample'});
+ for(let i=0;i<4;i++){await vi.advanceTimersByTimeAsync(80);heartbeat()}
+ await vi.advanceTimersByTimeAsync(75);
+ expect(close).not.toHaveBeenCalled();
+ beginStage(40);stage='resample';
+ await vi.advanceTimersByTimeAsync(35);expect(close).not.toHaveBeenCalled();
+ await vi.advanceTimersByTimeAsync(10);await assertion;
+ expect(close).toHaveBeenCalledOnce();
+ expect(DEFAULT_STREAM_RESAMPLE_IDLE_MS).toBe(120000);
+ expect(DEFAULT_STREAM_PCM_IDLE_MS).toBe(30000);
+});
+it('ignores late stage transitions, heartbeats and results after a PCM timeout',async()=>{
+ vi.useFakeTimers();
+ let beat=()=>{},begin=(_ms:number)=>{void _ms},done=(_v:number)=>{void _v};
+ const close=vi.fn();
+ const result=withActivityWatchdog<number>((h,b)=>{beat=h;begin=b;return new Promise(resolve=>{done=resolve})},{
+  timeoutMs:30,pollMs:5,visibility:null,onTimeout:close,timeoutError:()=>new StreamDecodeStalledError('pcm-check')
+ });
+ const assertion=expect(result).rejects.toMatchObject({stage:'pcm-check'});
+ await vi.advanceTimersByTimeAsync(35);await assertion;
+ beat();begin(500);done(42);await vi.advanceTimersByTimeAsync(500);
+ expect(close).toHaveBeenCalledOnce();
 });

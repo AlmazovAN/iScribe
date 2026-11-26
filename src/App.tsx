@@ -10,7 +10,7 @@ import {useModels} from './useModels';
 import {useProtection} from './useProtection';
 import {formatTranscript} from './formatTranscript';
 import type {WhisperId} from './ml/manager';
-import type {JobParams} from './jobs';
+import type {JobParams,WindowInspectionStrategy} from './jobs';
 declare const __ISCRIBE_BUILD_SHA__:string;
 const buildRevision=typeof __ISCRIBE_BUILD_SHA__==='string'&&__ISCRIBE_BUILD_SHA__!=='unavailable'?__ISCRIBE_BUILD_SHA__.slice(0,7):'недоступен';
 const engineLabels={idle:'Не инициализировано',initializing:'Инициализация',ready:'Готова',transcribing:'Распознавание',recovering:'Восстановление Worker','preloading-speakers':'Загрузка спикеров',diarizing:'Диаризация',cancelled:'Отменено',error:'Ошибка'} as const;
@@ -51,6 +51,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const downloadBenchmark=(id:string)=>{try{runner.exportBenchmark(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
  const downloadHardware=(id:string)=>runner.exportHardwareEvidence(id);
  const inspectAudio=(id:string)=>{setError('');void runner.inspectAudio(id).catch(e=>setError(e instanceof Error?e.message:String(e)))};
+ const inspectWindow=(id:string,window:number,strategy:WindowInspectionStrategy)=>{setError('');void runner.inspectWindow(id,window,strategy).catch(e=>setError(e instanceof Error?e.message:String(e)))};
  const chosen=state.jobs.find(j=>j.id===previewId)??state.jobs.find(j=>j.id===state.activeId)??state.jobs.at(-1);
  const queue=state.jobs.filter(job=>job.queueOrder!==undefined&&job.stage!=='done')
   .sort((a,b)=>a.queueOrder!-b.queueOrder!||a.id.localeCompare(b.id));
@@ -93,7 +94,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}
    <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ML: {engineLabels[state.enginePhase]} · ASR: {state.backend} · спикеры: WASM</span></div>
    <DiagnosticsPanel job={chosen} jobs={state.jobs} busy={state.busy} checking={chosen?.id===state.activeId&&state.operation.startsWith('Проверка аудио')}
-    onSelect={setPreviewId} onInspect={inspectAudio} onLog={downloadDiagnostics} onBenchmark={downloadBenchmark} onHardware={downloadHardware}>
+    onSelect={setPreviewId} onInspect={inspectAudio} onInspectWindow={inspectWindow} onLog={downloadDiagnostics} onBenchmark={downloadBenchmark} onHardware={downloadHardware}>
     <OfflineReadinessPanel model={selected} diarize={diarize} busy={state.busy} onPrepareWasm={()=>void runner.prepare(selected,true)}/>
    </DiagnosticsPanel>
    <p className="privacy">Аудио и результаты сохраняются в этом браузере на вашем устройстве. Перезагрузка остановит вычисления; сохранённую работу можно продолжить. Не очищайте данные сайта до скачивания результатов.</p>

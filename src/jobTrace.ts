@@ -6,11 +6,17 @@ import {expectedWindows} from './jobDiagnostics';
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
+ 'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
+ 'stream-split-start'|'stream-split-part-ready'|'stream-split-ready'|
+ 'stream-recovery-start'|'stream-reopen-ready'|'stream-recovered'|'stream-recovery-stop'|
+ 'stream-read-start'|'stream-samples'|'stream-read-end'|'stream-resample-start'|'stream-resample-end'|'stream-pcm-check-start'|'stream-pcm-check-end'|'checkpoint-start'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-alignment'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
 export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
+export type StreamStage='open'|'decode'|'resample'|'pcm-check';
 export type TraceEvent={
  at:number;
  phase:TracePhase;
@@ -23,6 +29,19 @@ export type TraceEvent={
  startSample?:number;
  endSample?:number;
  pcmSamples?:number;
+ decoderId?:number;
+ recoveryCount?:number;
+ decoderWindows?:number;
+ rotationCount?:number;
+ closeReason?:'rotation'|'recovery'|'finish'|'error'|'cancel';
+ strategy?:'whole'|'split';
+ part?:number;
+ totalParts?:number;
+ streamStage?:StreamStage;
+ packets?:number;
+ decodedFrames?:number;
+ sourceSampleRate?:number;
+ jsHeapBytes?:number;
  committedWindows?:number;
  segmentCount?:number;
  unlabeled?:number;
@@ -31,9 +50,13 @@ export type TraceEvent={
  boundaryMatches?:number;
  errorKind?:TraceErrorKind;
 };
-export const MAX_TRACE_EVENTS=256;
+export const MAX_TRACE_EVENTS=4096;
 export function appendTrace(events:readonly TraceEvent[]|undefined,event:TraceEvent):TraceEvent[]{
  return [...(events??[]),event].slice(-MAX_TRACE_EVENTS);
+}
+export function traceHeapBytes():number|undefined{
+ const bytes=(typeof performance==='undefined'?undefined:(performance as Performance&{memory?:{usedJSHeapSize?:number}}).memory?.usedJSHeapSize);
+ return typeof bytes==='number'&&Number.isFinite(bytes)&&bytes>0?bytes:undefined;
 }
 export function traceBackend(raw:unknown):TraceBackend{
  return raw==='webgpu'||raw==='webnn'||raw==='wasm'?raw:'unknown';
@@ -78,8 +101,10 @@ export function diagnosticReport(job:Job){
    asrComplete:job.asrComplete,
    backend:traceBackend(job.backend)
   },
+  streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck??null,
+  windowInspections:(job.windowInspections??[]).map(r=>({window:r.window,strategy:r.strategy,status:r.status,checkedAt:r.checkedAt,elapsedMs:r.elapsedMs,startSample:r.startSample,endSample:r.endSample,totalWindows:r.totalWindows,completedParts:r.completedParts,errorKind:r.errorKind,failureStage:r.failureStage,report:r.report?{pcmSamples:r.report.pcmSamples,durationSeconds:r.report.durationSeconds,windowCount:r.report.windowCount,quietWindows:r.report.quietWindows,nearClippedWindows:r.report.nearClippedWindows,peakAbsolute:r.report.peakAbsolute}:undefined})),
   speakerAlignment:job.diagnostics?{
    turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,
    invalidTurns:job.diagnostics.invalidTurns??null,mergedTurns:job.diagnostics.mergedTurns??null,

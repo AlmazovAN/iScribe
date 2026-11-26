@@ -1,11 +1,18 @@
-import type {ReactNode} from 'react';
+import {useState,type ReactNode} from 'react';
+import {expectedWindows} from './jobDiagnostics';
+import {formatTime} from './formatTranscript';
 import {benchmarkReport} from './benchmark';
 import {HardwareAcceptancePanel} from './HardwareAcceptancePanel';
-import type {Job} from './jobs';
+import type {Job,WindowInspectionStrategy} from './jobs';
 import {isRunning} from './jobs';
 import type {TraceCode,TraceErrorKind,TraceEvent} from './jobTrace';
 
 const labels: Record<TraceCode,string>={
+ 'window-inspection-start':'Проверка отдельного окна начата','window-inspection-pass':'Окно проверено','window-inspection-error':'Ошибка проверки окна','window-inspection-cancelled':'Проверка окна отменена',
+ 'stream-rotation-start':'Плановая ротация декодера','stream-rotation-ready':'Новый декодер готов','stream-rotation-error':'Ошибка ротации','stream-session-closed':'Сессия декодера закрыта','stream-session-close-error':'Ошибка закрытия декодера',
+ 'stream-split-start':'Резервное чтение частями','stream-split-part-ready':'Фрагмент готов','stream-split-ready':'PCM собран',
+ 'stream-recovery-start':'Восстановление декодера','stream-reopen-ready':'Декодер открыт','stream-recovered':'Декодирование восстановлено','stream-recovery-stop':'Восстановление прекращено',
+ 'stream-read-start':'Чтение окна','stream-samples':'Получены аудиоданные','stream-read-end':'Чтение завершено','stream-resample-start':'Ресэмплинг начат','stream-resample-end':'Ресэмплинг завершён','stream-pcm-check-start':'Проверка PCM начата','stream-pcm-check-end':'PCM проверен','checkpoint-start':'Запись контрольной точки',
  'job-start':'Обработка начата','audio-start':'Подготовка аудио','audio-ready':'Аудио подготовлено',
  'audio-check-start':'Проверка PCM начата','audio-check-pass':'PCM проверен','audio-check-error':'Ошибка проверки аудио',
  'model-start':'Подготовка модели','model-ready':'Модель готова',
@@ -25,17 +32,28 @@ function eventDetails(event:TraceEvent){
  return [
   event.window===undefined?null:'окно '+event.window+(event.totalWindows?'/'+event.totalWindows:''),
   event.attempt===undefined?null:'попытка '+event.attempt,
+  event.decoderId===undefined?null:'декодер '+event.decoderId,
+  event.strategy==='split'?'частями':event.strategy==='whole'?'целиком':null,
+  event.part===undefined?null:'часть '+event.part+'/'+event.totalParts,
+  event.streamStage??null,
   event.backend==='unknown'?null:event.backend?.toUpperCase(),
   event.elapsedMs===undefined?null:event.elapsedMs+' мс',
   event.errorKind&&errors[event.errorKind]
  ].filter(Boolean).join(' · ');
 }
 
-export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onLog,onBenchmark,onHardware,children}:{
+export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onInspectWindow,onLog,onBenchmark,onHardware,children}:{
  job:Job|undefined;jobs:Job[];busy:boolean;checking:boolean;
- onSelect:(id:string)=>void;onInspect:(id:string)=>void;onLog:(id:string)=>void;onBenchmark:(id:string)=>void;
+ onSelect:(id:string)=>void;onInspect:(id:string)=>void;onInspectWindow?:(id:string,window:number,strategy:WindowInspectionStrategy)=>void;onLog:(id:string)=>void;onBenchmark:(id:string)=>void;
  onHardware:(id:string)=>Promise<void>;children:ReactNode;
 }){
+ const [selection,setSelection]=useState<{id:string;value:string}|null>(null);
+ const total=expectedWindows(job?.duration);
+ const defaultWindow=job?Math.max(1,Math.min(job.nextWindow+1,total??Infinity)):1;
+ const inputValue=selection?.id===job?.id?selection?.value??String(defaultWindow):String(defaultWindow);
+ const windowNumber=Number(inputValue);
+ const valid=Number.isSafeInteger(windowNumber)&&Number.isSafeInteger((windowNumber-1)*25*16000)&&windowNumber>=1&&(total===null||windowNumber<=total);
+ const blocked=busy||!job||isRunning(job.stage)||job.stage==='queued'||!valid;
  const benchmark=job?.benchmark?.committedWindows?benchmarkReport(job):null;
  const events=job?.trace??[];
 
@@ -51,6 +69,23 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onLo
      {!!job.benchmark?.runs&&<button type="button" onClick={()=>onBenchmark(job.id)}>Бенчмарк JSON</button>}
     </div>
    </div>}
+   {job&&onInspectWindow&&<section className="diagnostics-record" aria-label="Проверка отдельного окна">
+    <strong>Проверка отдельного окна без Whisper</strong>
+    <label>Номер окна <input type="number" min={1} max={total??undefined} step={1} value={inputValue} disabled={busy} onChange={e=>setSelection({id:job.id,value:e.target.value})}/>{total!==null&&<span> из {total}</span>}</label>
+    {valid&&<p>Номинальный интервал: {formatTime((windowNumber-1)*25)} – {formatTime(Math.min((windowNumber-1)*25+30,total===null?Infinity:job.duration!))}</p>}
+    <div className="diagnostics-actions">
+     <button type="button" disabled={blocked} onClick={()=>onInspectWindow(job.id,windowNumber,'whole')}>Проверить целиком</button>
+     <button type="button" disabled={blocked} onClick={()=>onInspectWindow(job.id,windowNumber,'split')}>Проверить частями по 5 с</button>
+    </div>
+    <p>Используется новый потоковый декодер. Сохранённый текст и лимит восстановления не изменяются.</p>
+    {(job.windowInspections??[]).map(r=><p key={r.window+'-'+r.strategy} role={r.status==='failed'?'alert':undefined}>
+     Окно {r.window} · {r.strategy==='whole'?'целиком':'частями'} · {r.status==='passed'?'пройдено':r.status==='cancelled'?'отменено':'не пройдено'} · {(r.elapsedMs/1000).toFixed(1)} с
+     {r.startSample!==undefined&&r.endSample!==undefined&&<> · {formatTime(r.startSample/16000)}–{formatTime(r.endSample/16000)}</>}
+     {r.report&&<> · PCM {r.report.pcmSamples} отсчётов · пик {r.report.peakAbsolute.toFixed(3)} · {r.report.quietWindows?'тихое окно':'не тихое окно'}{r.report.nearClippedWindows?' · высокий пиковый уровень':''}</>}
+     {r.strategy==='split'&&<> · частей готово: {r.completedParts}</>}
+     {r.failureStage&&<> · стадия: {r.failureStage}</>}{r.errorKind&&<> · {errors[r.errorKind]}</>}
+    </p>)}
+   </section>}
    {job&&<div className="diagnostics-metrics">
     {job.audioCheck?.status==='passed'&&<p>PCM проверен: {job.audioCheck.report.windowCount} окон · {job.audioCheck.report.quietWindows} тихих · {job.audioCheck.report.nearClippedWindows} с пиковыми уровнями · пик {job.audioCheck.report.peakAbsolute.toFixed(3)}</p>}
     {job.audioCheck?.status==='failed'&&<p role="alert">Проверка аудио: {job.audioCheck.problem}</p>}
