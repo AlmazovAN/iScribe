@@ -2,6 +2,7 @@ import {useState,type ReactNode} from 'react';
 import {expectedWindows} from './jobDiagnostics';
 import {formatTime} from './formatTranscript';
 import {benchmarkReport} from './benchmark';
+import {performanceLabels} from './performance/profiles';
 import {HardwareAcceptancePanel} from './HardwareAcceptancePanel';
 import type {Job,WindowInspectionStrategy} from './jobs';
 import {isRunning} from './jobs';
@@ -103,6 +104,12 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
      <p>RTF измеренных запусков: {benchmark?.measuredRunRtf??'—'} · наибольшая из измеренных стадий: {measuredStages.length?stageNames[measuredStages[0][0]]:'недоступно'}</p>
      {Object.entries(profiler.timingsMs).map(([key,timing])=><p key={key}>{timingLabels[key]}: {timing?timing.totalMs+' мс ('+timing.count+' изм.)':'недоступно'}</p>)}
      <p>Интервалы могут перекрываться. Загрузка CPU/GPU, полная RAM/VRAM, время передачи в Worker и фактическое число потоков недоступны; измеряются внешними средствами. Наличие API не подтверждает работоспособность модели.</p>
+    </details>}
+    {benchmark?.resourceManagement&&<details aria-label="Resource Manager"><summary>Resource Manager</summary>
+     <p>Запрошено: {performanceLabels[benchmark.resourceManagement.lastPolicy.requested]} · применено: {performanceLabels[benchmark.resourceManagement.lastPolicy.effective]}</p>
+     <p>Окон допущено: экономичная {benchmark.resourceManagement.windowCounts.eco}, средняя {benchmark.resourceManagement.windowCounts.medium}, максимальная {benchmark.resourceManagement.windowCounts.max}. Паузы: {benchmark.resourceManagement.pauseCount} · {benchmark.resourceManagement.pauseMs} мс.</p>
+     <p>Целевые параметры (пока не применяются): WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
+     <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Фактически действует только планирование пауз между окнами; бэкенд, потоки и буфер будут подключены в PERF-03–05.</p>
     </details>}
     {job.failure&&<p aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null? ' / '+job.failure.totalWindows:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?' из '+Math.round(job.failure.durationSeconds)+' с':''} · backend: {job.failure.backend??'неизвестен'}{job.failure.observedExit==='pagehide'?' · зафиксирован выход со страницы (не обязательно перезагрузка)':''} · {job.failure.message}</p>}
     {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}

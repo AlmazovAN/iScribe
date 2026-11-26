@@ -1,6 +1,7 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {postSpeakerAudio} from './workerTransfer';
+import type {ResourcePolicy} from '../performance/types';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
@@ -42,6 +43,9 @@ export class ModelManager{
  private preparingId:WhisperId|null=null;
  // Observed initialization preference, not the actual execution provider.
  requestedBackend:'auto'|'wasm'|'unknown'='unknown';
+ // Current window policy for later PERF-03/04 integration. Do not configure
+ // backend or WASM threads until those stages verify runtime support.
+ resourcePolicy:ResourcePolicy|null=null;
  active:WhisperId|null=null;
  capabilities:CapabilityReport|null=null;
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};

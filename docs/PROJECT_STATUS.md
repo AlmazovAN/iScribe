@@ -67,3 +67,6 @@ Stacked PRs #36–41 plus PR-07 cover the 41/154 stall, stage watchdogs, two dur
 
 ## PERF-01 (candidate)
 Optional performance profiler in Benchmark JSON and Diagnostics, preserving v1 jobs and checkpoint semantics. See [PERF-01](performance/PERF-01.md). No hardware acceptance or speedup claimed.
+
+## PERF-02 (candidate; depends on PERF-01)
+Three existing buttons now persist preference and control checkpoint-boundary pacing; targets for future WASM/prefetch are not runtime settings yet. See [PERF-02](performance/PERF-02.md). No hardware speedup or energy savings claimed.

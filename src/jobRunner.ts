@@ -15,14 +15,19 @@ import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
 import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 import {addPerfTiming,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
+import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
+import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
+import type {PerformanceMode,ResourcePolicy} from './performance/types';
 import {browserEvidenceHints,createHardwareEvidence,downloadHardwareEvidence} from './hardwareAcceptance';
-export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading'};
+export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
 type StreamSession={audio:StreamedAudio;windows:number;rotations:number;closed:boolean};
 type SplitPart={part:number;totalParts:number};
 export class JobRunner{
  readonly manager:ModelManager;
+ private readonly resources:ResourceManager;
+ private readonly boundaryWait:typeof waitAtBoundary;
  private store:JobStore;
- private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0,speakerDownload:'idle'};
+ private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0,speakerDownload:'idle',performanceMode:'medium',activeResourcePolicy:null};
  private listeners=new Set<()=>void>();
  private queue:string[]=[];
  private nextQueueOrder=0;
@@ -47,7 +52,9 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+  this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
+  this.state={...this.state,performanceMode:this.resources.selected};
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
   this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
@@ -72,6 +79,7 @@ export class JobRunner{
  }
  subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener)}};
  snapshot=()=>this.state;
+ setPerformanceMode(mode:PerformanceMode){this.resources.select(mode);this.set({performanceMode:this.resources.selected})}
  private set(patch:Partial<RunnerSnapshot>){this.state={...this.state,...patch};this.listeners.forEach(fn=>fn())}
  private patch(id:string,patch:Partial<Job>){this.set({jobs:this.state.jobs.map(j=>j.id===id?{...j,...patch,updated:Date.now()}:j)})}
  private job(id:string){const job=this.state.jobs.find(j=>j.id===id);if(!job)throw new Error('Задание не найдено.');return job}
@@ -374,7 +382,7 @@ export class JobRunner{
      if(!this.state.jobs.some(j=>j.id===id&&j.queueOrder!==undefined)){
       this.queue.shift();this.set({queueCount:this.queue.length});continue;
      }
-     this.cancelled=false;this.abort=new AbortController();this.set({activeId:id});
+     this.cancelled=false;this.abort=new AbortController();this.resources.beginRun();this.set({activeId:id,activeResourcePolicy:null});
      const runStarted=benchmarkNow();
      try{
       await this.execute(id);
@@ -389,7 +397,7 @@ export class JobRunner{
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
      }finally{
-      this.queue.shift();this.set({activeId:null,queueCount:this.queue.length});
+      this.manager.resourcePolicy=null;this.queue.shift();this.set({activeId:null,activeResourcePolicy:null,queueCount:this.queue.length});
      }
     }
    });await this.lease;
@@ -657,9 +665,22 @@ export class JobRunner{
    }
    this.set({operation:'Распознавание'});
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
-   let previousAttemptEnd:number|undefined;
+   let previousAttemptEnd:number|undefined,previousInferenceMs=0;
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
+    // Apply the chosen profile only before a new, uncommitted window. No
+    // session is destroyed; existing retry and checkpoint rules are unchanged.
+    const policy=this.resources.policy();this.manager.resourcePolicy=policy;
+    this.set({activeResourcePolicy:policy});
+    this.bench(id,b=>({...b,resources:observeWindowPolicy(b.resources,policy)}));
+    const pauseMs=boundaryPauseMs(policy,previousInferenceMs);
+    if(pauseMs>0){
+     const pauseStarted=benchmarkNow();
+     try{await this.boundaryWait(pauseMs,this.abort!.signal)}finally{
+      this.bench(id,b=>({...b,resources:observeResourcePause(b.resources!,benchmarkNow()-pauseStarted)}));
+     }
+     this.check();
+    }
     if(session)await this.rotateStreamIfNeeded(id,session,file,index,windows.length);
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend),percent:checkpointProgress(windows,index).percent});
     // Retry only the current uncommitted window. Previous windows must not
@@ -702,6 +723,7 @@ export class JobRunner{
       this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
       this.check();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
+      if(traceErrorKind(error)==='worker'||(typeof error==='object'&&error!==null&&'code' in error&&(error.code==='gpu-device-lost'||error.code==='webgpu-device-lost')))this.resources.restrictAfterRecovery();
       const next=attempt+1,wasmOnly=preferWasmAfterFailure(attemptBackend);
       this.traceEvent(id,'window-retry','asr',{window:index+1,totalWindows:windows.length,attempt:next,backend:traceBackend(attemptBackend)});
       this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
@@ -728,6 +750,7 @@ export class JobRunner{
     const checkpointMs=benchmarkNow()-checkpointStarted;
     const uniqueAudioSeconds=(window.end-(index===0?window.start:windows[index-1].end))/16000;
     this.bench(id,b=>recordWindowCommit(b,index+1,successfulAttemptMs,checkpointMs,uniqueAudioSeconds));
+    previousInferenceMs=successfulAttemptMs;
     this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1,elapsedMs:checkpointMs});
     this.check();
    }
