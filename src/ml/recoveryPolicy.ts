@@ -26,6 +26,8 @@ export function preferWasmAfterFailure(backend:string):boolean {
 // First recovery reopens the decoder; the second uses bounded subwindows.
 export const MAX_STREAM_WINDOW_RECOVERIES=2;
 export const STREAM_SUBWINDOW_SAMPLES=5*16000;
+// Proactive rotation is a resource policy, not an automatic recovery attempt.
+export const DEFAULT_STREAM_ROTATE_WINDOWS=20;
 export const MAX_STREAM_JOB_RECOVERIES=5;
 export type StreamRecoveryState={window:number;windowRecoveries:number;totalRecoveries:number};
 export function reserveStreamRecovery(error:unknown,window:number,previous?:StreamRecoveryState):StreamRecoveryState|null{
