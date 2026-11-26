@@ -36,7 +36,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    throw new Error('Некорректные параметры аудиодорожки.');
   const sink=new AudioSampleSink(track);
 
-  async function read(window:AudioWindow,observe?:StreamReadObserver):Promise<Float32Array>{
+  async function read(window:AudioWindow,observe?:StreamReadObserver,onProgress?:()=>void):Promise<Float32Array>{
    if(closed)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
    signal?.throwIfAborted();
    // Decode a little before the boundary to warm up the decoder and resampler.
@@ -44,7 +44,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    const startTime=origin+start/PCM_SAMPLE_RATE;
    const endTime=origin+window.end/PCM_SAMPLE_RATE;
    const mono=new Float32Array(Math.ceil((window.end-start)*rate/PCM_SAMPLE_RATE));
-   let covered=false,packets=0,decodedFrames=0;
+   let covered=false,packets=0,decodedFrames=0,furthestFrame=0;
    const readStarted=performance.now();let lastSampleTrace=readStarted;
    const checkOpen=()=>{signal?.throwIfAborted();if(closed)throw new Error('Потоковый декодер закрыт.');};
    const stats=()=>({packets,decodedFrames,sourceSampleRate:rate,elapsedMs:performance.now()-readStarted});
@@ -63,6 +63,10 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
       sample.copyTo(plane,{format:'f32-planar',planeIndex:channel,frameOffset:first,frameCount:last-first});
       for(let i=0;i<plane.length;i++)mono[offset+first+i]+=plane[i]/sample.numberOfChannels;
      }
+     // Only newly covered audio positions count as progress. Duplicate,
+     // out-of-range and empty packets cannot keep a stuck iterator alive.
+     const reached=offset+last;
+     if(reached>furthestFrame){furthestFrame=reached;onProgress?.();}
     }finally{sample.close()}
     if(observe&&performance.now()-lastSampleTrace>=5000){
      lastSampleTrace=performance.now();await observe({code:'stream-samples',streamStage:'decode',...stats()});checkOpen();
@@ -92,14 +96,15 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
 
 export type StreamedAudio=Awaited<ReturnType<typeof openStreamedAudio>>;
 
-export async function inspectStreamedAudio(audio:StreamedAudio,signal?:AbortSignal,onProgress?:(done:number,total:number)=>void):Promise<AudioInspectionReport>{
+export async function inspectStreamedAudio(audio:StreamedAudio,signal?:AbortSignal,onProgress?:(done:number,total:number)=>void,readChecked?:(window:AudioWindow,index:number,total:number)=>Promise<AudioInspectionReport>):Promise<AudioInspectionReport>{
  const windows=audioWindows(audio.length,true);
  const report:AudioInspectionReport={
   pcmSamples:audio.length,durationSeconds:audio.length/PCM_SAMPLE_RATE,windowCount:windows.length,
   quietWindows:0,nearClippedWindows:0,peakAbsolute:0
  };
  for(const [index,window] of windows.entries()){
-  const check=await inspectDecodedPcm(await audio.read(window),{signal});
+  signal?.throwIfAborted();
+  const check=readChecked?await readChecked(window,index,windows.length):await inspectDecodedPcm(await audio.read(window),{signal});
   report.quietWindows+=check.quietWindows;
   report.nearClippedWindows+=check.nearClippedWindows;
   report.peakAbsolute=Math.max(report.peakAbsolute,check.peakAbsolute);
