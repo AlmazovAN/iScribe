@@ -8,7 +8,10 @@ const formats=[MP3,WAVE,MP4,QTFF,OGG,WEBM,ADTS,FLAC];
 export async function openStreamedAudio(file:File,signal?:AbortSignal){
  signal?.throwIfAborted();
  const input=new Input({source:new BlobSource(file),formats});
+ let closed=false;
  const close=()=>{
+  if(closed)return;
+  closed=true;
   signal?.removeEventListener('abort',close);
   input.dispose();
  };
@@ -26,6 +29,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
   const sink=new AudioSampleSink(track);
 
   async function read(window:AudioWindow):Promise<Float32Array>{
+   if(closed)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
    signal?.throwIfAborted();
    // Decode a little before the boundary to warm up the decoder and resampler.
    const start=Math.max(0,window.start-PCM_SAMPLE_RATE);
