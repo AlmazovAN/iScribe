@@ -44,9 +44,15 @@ it('persists observed run, 3 checkpoint timings, inferred RTF and redacted JSON 
  expect(saved.benchmark?.checkpointMs).toBeGreaterThanOrEqual(0);
  expect(saved.benchmark?.speakerMs).toBeGreaterThanOrEqual(0);
  expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved.benchmark?.profiler?.timings.pcmCopy?.count).toBe(3);
+ expect(saved.benchmark?.profiler?.timings.betweenAsrAttempts?.count).toBe(2);
+ expect(saved.benchmark?.profiler?.timings.fullAudioPreparation?.count).toBe(1);
+ expect(saved.benchmark?.profiler?.backendAttempts.wasm).toBe(3);
  runner.exportBenchmark(id);
  const report=downloadBenchmark.mock.calls[0][0];
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',measuredCommittedWindows:3,measuredUniqueAudioSeconds:60,asrWindowMs:{count:3}});
+ expect(report.performanceProfiler?.device.cpuUtilizationPercent).toBeNull();
+ expect(report.performanceProfiler?.workerTransferMs).toBeNull();
  expect(JSON.stringify(report)).not.toContain('PRIVATE-MEETING');
  expect(JSON.stringify(report)).not.toContain('confidential source text');
  const restarted=new JobRunner({store,manager:fake as unknown as ModelManager,

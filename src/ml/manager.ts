@@ -40,6 +40,8 @@ export class ModelManager{
  onSpeakerProgress:(id:keyof typeof speakerRepos,status:string)=>void=()=>{};
  private generation=0;
  private preparingId:WhisperId|null=null;
+ // Observed initialization preference, not the actual execution provider.
+ requestedBackend:'auto'|'wasm'|'unknown'='unknown';
  active:WhisperId|null=null;
  capabilities:CapabilityReport|null=null;
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};
@@ -59,6 +61,7 @@ export class ModelManager{
    return {cached,backend};
   }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
+  this.requestedBackend=options.wasmOnly?'wasm':'auto';
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('initializing',id,null);
   let client:EngineClient|null=null;

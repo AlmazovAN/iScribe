@@ -49,3 +49,5 @@ No issue above is declared fixed without a reproducible test and observed outcom
 - Foreground timers cannot interrupt a completely blocked main thread or independently bound IndexedDB writes. Native rendering/disposal may retain resources. JS heap is not full process or GPU memory.
 - Strict fallback coverage may reject valid timestamp discontinuities; 5 s split and 20-window rotation need actual MP3 profiling. Fresh-decoder inspection cannot reproduce cumulative resource pressure.
 - Stale metadata that would reset recovery reservations is rejected; reload the stale tab before continuing. Do not clear site data.
+
+PERF-01: browser resource hints and host wall-clock measurements are not CPU/GPU utilization or full process memory; effective WASM threads and transfer time remain unknown. See [PERF-01](performance/PERF-01.md).

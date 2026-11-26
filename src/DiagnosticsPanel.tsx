@@ -54,7 +54,13 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
  const windowNumber=Number(inputValue);
  const valid=Number.isSafeInteger(windowNumber)&&Number.isSafeInteger((windowNumber-1)*25*16000)&&windowNumber>=1&&(total===null||windowNumber<=total);
  const blocked=busy||!job||isRunning(job.stage)||job.stage==='queued'||!valid;
- const benchmark=job?.benchmark?.committedWindows?benchmarkReport(job):null;
+ const benchmark=job?.benchmark?.runs?benchmarkReport(job):null;
+ const profiler=benchmark?.performanceProfiler;
+ const metrics=benchmark?.timingsMs;
+ const measuredStages=metrics?Object.entries(metrics).filter(([key,value])=>key!=='jobRuns'&&typeof value==='number'&&value>0).sort((a,b)=>Number(b[1])-Number(a[1])):[];
+ const stageNames:Record<string,string>={decode:'подготовка аудио',pcmIntegrityCheck:'проверка PCM',modelInitialization:'инициализация модели',asrIncludingFailedAttempts:'Whisper',checkpointPersistence:'контрольные точки',speakerInference:'диаризация'};
+ const timingLabels:Record<string,string>={streamOpen:'Открытие потока',fullAudioPreparation:'Подготовка полного аудио',streamDecode:'Декодирование окон',streamResample:'Ресэмплинг',metadataPersistence:'Служебное сохранение',pcmCopy:'Копирование PCM',betweenAsrAttempts:'Интервалы между попытками Whisper',workerRecovery:'Восстановление Worker',speakerPass:'Проход диаризации'};
+ const available=(v:boolean|null)=>v===null?'недоступно':v?'да':'нет';
  const events=job?.trace??[];
 
  return <details className="panel diagnostics-panel">
@@ -90,6 +96,14 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {job.audioCheck?.status==='passed'&&<p>PCM проверен: {job.audioCheck.report.windowCount} окон · {job.audioCheck.report.quietWindows} тихих · {job.audioCheck.report.nearClippedWindows} с пиковыми уровнями · пик {job.audioCheck.report.peakAbsolute.toFixed(3)}</p>}
     {job.audioCheck?.status==='failed'&&<p role="alert">Проверка аудио: {job.audioCheck.problem}</p>}
     {benchmark&&<p aria-label="Измерения производительности">Бенчмарк: {benchmark.measuredCommittedWindows} окон · RTF ASR: {benchmark.asrRtf??'—'} · p95 окна: {benchmark.asrWindowMs.p95??'—'} мс · запись контрольных точек: {benchmark.timingsMs.checkpointPersistence??'—'} мс · возобновлений: {benchmark.resumedRuns}{benchmark.mainThreadHeap.observedPeakBytes!==null?' · оценка JS heap: '+(benchmark.mainThreadHeap.observedPeakBytes/1e6).toFixed(1)+' МБ':''}</p>}
+    {profiler&&<details aria-label="Performance Profiler"><summary>Performance Profiler</summary>
+     <p>Логические процессоры: {profiler.device.logicalProcessors??'недоступно'} · RAM (оценка браузера): {profiler.device.deviceMemoryGiB??'недоступно'} Гб · WebGPU API: {available(profiler.device.webGpuApi)} · WebNN API: {available(profiler.device.webNnApi)}</p>
+     <p>WASM SIMD: {available(profiler.device.wasmSimd)} · предпосылки многопоточности: {available(profiler.device.wasmThreadPrerequisites)} · настроено потоков: {profiler.device.configuredWasmThreads??'недоступно'} · фактические потоки: недоступно</p>
+     <p>Попытки ASR: WebGPU {profiler.backendAttempts.webgpu} · WebNN {profiler.backendAttempts.webnn} · WASM {profiler.backendAttempts.wasm} · неизвестно {profiler.backendAttempts.unknown}. Запрос: авто {profiler.requestedBackendAttempts.auto} · WASM {profiler.requestedBackendAttempts.wasm} · неизвестно {profiler.requestedBackendAttempts.unknown}.</p>
+     <p>RTF измеренных запусков: {benchmark?.measuredRunRtf??'—'} · наибольшая из измеренных стадий: {measuredStages.length?stageNames[measuredStages[0][0]]:'недоступно'}</p>
+     {Object.entries(profiler.timingsMs).map(([key,timing])=><p key={key}>{timingLabels[key]}: {timing?timing.totalMs+' мс ('+timing.count+' изм.)':'недоступно'}</p>)}
+     <p>Интервалы могут перекрываться. Загрузка CPU/GPU, полная RAM/VRAM, время передачи в Worker и фактическое число потоков недоступны; измеряются внешними средствами. Наличие API не подтверждает работоспособность модели.</p>
+    </details>}
     {job.failure&&<p aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null? ' / '+job.failure.totalWindows:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?' из '+Math.round(job.failure.durationSeconds)+' с':''} · backend: {job.failure.backend??'неизвестен'}{job.failure.observedExit==='pagehide'?' · зафиксирован выход со страницы (не обязательно перезагрузка)':''} · {job.failure.message}</p>}
     {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}
    </div>}

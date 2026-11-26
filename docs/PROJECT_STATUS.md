@@ -64,3 +64,6 @@ All real-hardware gates HW-1–HW-7 are **NOT TESTED**.
 
 ## Streaming reliability PR-01–07 (2026-11-26)
 Stacked PRs #36–41 plus PR-07 cover the 41/154 stall, stage watchdogs, two durable recovery reservations per window (five per job), split fallback, proactive rotation, and isolated inspection. See [streaming acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md). PR-06 verify: 161/161 tests, [CI](https://github.com/AlmazovAN/iScribe/actions/runs/45803738028). PR-07 CI and real 63:54 MP3 acceptance must be recorded independently. No deployment claimed.
+
+## PERF-01 (candidate)
+Optional performance profiler in Benchmark JSON and Diagnostics, preserving v1 jobs and checkpoint semantics. See [PERF-01](performance/PERF-01.md). No hardware acceptance or speedup claimed.

@@ -1,4 +1,5 @@
 import type {Job} from './jobs';
+import {performanceReport,type PerformanceProfile} from './performance/profiler';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -27,6 +28,7 @@ export type JobBenchmark={
  windowTimings:BenchmarkWindow[];
  mainThreadHeapPeakBytes?:number;
  memorySamples:number;
+ profiler?:PerformanceProfile;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -100,6 +102,8 @@ export function benchmarkReport(job:Job){
   checkpointWindowMs:{count:checkpoint.length,p50:round(percentile(checkpoint,.5)),
    p95:round(percentile(checkpoint,.95)),max:round(checkpoint.at(-1)??null)},
   asrRtf:round(rtf,4),
+  measuredRunRtf:round(b.uniqueAudioSeconds>0&&b.runMs>0?b.runMs/(b.uniqueAudioSeconds*1000):null,4),
+  performanceProfiler:performanceReport(b.profiler),
   mainThreadHeap:{
    sampleCount:b.memorySamples,
    observedPeakBytes:b.mainThreadHeapPeakBytes??null,
@@ -111,6 +115,7 @@ export function benchmarkReport(job:Job){
   })),
   limitations:[
    'RTF is ASR attempt time divided by newly committed unique audio seconds; failed attempts increase numerator.',
+   'Measured run RTF uses recorded run wall time divided by measured unique committed audio; includes retries, speaker passes and resumed runs, not unmeasured historical work.',
    'The stage timings are cumulative across resumed runs, not a precise CPU or full-system memory profile.',
    'This report alone does not establish quality, accuracy or real hardware benchmark acceptance.'
   ]

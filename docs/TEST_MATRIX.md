@@ -61,3 +61,11 @@ For each real-device run record commit SHA, OS/browser, GPU/RAM, model/backend, 
 | STR-5 | Standalone/web builds, release preflight, offline browser tests | Pending CI |
 | HW-S1–6 | Real original MP3/Whisper Small and resource measurements | NOT TESTED |
 See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and criteria.
+
+## PERF-01
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-01-U | Bounded aggregate timings, backend counters, privacy and null unavailable fields | NOT TESTED |
+| PERF-01-R | Runner persists observations across existing checkpoints | NOT TESTED |
+| PERF-01-H | Real recording and external CPU/GPU/RAM profiling | NOT TESTED |
