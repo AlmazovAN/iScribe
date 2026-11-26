@@ -647,3 +647,24 @@ it('records a failed split probe and rejects invalid window numbers without adva
  expect((await store.get(job.id,false))?.windowInspections).toEqual([expect.objectContaining({window:155,status:'failed',errorKind:'invalid-audio',totalWindows:154})]);
  await store.remove(job.id);
 });
+
+
+it('does not open another decoder if watchdog disposal failed',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'dispose-failure.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'interrupted',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});vi.spyOn(store,'audio').mockResolvedValue(file);
+ const close=vi.fn(()=>{throw new Error('native disposal failed')});
+ const read=vi.fn<StreamedAudio['read']>(()=>new Promise(()=>{}));
+ const openStream=vi.fn<typeof openStreamedAudio>(async()=>({length:1055*16000,decoderId:1,read,close}));
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'error',nextWindow:40});
+ expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
+ expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
+ expect(fake.transcribe).not.toHaveBeenCalled();
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'recovery'})]));
+ await store.remove(job.id);
+});
