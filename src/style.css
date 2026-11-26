@@ -127,3 +127,34 @@ button.trash-button:hover:not(:disabled) { color: #843f32; border-color: #c2988c
 .segmented-setting button{border:1px solid transparent;background:transparent;color:#405a49;border-radius:5px;padding:5px 8px;font-size:11px;line-height:1.4}
 .segmented-setting button[aria-pressed="true"],.segmented-setting button[aria-pressed="true"]:hover{background:#315841;border-color:#315841;color:#fff}
 @media(max-width:720px){.model-settings{margin-left:0;justify-content:flex-start;gap:8px}.setting-group{gap:5px}.segmented-setting button{padding:5px 6px}}
+
+
+
+/* Queue cards: each recording is a distinct, readable work item. */
+.audio-panel .file-list { display: grid; gap: 10px; margin-top: 14px; }
+.audio-panel .file-row,
+.audio-panel .file-row:last-child {
+ padding: 16px 18px;
+ border: 1px solid #dce5db;
+ border-radius: 14px;
+ background: #fff;
+ box-shadow: 0 2px 8px #263d2808;
+ transition: border-color .16s ease, box-shadow .16s ease, background-color .16s ease;
+}
+.audio-panel .file-row:hover { border-color: #b9cdbb; box-shadow: 0 4px 14px #263d2810; }
+.audio-panel .file-row.active {
+ border-color: #89ad91;
+ background: #f4faf3;
+ box-shadow: inset 3px 0 #50785d, 0 3px 14px #263d2810;
+}
+.audio-panel .file-title { font-size: 13px; line-height: 1.4; }
+.audio-panel .file-info small { font-size: 11px; }
+.audio-panel .file-icon { width: 36px; height: 40px; border-radius: 9px; }
+@media(max-width:720px) {
+ .audio-panel .file-list { gap: 9px; }
+ .audio-panel .file-row,
+ .audio-panel .file-row:last-child { padding: 13px 12px; border-radius: 12px; }
+}
+@media(prefers-reduced-motion:reduce) {
+ .audio-panel .file-row { transition: none; }
+}
