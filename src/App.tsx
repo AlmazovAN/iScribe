@@ -8,7 +8,6 @@ import {JobRunner} from './jobRunner';
 import {JobRow} from './JobRow';
 import {useModels} from './useModels';
 import {useProtection} from './useProtection';
-import {formatTranscript} from './formatTranscript';
 import type {WhisperId} from './ml/manager';
 import type {JobParams,WindowInspectionStrategy} from './jobs';
 declare const __ISCRIBE_BUILD_SHA__:string;
@@ -68,7 +67,6 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const speakerButton=state.speakerDownload==='pending'?(state.activeId?'После текущей записи':'После текущей операции'):
   state.speakerDownload==='loading'?'Загрузка комплекта…':
   modelState.speakers.ready?'Скачано':'Скачать комплект';
- let preview='';try{if(chosen)preview=formatTranscript(chosen.speakerSegments??chosen.volatileSegments??chosen.segments,{timestamps:true,diarize:!!chosen.speakerSegments})}catch{preview='Не удалось сформировать предпросмотр. Проверьте временные метки.'}
  return <>
  <div className="app" hidden={colab==='open'}>
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><div className="local-header-actions"><span className="local"><i/>Обработка на вашем устройстве</span><button ref={colabButton} type="button" onClick={()=>setColab('open')}>Google Drive / Colab</button></div></header>
@@ -91,7 +89,6 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     <div className="file-list">{orderedJobs.map(job=><JobRow key={job.id} job={job} active={state.activeId===job.id} onStart={()=>start(job.id)} onExport={variant=>download(job.id,variant)} onTrash={()=>trash(job.id)} onPreview={()=>setPreviewId(job.id)} queuePosition={queuePositions.get(job.id)} checking={state.activeId===job.id&&state.operation.startsWith('Проверка аудио')}/>)}</div>
     {!state.jobs.length&&state.ready&&<p className="empty-list">Добавленные записи появятся здесь. До 500 МБ. Свыше 128 МБ — потоковое распознавание без разметки спикеров.</p>}
    </section>
-   {chosen&&<section className="panel result"><div className="panel-heading"><h2>Текст записи</h2><span className="preview-name">{chosen.name}</span></div>{!chosen.asrComplete&&preview&&<p className="note">Промежуточный текст. Распознавание ещё не завершено.</p>}<div className={preview?'transcript':'empty'}>{preview||'Текст появится по мере распознавания.'}</div></section>}
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}
    <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ML: {engineLabels[state.enginePhase]} · ASR: {state.backend} · спикеры: WASM</span></div>
    <DiagnosticsPanel job={chosen} jobs={state.jobs} busy={state.busy} checking={chosen?.id===state.activeId&&state.operation.startsWith('Проверка аудио')}
