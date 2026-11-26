@@ -18,8 +18,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - run: npm run build
-      - run: npm run release:check
   browser-acceptance:
     # Pinned Playwright 1.56.1 does not support the ubuntu-26.04 runner image.
     runs-on: ubuntu-24.04
@@ -35,25 +33,20 @@ jobs:
       - run: npm install --no-save --package-lock=false @playwright/test@1.56.1
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: synthetic-benchmark-pr29
-          path: test-results/**/synthetic-benchmark.json
-          retention-days: 14
-          if-no-files-found: warn
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: synthetic-hardware-evidence-pr30
-          path: test-results/**/synthetic-hardware-evidence.json
-          retention-days: 14
-          if-no-files-found: warn
+      # The offline browser suite exercises both distribution formats.
       - run: npm run build
+      - run: npm run build:web
+      - run: npm run release:check:web
       - run: npx playwright test --config playwright.offline.config.mjs
-      - if: failure()
-        uses: actions/upload-artifact@v4
+  build:
+    needs: [verify, browser-acceptance]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: playwright-failures
-          path: test-results/
-          retention-days: 7
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run release:check

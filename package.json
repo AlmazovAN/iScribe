@@ -7,8 +7,10 @@
     "typecheck": "npm run prepare:engine && tsc --noEmit",
     "lint": "eslint .",
     "test": "npm run prepare:engine && vitest run src scripts",
-    "build": "npm run prepare:engine && vite build",
-    "release:check": "node scripts/release-preflight.mjs",
+    "build": "npm run prepare:engine && vite build --mode standalone",
+    "build:web": "npm run prepare:engine && vite build --outDir dist-web",
+    "release:check": "node scripts/release-preflight.mjs --standalone",
+    "release:check:web": "node scripts/release-preflight.mjs dist-web",
     "prepare:engine": "node scripts/patch-engine.mjs"
   },
   "keywords": [],
@@ -18,6 +20,7 @@
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
     "@yourdevice/engine": "0.1.1",
+    "mediabunny": "1.66.4",
     "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
     "react": "19.1.1",
     "react-dom": "19.1.1"

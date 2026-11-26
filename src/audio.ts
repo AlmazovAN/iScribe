@@ -1,10 +1,12 @@
-export const MAX_FILE_BYTES = 128 * 1024 * 1024;
+export const STREAM_AUDIO_BYTES = 128 * 1024 * 1024;
+export const MAX_FILE_BYTES = 500 * 1024 * 1024;
+export const usesStreamedAudio=(size:number)=>size>STREAM_AUDIO_BYTES;
 export const MAX_SECONDS = 3600;
 export const MAX_DECODED_BYTES = 256 * 1024 * 1024;
 export function validateFile(file: Pick<File,'size'|'name'>): void {
   if(!/\.(wav|mp3|m4a|ogg|opus|webm|aac|flac)$/i.test(file.name)) throw new Error('Выберите аудиофайл WAV, MP3, M4A, OGG, Opus, WebM, AAC или FLAC.');
   if(file.size===0) throw new Error('Выбран пустой файл.');
-  if(file.size>MAX_FILE_BYTES) throw new Error('Файл превышает ограничение 128 МБ. Разделите запись на части.');
+  if(file.size>MAX_FILE_BYTES) throw new Error('Файл превышает ограничение 500 МБ. Разделите запись на части.');
 }
 export function mixMono(channels: readonly Float32Array[]): Float32Array<ArrayBuffer> {
   if(!channels.length || channels.some(c=>c.length!==channels[0].length)) throw new Error('Некорректные звуковые каналы.');
@@ -14,6 +16,7 @@ export function mixMono(channels: readonly Float32Array[]): Float32Array<ArrayBu
 }
 export async function decodeAudio(file: File, signal?: AbortSignal): Promise<Float32Array> {
   validateFile(file);signal?.throwIfAborted();
+  if(usesStreamedAudio(file.size))throw new Error('Для этого файла требуется потоковое декодирование.');
   const context=new AudioContext({sampleRate:16000});
   try {
     const bytes=await file.arrayBuffer();signal?.throwIfAborted();

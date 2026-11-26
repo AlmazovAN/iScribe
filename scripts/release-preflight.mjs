@@ -50,7 +50,19 @@ export function verifyReleasePackage(dist=resolve('dist')){
   files:files.length,js:js.length,css:css.length,wasm:wasm.length,
   offlineShell:true,notices:true,hardwareAcceptance:'NOT TESTED'};
 }
+export function verifyStandalonePackage(dist=resolve('dist')){
+ const files=assetNames(dist);
+ if(files.length!==1||files[0]!=='iScribe.html')
+  throw new Error('Expected only iScribe.html in the standalone distribution');
+ const html=readFileSync(join(dist,'iScribe.html'),'utf8');
+ if(!html.includes('<style>')||!html.includes('<script type="module">')||
+    !html.includes('application/wasm')||!html.includes('assets.notices=')||
+    /<(?:link|script)\b[^>]*(?:href|src)=/i.test(html))
+  throw new Error('Incomplete standalone HTML or external entry assets');
+ return {status:'PASS',testType:'package-integrity-only',files:1,hardwareAcceptance:'NOT TESTED'};
+}
+
 if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url){
- try{const outcome=verifyReleasePackage(process.argv[2]?resolve(process.argv[2]):resolve('dist'));process.stdout.write(JSON.stringify(outcome)+'\n')}
+ try{const outcome=process.argv[2]==='--standalone'?verifyStandalonePackage():verifyReleasePackage(process.argv[2]?resolve(process.argv[2]):resolve('dist'));process.stdout.write(JSON.stringify(outcome)+'\n')}
  catch(error){process.stderr.write('Release preflight failed: '+String(error)+'\n');process.exitCode=1}
 }

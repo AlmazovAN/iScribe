@@ -28,8 +28,8 @@ export function createJob(file:File,params:JobParams):Job{
 }
 // Same 30 s / 5 s overlap and midpoint cuts as the pinned engine. A checkpoint
 // is committed ONLY after a whole window: interrupted windows are replayed.
-export function audioWindows(samples:number){
- if(!Number.isSafeInteger(samples)||samples<0||samples>3600*16000)throw new Error('Некорректная длина PCM: допустимо до одного часа при 16 кГц.');
+export function audioWindows(samples:number,streamed=false){
+ if(!Number.isSafeInteger(samples)||samples<0||(!streamed&&samples>3600*16000))throw new Error('Некорректная длина PCM: допустимо до одного часа при 16 кГц.');
  const out:{start:number;end:number;first:boolean;last:boolean}[]=[];
  for(let start=0;start<samples;start+=25*16000){const end=Math.min(start+30*16000,samples);out.push({start,end,first:start===0,last:end===samples});if(end===samples)break}return out;
 }

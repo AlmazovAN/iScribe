@@ -21,7 +21,7 @@ PR-31 makes the software *easier to review and package*. It does **not** certify
 
 ## Packaged-release preflight
 
-`npm run build && npm run release:check` runs `scripts/release-preflight.mjs` against `dist/`.
+`npm run build:web && npm run release:check:web` runs `scripts/release-preflight.mjs` against the deployable `dist-web/` package. The standalone `dist/iScribe.html` has a separate `npm run release:check`.
 
 **Release package requires:**
 
@@ -61,7 +61,7 @@ The preflight returns `hardwareAcceptance: "NOT TESTED"` even on success. Produc
 ## Release and rollback
 
 1. Sequentially integrate the dependency chain **PR-21 → PR-22 → … → PR-31**. The PRs were stacked, so merge each into its intended parent carefully and confirm the resulting `main` contains the full code exactly once. A PR passing CI on its intermediate parent does not prove the final integrated branch.
-2. Run complete CI on `main` after final integration. `dist/` should be produced from that `main` SHA and pass `release:check`.
+2. Run complete CI on `main` after final integration. `dist-web/` should be produced from that `main` SHA and pass `release:check:web`.
 3. Check IndexedDB v2 migration from the old deployed version. **Important:** older site code calling `indexedDB.open('iscribe-jobs-v1',1)` cannot access a DB already upgraded to version 2; no direct rollback to a v1-only build without compatibility work.
 4. Service Worker uses a build-pinned cache and intentionally does not `skipWaiting`: when the previous site is still open, the new controller may not activate immediately; confirm version after closing/reopening old tabs.
 5. Keep the existing deployment host separate from the GitHub Pages workflow. GitHub Pages workflow does **not automatically update** `https://iscribe-alexander.politebook7.chatgpt.site/`. Verify the real publication path explicitly; do not invent a GitHub action that claims to deploy to ChatGPT Sites.

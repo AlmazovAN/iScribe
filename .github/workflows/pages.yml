@@ -19,11 +19,11 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - run: npm run build
-      - run: npm run release:check
+      - run: npm run build:web
+      - run: npm run release:check:web
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: dist-web
   deploy:
     needs: build
     permissions:

@@ -1,0 +1,113 @@
+.colab-workspace {
+ --colab-ink: #192b24;
+ --colab-muted: #54665d;
+ --colab-line: #dce5de;
+ --colab-accent: #245c43;
+ min-height: 100vh;
+ color: var(--colab-ink);
+ background: #f6f8f4;
+}
+.colab-workspace[hidden] { display: none; }
+.colab-header { gap: 16px; }
+.colab-header nav,.local-header-actions { display: flex; align-items: center; gap: 14px; }
+.colab-header nav span { color: var(--colab-accent); font-size: 12px; font-weight: 800; }
+.colab-main { max-width: 1380px; padding-bottom: 48px; }
+.colab-title {
+ display: flex;
+ justify-content: space-between;
+ align-items: end;
+ flex-wrap: wrap;
+ gap: 14px;
+ padding: 30px 0 23px;
+}
+.colab-title h1 { font-size: clamp(28px,4vw,42px); letter-spacing: -1.6px; }
+.colab-title p { margin-top: 5px; color: var(--colab-muted); }
+.colab-demo-label { display: flex; align-items: center; gap: 9px; color: var(--colab-muted); font-size: 12px; }
+.colab-demo-label strong { border: 1px solid #b7cbbd; color: var(--colab-accent); border-radius: 4px; padding: 4px 7px; }
+.colab-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(265px,325px); align-items: start; gap: 22px; }
+.colab-operations { min-width: 0; }
+.colab-ingest,.colab-jobs,.colab-pipeline,.colab-journal { background: #fff; border: 1px solid var(--colab-line); border-radius: 12px; }
+.colab-ingest,.colab-jobs,.colab-pipeline,.colab-journal,.colab-runtime { padding: 18px; }
+.colab-ingest { transition: border-color .16s,background .16s; }
+.colab-ingest[data-dragging="true"] { border-color: var(--colab-accent); background: #eef7ef; }
+.colab-section-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 15px; }
+.colab-section-head h2 { font-size: 17px; }
+.colab-section-head h2 small { margin-left: 5px; color: var(--colab-muted); font-size: 12px; font-weight: 600; }
+.colab-section-head>span,.colab-local-input span,.colab-demo-controls label { color: var(--colab-muted); font-size: 12px; }
+.colab-drive-form label { display: block; font-size: 12px; font-weight: 750; margin-bottom: 6px; }
+.colab-drive-form>div { display: flex; gap: 7px; }
+.colab-drive-form input {
+ width: 100%;
+ min-width: 0;
+ padding: 10px 12px;
+ border: 1px solid #cbd9ce;
+ border-radius: 7px;
+ color: var(--colab-ink);
+ background: #fafcf9;
+}
+.colab-drive-form input::placeholder { color: #66776e; }
+.colab-workspace .colab-primary { border-color: var(--colab-accent); background: var(--colab-accent); color: white; }
+.colab-workspace .colab-primary:hover { background: #184930; color: white; }
+.colab-local-input,.colab-demo-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.colab-local-input { margin-top: 12px; }
+.colab-alert { margin: 11px 0 0; color: #834326; font-size: 12px; }
+.colab-jobs { margin-top: 15px; }
+.colab-empty { padding: 21px 0; border-top: 1px solid var(--colab-line); color: var(--colab-muted); }
+.colab-job-list,.colab-pipeline ol,.colab-journal ol { list-style: none; padding: 0; margin: 0; }
+.colab-job {
+ display: grid; grid-template-columns: minmax(0,1.2fr) minmax(115px,.8fr) auto;
+ align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--colab-line);
+ animation: colab-reveal .16s ease-out;
+}
+.colab-job[data-state="running"] { border-left: 3px solid #478366; padding-left: 9px; background: #f4faf5; }
+.colab-job-name,.colab-job-state { min-width: 0; }
+.colab-job small,.colab-stage-dot+span small { display: block; font-size: 11px; color: var(--colab-muted); }
+.colab-job-state strong { font-size: 12px; }
+.colab-job[data-state="interrupted"] .colab-job-state strong,.colab-job[data-state="review"] .colab-job-state strong { color: #894526; }
+.colab-workspace .colab-name {
+ padding: 2px 0; max-width: 100%; border: 0; background: transparent; text-align: left;
+ overflow: hidden; text-overflow: ellipsis; color: var(--colab-ink);
+}
+.colab-workspace .colab-name[aria-pressed="true"] { color: var(--colab-accent); text-decoration: underline; text-underline-offset: 3px; }
+.colab-job-actions { display: flex; gap: 5px; flex-wrap: wrap; justify-content: end; }
+.colab-job-actions button { padding: 6px 8px; font-size: 11px; }
+.colab-demo-controls { border-top: 1px solid var(--colab-line); padding-top: 13px; }
+.colab-demo-controls select { margin-left: 6px; padding: 5px; border: 1px solid #cbd9ce; border-radius: 5px; color: var(--colab-ink); background: #fff; }
+.colab-auto input { accent-color: var(--colab-accent); vertical-align: middle; }
+.colab-sidebar { display: grid; gap: 12px; min-width: 0; }
+.colab-runtime { background: #1b3328; color: #f1f8f2; border-radius: 12px; }
+.colab-runtime-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px; }
+.colab-runtime-top span { font-size: 11px; color: #d1ecda; }
+.colab-runtime-top span[data-runtime="ready"]::before { content: "● "; color: #a6e2b4; }
+.colab-runtime dl { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 6px 12px; margin: 14px 0; font-size: 12px; }
+.colab-runtime dt { color: #bcd2c3; }
+.colab-runtime dd { margin: 0; text-align: right; }
+.colab-countdown { border-top: 1px solid #45604f; padding-top: 10px; font-size: 12px; color: #d5eadb; font-variant-numeric: tabular-nums; }
+.colab-pipeline ol { margin-top: 9px; }
+.colab-pipeline li { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 7px 2px; border-top: 1px solid #edf1ed; font-size: 12px; }
+.colab-stage-dot { display: grid; place-items: center; width: 21px; height: 21px; border-radius: 50%; background: #eaf0ea; color: #446050; font-size: 10px; }
+.colab-pipeline li[data-phase="complete"] .colab-stage-dot { background: #d7ecdd; color: #205739; }
+.colab-pipeline li[data-phase="current"] .colab-stage-dot { background: var(--colab-accent); color: #fff; }
+.colab-stage-status,.colab-selected { color: var(--colab-muted); font-size: 11px; }
+.colab-selected { margin-top: 5px; overflow-wrap: anywhere; }
+.colab-result-path { border-top: 1px solid var(--colab-line); margin-top: 6px; padding-top: 8px; font-size: 11px; color: var(--colab-muted); }
+.colab-result-path code { display: block; overflow-wrap: anywhere; color: var(--colab-accent); }
+.colab-journal ol { max-height: 225px; overflow: auto; margin-top: 8px; }
+.colab-journal li { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 7px; padding: 6px 0; border-top: 1px solid #edf1ed; font-size: 11px; overflow-wrap: anywhere; }
+.colab-journal time,.colab-journal p { color: var(--colab-muted); font-size: 11px; }
+.colab-journal p { margin-top: 8px; }
+@keyframes colab-reveal { from { opacity: .65; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media(max-width: 950px) {
+ .colab-job { grid-template-columns: minmax(0,1fr) auto; }
+ .colab-job-actions { grid-column: 1/-1; justify-content: start; }
+}
+@media(max-width: 720px) {
+ .local-header-actions .local { display: none; }
+ .colab-header nav { gap: 7px; flex-wrap: wrap; justify-content: end; }
+ .colab-grid { grid-template-columns: minmax(0,1fr); gap: 13px; }
+ .colab-ingest,.colab-jobs,.colab-pipeline,.colab-journal,.colab-runtime { padding: 14px; }
+}
+@media(prefers-reduced-motion: reduce) {
+ .colab-job { animation: none; }
+ .colab-ingest { transition: none; }
+}

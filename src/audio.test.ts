@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {mixMono,validateFile,MAX_FILE_BYTES} from './audio';
+import {mixMono,validateFile,MAX_FILE_BYTES,STREAM_AUDIO_BYTES,usesStreamedAudio} from './audio';
 it('averages channels without changing sample positions or mutating input',()=>{
  const left=Float32Array.of(1,0,-1),right=Float32Array.of(0,1,1);
  expect([...mixMono([left,right])]).toEqual([.5,.5,0]);expect([...left]).toEqual([1,0,-1]);
@@ -55,4 +55,11 @@ it('reuses the decoder channel buffer for 16 kHz mono instead of copying the ful
   expect(result[100]).toBeCloseTo(0.4);
   expect(close).toHaveBeenCalledOnce();
  }finally{vi.unstubAllGlobals()}
+});
+
+it('accepts audio up to 500 MiB and streams only above 128 MiB',()=>{
+ expect(MAX_FILE_BYTES).toBe(500*1024*1024);
+ expect(()=>validateFile({name:'meeting.mp3',size:MAX_FILE_BYTES})).not.toThrow();
+ expect(usesStreamedAudio(STREAM_AUDIO_BYTES)).toBe(false);
+ expect(usesStreamedAudio(STREAM_AUDIO_BYTES+1)).toBe(true);
 });

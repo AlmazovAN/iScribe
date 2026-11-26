@@ -1,9 +1,10 @@
 import {test,expect} from '@playwright/test';
-import {readFile,writeFile} from 'node:fs/promises';
+import {open,readFile,rm,writeFile} from 'node:fs/promises';
 
 const HARNESS='/tests/e2e/harness.html';
 const row=page=>page.locator('.file-row');
 const small=page=>page.locator('.model-panel .model').nth(1);
+const diagnostics=page=>page.locator('.diagnostics-panel');
 const add=async(page,name)=>{
  await page.locator('input[type="file"]').setInputFiles({
   name,mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
@@ -44,10 +45,10 @@ const snapshot=async(page)=>page.evaluate(async()=>new Promise((resolve,reject)=
   };
  };
 }));
-const downloadText=async(page,label)=>{
+const downloadText=async(page,label,target=row(page))=>{
  const [download]=await Promise.all([
   page.waitForEvent('download'),
-  row(page).getByRole('button',{name:label,exact:true}).click()
+  target.getByRole('button',{name:label,exact:true}).click()
  ]);
  return {name:download.suggestedFilename(),text:await readFile(await download.path(),'utf8')};
 };
@@ -77,7 +78,11 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  await loadFixture(page);
  await add(page,'meeting-871s.wav');
  await row(page).getByRole('button',{name:'Начать',exact:true}).click();
- await expect(row(page)).toContainText('окон 2/35');
+ await expect(row(page).locator('.file-progress-metrics')).toContainText('3/35 (00:55 / 14:31)');
+ await expect(row(page).locator('.file-progress-metrics')).toContainText('Time codes');
+ await expect(row(page).locator('.file-progress-metrics')).toContainText('00:33 / 14:31');
+ await expect(row(page).locator('.file-queue-status')).toContainText('Whisper small');
+ await expect(row(page).locator('.file-progress-track')).toHaveAttribute('data-processing','true');
  const before=(await snapshot(page))[0];
  expect(before.nextWindow).toBe(2);
  expect(before.segments.map(s=>s.text)).toEqual(['Окно 1','Окно 2']);
@@ -109,8 +114,8 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  expect(speakers.text).toContain('[SPEAKER_00]: Окно 1');
  expect(speakers.text).toContain('Окно 35');
  expect(speakers.text.match(/Окно \d+/g)).toHaveLength(35);
- await row(page).locator('.file-tools > summary').click();
- const benchmark=await downloadText(page,'Бенчмарк JSON');
+ await diagnostics(page).locator(':scope > summary').click();
+ const benchmark=await downloadText(page,'Бенчмарк JSON',diagnostics(page));
  const report=JSON.parse(benchmark.text);
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',source:'browser-observed-timings',
   resumedRuns:1,measuredCommittedWindows:35,measuredUniqueAudioSeconds:871,
@@ -191,8 +196,8 @@ test('durable FIFO restores three jobs after a reload; one click resumes only un
  await expect(page.getByRole('button',{name:'Продолжить очередь'})).toBeVisible();
  await expect(page.locator('.queue-banner')).toContainText('Очередь: 3 заданий');
  expect((await snapshot(page)).find(j=>j.name===names[0])?.nextWindow).toBe(1);
- await expect(page.locator('.file-row[aria-label="queue-two-60s.wav"]')).toContainText('В очереди · №2');
- await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"]')).toContainText('В очереди · №3');
+ await expect(page.locator('.file-row[aria-label="queue-two-60s.wav"] .file-queue-number')).toHaveText('2');
+ await expect(page.locator('.file-row[aria-label="queue-three-60s.wav"] .file-queue-number')).toHaveText('3');
  // Opening the page never triggers costly ML work automatically.
  const pausedCalls=await page.evaluate(()=>localStorage.getItem('iscribe-e2e:transcribeCount'));
  await page.waitForTimeout(150);
@@ -221,8 +226,9 @@ test('speaker gaps remain unlabeled; saved TXT stays downloadable and speaker re
  await add(page,'speaker-gaps-60s.wav');
  await row(page).getByRole('button',{name:'Начать',exact:true}).click();
  await expect(row(page)).toContainText('Текст готов · без спикера: 2 из 3',{timeout:90000});
- await expect(row(page)).toContainText('вне интервалов: 2');
- await expect(row(page)).toContainText('по перекрытию: 1');
+ await diagnostics(page).locator(':scope > summary').click();
+ await expect(diagnostics(page).locator('.diagnostics-metrics')).toContainText('вне интервалов: 2');
+ await expect(diagnostics(page).locator('.diagnostics-metrics')).toContainText('по перекрытию: 1');
  const persisted=(await snapshot(page))[0];
  expect(persisted).toMatchObject({asrComplete:true,nextWindow:3,stage:'partial',diagnostics:{unlabeled:2,uncovered:2,overlapMatches:1}});
  expect(persisted.speakerSegments.map(s=>s.speaker)).toEqual(['Fixture Speaker',undefined,undefined]);
@@ -239,26 +245,28 @@ test('speaker gaps remain unlabeled; saved TXT stays downloadable and speaker re
 });
 
 
-test('compact file controls keep TXT immediately available and reveal advanced tools on demand at desktop and mobile widths',async({page})=>{
+test('diagnostics follow runtime status and keep TXT controls on the file row',async({page})=>{
  await loadFixture(page);
  await add(page,'compact-ui-60s.wav');
  const file=row(page);
+ const panel=diagnostics(page);
+ await expect(page.locator('.runtime-bar + .diagnostics-panel')).toHaveCount(1);
  await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeDisabled();
  await expect(file.getByRole('button',{name:'Начать',exact:true})).toBeVisible();
- await expect(file.getByRole('button',{name:'Проверить аудио'})).toBeHidden();
- await file.locator('.file-tools > summary').click();
- await expect(file.getByRole('button',{name:'Проверить аудио'})).toBeVisible();
- await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeVisible();
- await file.locator('.file-tools > summary').click();
+ await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeHidden();
+ await panel.locator(':scope > summary').click();
+ await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeVisible();
+ await expect(panel.locator('.hardware-acceptance summary')).toContainText('Аппаратная приёмка');
+ await expect(file.getByRole('button',{name:'Проверить аудио'})).toHaveCount(0);
  await file.getByRole('button',{name:'Начать',exact:true}).click();
  await expect(file).toContainText('Текст и спикеры готовы',{timeout:90000});
  await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
- await expect(file.locator('.row-details > summary')).toBeVisible();
- await file.locator('.row-details > summary').click();
- await expect(file.locator('.row-detail-content')).toBeVisible();
- await file.locator('.file-tools > summary').click();
- await expect(file.getByRole('button',{name:'Диагностика JSON'})).toBeVisible();
- await expect(file.getByRole('button',{name:'Бенчмарк JSON'})).toBeVisible();
+ await panel.locator('.diagnostics-log summary').click();
+ await expect(panel.getByRole('list',{name:'События выбранной записи'})).toContainText('Контрольная точка сохранена');
+ const log=await downloadText(page,'Скачать журнал JSON',panel);
+ expect(JSON.parse(log.text).schema).toBe('iscribe.diagnostics.v1');
+ expect(log.text).not.toContain('compact-ui-60s.wav');
+ await expect(panel.getByRole('button',{name:'Бенчмарк JSON'})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
  await expect(file.getByRole('button',{name:'TXT + time',exact:true})).toBeVisible();
  await expect(file.getByRole('button',{name:'TXT + time + speaker',exact:true})).toBeVisible();
@@ -268,5 +276,89 @@ test('compact file controls keep TXT immediately available and reveal advanced t
  await page.reload();
  await expect(row(page)).toHaveCount(1);
  await expect(row(page).getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
- await expect(row(page).getByRole('button',{name:'Проверить аудио'})).toBeHidden();
+ await expect(diagnostics(page).getByRole('button',{name:'Проверить аудио'})).toBeHidden();
+});
+
+
+test('large audio decodes only the current windows and resumes after reload',async({page},testInfo)=>{
+ const path=testInfo.outputPath('streamed-silence.wav');
+ const bytes=129*1024*1024;
+ const header=Buffer.alloc(44);
+ header.write('RIFF',0);header.writeUInt32LE(bytes+36,4);
+ header.write('WAVEfmt ',8);header.writeUInt32LE(16,16);header.writeUInt16LE(1,20);
+ header.writeUInt16LE(1,22);header.writeUInt32LE(16000,24);header.writeUInt32LE(32000,28);
+ header.writeUInt16LE(2,32);header.writeUInt16LE(16,34);header.write('data',36);header.writeUInt32LE(bytes,40);
+ const file=await open(path,'w');
+ try{await file.writeFile(header);await file.truncate(bytes+44)}
+ finally{await file.close()}
+ try{
+  await page.addInitScript(()=>{
+   const read=Blob.prototype.arrayBuffer;
+   Blob.prototype.arrayBuffer=function(){
+    if(this.size>16*1024*1024)throw new Error('Large audio must be read in bounded chunks');
+    return read.call(this);
+   };
+  });
+  await page.reload();
+  await page.evaluate(()=>localStorage.setItem('iscribe-e2e:pauseAfterCalls','2'));
+  await page.locator('input[type="file"]').setInputFiles(path);
+  await expect(row(page)).toContainText('потоковый режим');
+  await row(page).getByRole('button',{name:'Начать',exact:true}).click();
+  await expect.poll(async()=>(await snapshot(page))[0]?.nextWindow).toBe(1);
+  const before=(await snapshot(page))[0];
+  expect(before.duration).toBeGreaterThan(3600);
+  await expect.poll(()=>page.evaluate(()=>Number(localStorage.getItem('iscribe-e2e:transcribeCount')))).toBe(2);
+  await page.reload();
+  await page.evaluate(()=>localStorage.setItem('iscribe-e2e:pauseAfterCalls','4'));
+  await row(page).getByRole('button',{name:'Продолжить'}).click();
+  await expect.poll(async()=>(await snapshot(page))[0]?.nextWindow).toBe(2);
+  const after=(await snapshot(page))[0];
+  expect(after.segments.map(item=>item.start)).toEqual([6,31]);
+  expect(after.segments[0]).toEqual(before.segments[0]);
+  await row(page).getByRole('button',{name:/Убрать из очереди/}).click();
+  await page.getByRole('button',{name:'Отменить задачу'}).click();
+  await expect(row(page).getByRole('button',{name:'Продолжить'})).toBeVisible();
+ }finally{await rm(path,{force:true})}
+});
+
+
+test('FIFO rows move above waiting records, allow removal, and schedule speaker downloads',async({page})=>{
+ await page.evaluate(()=>{
+  localStorage.setItem('iscribe-e2e:speakerModelsMissing','1');
+  localStorage.setItem('iscribe-e2e:pauseAt','2');
+ });
+ await page.reload();
+ const records=['unused-60s.wav','remove-60s.wav','first-60s.wav','second-60s.wav'];
+ await page.locator('input[type=file]').setInputFiles(records.map(name=>({
+  name,mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
+ })));
+ const file=name=>page.getByRole('article',{name,exact:true});
+ const names=()=>row(page).evaluateAll(nodes=>nodes.map(node=>node.getAttribute('aria-label')));
+ const speakers=page.locator('.model.speakers');
+ await file(records[2]).getByRole('button',{name:'Начать',exact:true}).click();
+ await expect(file(records[2]).locator('.file-progress-metrics')).toContainText('2/3 (00:30 / 01:00)');
+ await file(records[1]).getByRole('button',{name:'Начать',exact:true}).click();
+ await file(records[3]).getByRole('button',{name:'Начать',exact:true}).click();
+ expect(await names()).toEqual([records[2],records[1],records[3],records[0]]);
+ await expect(file(records[2]).locator('.file-queue-status')).toContainText('Распознавание');
+ await expect(file(records[1]).locator('.file-queue-number')).toHaveText('2');
+ await expect(file(records[1]).locator('.file-queue-status')).toContainText('Ожидание очереди');
+ await expect(file(records[3]).locator('.file-queue-number')).toHaveText('3');
+ await file(records[1]).getByRole('button',{name:/Убрать из очереди/}).click();
+ await expect(file(records[1])).toContainText('Убрано из очереди');
+ await expect(file(records[3]).locator('.file-queue-number')).toHaveText('2');
+ await expect.poll(async()=>(await snapshot(page)).find(j=>j.name===records[1])?.queueOrder??null).toBeNull();
+ await speakers.getByRole('button',{name:'Скачать комплект'}).click();
+ await expect(speakers.getByRole('button',{name:'После текущей записи'})).toBeDisabled();
+ await page.evaluate(()=>localStorage.removeItem('iscribe-e2e:pauseAt'));
+ await file(records[2]).getByRole('button',{name:/Убрать из очереди/}).click();
+ await page.getByRole('button',{name:'Отменить задачу'}).click();
+ await expect(speakers.getByRole('button',{name:'Скачано'})).toBeDisabled();
+ await expect(file(records[3])).toContainText('Распознано');
+ expect((await names()).at(-1)).toBe(records[3]);
+ await expect(file(records[2]).getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
+ await expect(file(records[0]).getByRole('button',{name:/Удалить запись/})).toBeVisible();
+ await page.reload();
+ await expect(file(records[1]).getByRole('button',{name:'Начать',exact:true})).toBeVisible();
+ await expect(file(records[3])).toContainText('Распознано');
 });

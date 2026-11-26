@@ -5,6 +5,12 @@ PASS means an observed execution, not merely code presence. NOT TESTED is the in
 | Gate | Test | Expected result | Status |
 | --- | --- | --- | --- |
 | CI-1 | npm ci, typecheck, lint, Vitest, build | All commands succeed on current SHA | NOT TESTED on PR-22 |
+| AUDIO-2B | Import a >128 MiB WAV, commit one window, reload and continue | Bounded decode with the original checkpoint and absolute timestamps | Automated in Playwright |
+| PROGRESS-UI | Pause with an active window after two checkpoints | Active window, saved timecodes, model label and animated meter appear in the audio row | Automated in Playwright |
+| QUEUE-UI | Queue recordings in a different order, remove a waiting slot and request speaker preload | Rows follow FIFO, cancel preserves checkpoints, finished records move down, and preload starts after the active job | Automated in Playwright |
+| DIAG-UI | Open Diagnostics below the ML status bar | Hardware acceptance, record log, PCM controls and JSON exports are available there | Automated in Playwright |
+| COLAB-UI | Drive link, demo job failure, reload, retry and TXT | Simulated FIFO, durable browser state and idle shutdown | Automated in Playwright |
+| DIST-1 | Open the single HTML via `file://` in Chromium | UI renders and the embedded Worker reaches ONNX parsing using a deliberately invalid model | Automated in Playwright |
 | CI-2 | Playwright browser acceptance with deterministic ML stub | Reload, checkpoint, TXT exports pass | NOT TESTED on PR-22 |
 | DIAG-1 | Structured event journal and JSON export | Sanitized event log survives checkpoints; no filename/audio/transcript | NOT TESTED on PR-22 |
 | AUDIO-1 | Decoded PCM integrity and standalone inspection | Reject NaN/Infinity, preserve checkpoints, no Whisper started | NOT TESTED on PR-23 |
