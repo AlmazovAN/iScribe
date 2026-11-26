@@ -42,3 +42,10 @@ PR-30 adds unverified hardware evidence and a runbook; it does not establish act
 PR-31 reduces UI density and introduces an automated distribution integrity gate, but a static package PASS cannot guarantee real Whisper inference, ChatGPT Sites publishing, or safe rollback after IndexedDB v2 migration. The footer exposes only the built commit SHA; verify it against the deployed commit. See `docs/PR31_UI_RELEASE_PREP.md`.
 
 No issue above is declared fixed without a reproducible test and observed outcome.
+
+
+## Streaming reliability — PR-07
+- Original 41/154 stall on 63:54 / 146.5 MB recording: cause not confirmed; real-device reproduction and acceptance pending.
+- Foreground timers cannot interrupt a completely blocked main thread or independently bound IndexedDB writes. Native rendering/disposal may retain resources. JS heap is not full process or GPU memory.
+- Strict fallback coverage may reject valid timestamp discontinuities; 5 s split and 20-window rotation need actual MP3 profiling. Fresh-decoder inspection cannot reproduce cumulative resource pressure.
+- Stale metadata that would reset recovery reservations is rejected; reload the stale tab before continuing. Do not clear site data.
