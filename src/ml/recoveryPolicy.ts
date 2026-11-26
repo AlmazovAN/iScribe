@@ -23,9 +23,9 @@ export function preferWasmAfterFailure(backend:string):boolean {
 }
 
 
-// PR-03 permits one fresh decoder per window. PR-04 will introduce the
-// alternative third attempt, rather than repeating identical reads.
-export const MAX_STREAM_WINDOW_RECOVERIES=1;
+// First recovery reopens the decoder; the second uses bounded subwindows.
+export const MAX_STREAM_WINDOW_RECOVERIES=2;
+export const STREAM_SUBWINDOW_SAMPLES=5*16000;
 export const MAX_STREAM_JOB_RECOVERIES=5;
 export type StreamRecoveryState={window:number;windowRecoveries:number;totalRecoveries:number};
 export function reserveStreamRecovery(error:unknown,window:number,previous?:StreamRecoveryState):StreamRecoveryState|null{
