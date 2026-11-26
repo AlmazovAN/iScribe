@@ -6,6 +6,7 @@ import {expectedWindows} from './jobDiagnostics';
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
  'stream-split-start'|'stream-split-part-ready'|'stream-split-ready'|
  'stream-recovery-start'|'stream-reopen-ready'|'stream-recovered'|'stream-recovery-stop'|
@@ -103,6 +104,7 @@ export function diagnosticReport(job:Job){
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck??null,
+  windowInspections:(job.windowInspections??[]).map(r=>({window:r.window,strategy:r.strategy,status:r.status,checkedAt:r.checkedAt,elapsedMs:r.elapsedMs,startSample:r.startSample,endSample:r.endSample,totalWindows:r.totalWindows,completedParts:r.completedParts,errorKind:r.errorKind,failureStage:r.failureStage,report:r.report?{pcmSamples:r.report.pcmSamples,durationSeconds:r.report.durationSeconds,windowCount:r.report.windowCount,quietWindows:r.report.quietWindows,nearClippedWindows:r.report.nearClippedWindows,peakAbsolute:r.report.peakAbsolute}:undefined})),
   speakerAlignment:job.diagnostics?{
    turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,
    invalidTurns:job.diagnostics.invalidTurns??null,mergedTurns:job.diagnostics.mergedTurns??null,
