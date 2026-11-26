@@ -140,7 +140,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}
    </div>}
    <details className="diagnostics-log" onToggle={e=>setLogOpen(e.currentTarget.open)}>
-    <summary>Журнал логирования{events.length>0&&<span>{events.length}</span>}</summary>
+    <summary>Журнал логирования{events.length>0&&<span>{events.length} · {labels[events.at(-1)!.code]??events.at(-1)!.code}</span>}</summary>
     {logOpen&&(events.length>0?<ol aria-label="События выбранной записи">
      {[...events].reverse().map((event,index)=>{
       const details=eventDetails(event);
