@@ -41,6 +41,6 @@ export function resourceReport(value:ResourceObservations|undefined){
  lastPolicy:{requested:p.requested,effective:p.effective,targetWasmThreads:p.targetWasmThreads,targetPrefetchWindows:p.targetPrefetchWindows,
  pauseRatio:p.pauseRatio,maxPauseMs:p.maxPauseMs,reasons:p.reasons},
  pauseCount:value.pauseCount,pauseMs:Math.round(value.pauseMs*100)/100,
- applied:{boundaryPacing:true,wasmThreadPolicy:false,prefetchPolicy:false,backendSelectionPolicy:false},
+ applied:{boundaryPacing:true,wasmThreadPolicy:false,prefetchPolicy:false,backendSelectionPolicy:true},
  limitation:'Thread and prefetch targets are planned, not applied. Counts refer to windows admitted to processing, including interrupted windows. Pause time is observed wall time; not measured CPU/GPU utilization.'};
 }

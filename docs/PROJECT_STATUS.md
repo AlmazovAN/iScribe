@@ -70,3 +70,6 @@ Optional performance profiler in Benchmark JSON and Diagnostics, preserving v1 j
 
 ## PERF-02 (candidate; depends on PERF-01)
 Three existing buttons now persist preference and control checkpoint-boundary pacing; targets for future WASM/prefetch are not runtime settings yet. See [PERF-02](performance/PERF-02.md). No hardware speedup or energy savings claimed.
+
+## PERF-03 (candidate)
+Opt-in local backend comparison and cached selection for medium/max, retaining bounded WASM recovery. See [PERF-03](performance/PERF-03.md). Real hardware results pending.

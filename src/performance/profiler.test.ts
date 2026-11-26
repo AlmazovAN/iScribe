@@ -21,7 +21,7 @@ it('counts actual backend and requested preference separately, sanitizes unknown
  p=observeBackend(p,'private GPU label','private request');
  const r=performanceReport(p)!;
  expect(r.backendAttempts).toEqual({webgpu:1,webnn:0,wasm:1,unknown:1});
- expect(r.requestedBackendAttempts).toEqual({auto:1,wasm:1,unknown:1});
+ expect(r.requestedBackendAttempts).toEqual({auto:1,wasm:1,webgpu:0,webnn:0,unknown:1});
  expect(JSON.stringify(r)).not.toContain('private');
 });
 it('device hints are safe to collect without probing models or GPU adapters',()=>{
