@@ -6,7 +6,7 @@ import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from 
 import {JobStore} from './jobStore';
 import {createJob,isRunning,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
-import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
+import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
@@ -335,7 +335,7 @@ export class JobRunner{
   const streamed=!(audio instanceof Float32Array);
   this.check();this.patch(id,{duration:audio.length/16000});
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
-  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length});
+  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length,decoderId:streamed?audio.decoderId:undefined});
   if(!streamed)await this.inspectPcm(id,audio,this.abort!.signal);this.check();
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
@@ -367,25 +367,43 @@ export class JobRunner{
      // Resume creates a fresh decoder at the last committed IndexedDB window.
      let pcm:Float32Array;
      if(streamed){
+      const fields={window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,decoderId:audio.decoderId,attempt:1,committedWindows:this.job(id).nextWindow};
+      let streamStage:StreamStage='decode',accepting=true;
+      this.set({operation:'Декодирование аудио'});
+      this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage,jsHeapBytes:traceHeapBytes()});
+      await this.persist(id);this.check();
       try{
-       pcm=await withActivityWatchdog(()=>audio.read(window),{
+       pcm=await withActivityWatchdog(()=>audio.read(window,async event=>{
+        if(!accepting||this.cancelled)return;
+        const {code,...detail}=event;streamStage=detail.streamStage??streamStage;
+        if(code==='stream-resample-start')this.set({operation:'Преобразование аудио в PCM 16 кГц'});
+        this.traceEvent(id,code,'audio',{...fields,...detail,jsHeapBytes:traceHeapBytes()});
+        await this.persist(id);
+       }),{
         timeoutMs:this.streamDecodeIdleMs,
         pollMs:Math.min(1000,Math.max(5,this.streamDecodeIdleMs/4)),
         signal:this.abort!.signal,
-        onTimeout:()=>audio.close(),
+        onTimeout:()=>{accepting=false;audio.close()},
         timeoutError:()=>new StreamDecodeStalledError()
        });
       }catch(error){
-       this.traceEvent(id,'window-error','audio',{window:index+1,totalWindows:windows.length,errorKind:traceErrorKind(error),committedWindows:this.job(id).nextWindow});
+       this.traceEvent(id,'window-error','audio',{...fields,streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),jsHeapBytes:traceHeapBytes()});
+       throw error;
+      }finally{accepting=false}
+      this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
+      this.check();this.set({operation:'Проверка PCM'});
+      const validationStarted=benchmarkNow();
+      this.traceEvent(id,'stream-pcm-check-start','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length});
+      await this.persist(id);this.check();
+      try{await inspectDecodedPcm(pcm,{signal:this.abort!.signal})}
+      catch(error){
+       this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,errorKind:traceErrorKind(error)});
        throw error;
       }
+      this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-validationStarted));
+      this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,pcmSamples:pcm.length});
+      this.set({operation:'Распознавание'});
      }else pcm=audio.subarray(window.start,window.end);
-    if(streamed){
-     this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
-     const validationStarted=benchmarkNow();
-     await inspectDecodedPcm(pcm,{signal:this.abort!.signal});
-     this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-validationStarted));
-    }
     let result:TranscriptSegment[]|undefined,successfulAttemptMs=0;
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
@@ -430,12 +448,17 @@ export class JobRunner{
     if(!result)throw new Error('Окно не вернуло результат распознавания.');
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
     const after=checkpointProgress(windows,index+1);
+    if(streamed){
+     this.set({operation:'Сохранение контрольной точки'});
+     this.traceEvent(id,'checkpoint-start','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:this.job(id).nextWindow});
+     await this.persist(id);this.check();
+    }
     const checkpointStarted=benchmarkNow();
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
     const checkpointMs=benchmarkNow()-checkpointStarted;
     const uniqueAudioSeconds=(window.end-(index===0?window.start:windows[index-1].end))/16000;
     this.bench(id,b=>recordWindowCommit(b,index+1,successfulAttemptMs,checkpointMs,uniqueAudioSeconds));
-    this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1});
+    this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1,elapsedMs:checkpointMs});
     this.check();
    }
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
