@@ -48,7 +48,7 @@ export function PerformanceComparisonPanel({busy}:{busy:boolean}){
   <summary>PERF-09 · Сравнение производительности</summary>
   <p>Локально добавьте отдельные JSON каждого прогона. Для старой сборки нужны две выгрузки одного задания; новая включает Benchmark в hardware JSON. Файлы не отправляются в сеть. Сравнение не подтверждает аппаратную приёмку.</p>
   <div className="diagnostics-record">
-   <label>Сценарий <select value={test} onChange={e=>{setTest(e.target.value as PerformanceCase);setSameSource(false)}} disabled={loading}>{PERFORMANCE_CASES.map(c=><option key={c.id} value={c.id}>{c.id} · {c.label}</option>)}</select></label>
+   <label>Сценарий производительности <select value={test} onChange={e=>{setTest(e.target.value as PerformanceCase);setSameSource(false)}} disabled={loading}>{PERFORMANCE_CASES.map(c=><option key={c.id} value={c.id}>{c.id} · {c.label}</option>)}</select></label>
    <label>Группа <select value={group} onChange={e=>setGroup(e.target.value as CompareGroup)} disabled={loading}>{GROUPS.map(g=><option key={g} value={g}>{labels[g]}</option>)}</select></label>
    <label>Запуск <select value={condition} onChange={e=>{setCondition(e.target.value as CompareCondition);setSameSource(false)}} disabled={loading}><option value="cold">Холодный (веса уже в кэше)</option><option value="warm">Тёплый (модель уже активна)</option></select></label>
    <label>Среда <select value={launch} onChange={e=>{setLaunch(e.target.value as Launch);setSameSource(false)}} disabled={loading}><option value="standalone">Монолитный HTML</option><option value="web">Web / локальный сервер</option></select></label>

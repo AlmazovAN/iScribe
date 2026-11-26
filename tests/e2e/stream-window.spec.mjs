@@ -16,7 +16,7 @@ test('real browser WAV decoding at window 41, both strategies and durable JSON',
  await page.goto('/tests/e2e/harness.html');
  await expect(page.getByRole('button',{name:'Выбрать файлы'})).toBeEnabled();
  // 1030 s at 16 kHz: 41 windows, last one exactly 30 seconds.
- await page.locator('input[type="file"]').setInputFiles({name:'synthetic-1030s.wav',mimeType:'audio/wav',buffer:wav(1030,16000)});
+ await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles({name:'synthetic-1030s.wav',mimeType:'audio/wav',buffer:wav(1030,16000)});
  await expect(page.locator('.file-row')).toHaveCount(1);
  await page.locator('.diagnostics-panel > summary').click();
  const probe=page.getByRole('region',{name:'Проверка отдельного окна'});

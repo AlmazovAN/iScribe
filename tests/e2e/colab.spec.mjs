@@ -15,7 +15,7 @@ test('Colab prototype queues Drive files, resumes checkpoints and survives reloa
  await link.fill('https://example.com/a.mp3');
  await page.getByRole('button',{name:'В очередь',exact:true}).click();
  await expect(page.getByRole('alert')).toContainText('Вставьте ссылку на файл Google Drive');
- await page.getByLabel('Сценарий').selectOption('failure');
+ await page.getByLabel('Сценарий',{exact:true}).selectOption('failure');
  await page.getByRole('button',{name:'Добавить пример'}).click();
  await link.fill('https://drive.google.com/file/d/synthetic_example_1234/view');
  await page.getByRole('button',{name:'В очередь',exact:true}).click();
