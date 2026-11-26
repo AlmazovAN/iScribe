@@ -6,11 +6,13 @@ import {expectedWindows} from './jobDiagnostics';
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'stream-read-start'|'stream-samples'|'stream-read-end'|'stream-resample-start'|'stream-resample-end'|'stream-pcm-check-start'|'stream-pcm-check-end'|'checkpoint-start'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-alignment'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
 export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
+export type StreamStage='decode'|'resample'|'pcm-check';
 export type TraceEvent={
  at:number;
  phase:TracePhase;
@@ -23,6 +25,12 @@ export type TraceEvent={
  startSample?:number;
  endSample?:number;
  pcmSamples?:number;
+ decoderId?:number;
+ streamStage?:StreamStage;
+ packets?:number;
+ decodedFrames?:number;
+ sourceSampleRate?:number;
+ jsHeapBytes?:number;
  committedWindows?:number;
  segmentCount?:number;
  unlabeled?:number;
@@ -31,9 +39,13 @@ export type TraceEvent={
  boundaryMatches?:number;
  errorKind?:TraceErrorKind;
 };
-export const MAX_TRACE_EVENTS=256;
+export const MAX_TRACE_EVENTS=4096;
 export function appendTrace(events:readonly TraceEvent[]|undefined,event:TraceEvent):TraceEvent[]{
  return [...(events??[]),event].slice(-MAX_TRACE_EVENTS);
+}
+export function traceHeapBytes():number|undefined{
+ const bytes=(typeof performance==='undefined'?undefined:(performance as Performance&{memory?:{usedJSHeapSize?:number}}).memory?.usedJSHeapSize);
+ return typeof bytes==='number'&&Number.isFinite(bytes)&&bytes>0?bytes:undefined;
 }
 export function traceBackend(raw:unknown):TraceBackend{
  return raw==='webgpu'||raw==='webnn'||raw==='wasm'?raw:'unknown';
