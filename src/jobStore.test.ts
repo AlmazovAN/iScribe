@@ -27,3 +27,18 @@ it('does not persist in-memory-only audio segments when saving a failed job',asy
  expect(restored.segments).toHaveLength(0);
  await store.remove(job.id);
 });
+
+it('rejects stale metadata that would reset durable stream recovery reservations',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'retry-budget.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ const checkpoint={...job,nextWindow:40,segments:[{start:3,end:4,text:'saved'}]};
+ await store.save(checkpoint,file);
+ const budget={window:41,windowRecoveries:2,totalRecoveries:3};
+ await store.save({...checkpoint,streamRecovery:budget});
+ await expect(store.save({...checkpoint,status:'stale queue metadata'})).rejects.toThrow('Лимит восстановления');
+ await expect(store.save({...checkpoint,streamRecovery:{window:41,windowRecoveries:1,totalRecoveries:3}})).rejects.toThrow('Лимит восстановления');
+ const saved=(await store.get(job.id,false))!;
+ expect(saved.streamRecovery).toEqual(budget);
+ expect(saved.nextWindow).toBe(40);
+ expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
+ await store.remove(job.id);
+});
