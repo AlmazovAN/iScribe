@@ -156,3 +156,13 @@ it('does not report a cached active model as ready when it was cancelled during 
  expect(manager.lifecycle.phase).toBe('cancelled');
  expect(progress.mock.calls.some(([,result])=>result.phase==='ready')).toBe(false);
 });
+
+it('requests a specific backend and rejects a different provider',async()=>{
+ state.backends=['webgpu','webnn','wasm'];state.preferences=[];state.disposeCount=0;
+ const manager=new ModelManager();
+ expect((await manager.prepare('whisper-small',{backend:'webgpu'})).backend).toBe('webgpu');
+ expect((await manager.prepare('whisper-small',{backend:'webnn'})).backend).toBe('webnn');
+ await expect(manager.prepare('whisper-small',{backend:'webgpu'})).rejects.toThrow('WEBGPU');
+ expect(state.preferences).toEqual([['webgpu'],['webnn'],['webgpu']]);
+ expect(manager.active).toBeNull();manager.cancel();
+});

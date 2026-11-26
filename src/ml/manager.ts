@@ -42,7 +42,7 @@ export class ModelManager{
  private generation=0;
  private preparingId:WhisperId|null=null;
  // Observed initialization preference, not the actual execution provider.
- requestedBackend:'auto'|'wasm'|'unknown'='unknown';
+ requestedBackend:'auto'|BackendId|'unknown'='unknown';
  // Current window policy for later PERF-03/04 integration. Do not configure
  // backend or WASM threads until those stages verify runtime support.
  resourcePolicy:ResourcePolicy|null=null;
@@ -51,10 +51,11 @@ export class ModelManager{
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};
  onProgress:(text:string,percent:number|null)=>void=()=>{};
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
- async prepare(id:WhisperId,options:{wasmOnly?:boolean}={}):Promise<{cached:boolean,backend:string}>{
+ async prepare(id:WhisperId,options:{wasmOnly?:boolean;backend?:BackendId}={}):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  const required=options.wasmOnly?'wasm':options.backend;
   // Selecting the already active model must not dispose its ONNX session.
-  if(this.active===id&&this.client&&this.capabilities?.active&&(!options.wasmOnly||this.capabilities.active==='wasm')){
+  if(this.active===id&&this.client&&this.capabilities?.active&&(!required||this.capabilities.active===required)){
    // Cache inspection is asynchronous. The active session may be cancelled or
    // replaced before it completes; never resurrect an old ready status.
    const generation=this.generation,client=this.client,backend=this.capabilities.active;
@@ -65,7 +66,7 @@ export class ModelManager{
    return {cached,backend};
   }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
-  this.requestedBackend=options.wasmOnly?'wasm':'auto';
+  this.requestedBackend=required??'auto';
   this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('initializing',id,null);
   let client:EngineClient|null=null;
@@ -106,14 +107,14 @@ export class ModelManager{
    };
    const report=await withActivityWatchdog(heartbeat=>{
     initHeartbeat=heartbeat;
-    return client!.init(id,options.wasmOnly?{backendPreference:['wasm']}:{})
+    return client!.init(id,required?{backendPreference:[required]}:{})
    },{
     timeoutMs:this.initIdleMs,
     pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),
     onTimeout:()=>{expired=true;client?.dispose()}
    });
    if(generation!==this.generation)throw new Error('Операция отменена.');
-   if(options.wasmOnly&&report.active!=='wasm')throw new Error('Безопасное восстановление на WASM недоступно.');
+   if(required&&report.active!==required)throw new Error('Запрошенный backend '+required.toUpperCase()+' недоступен.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
    this.active=id;this.capabilities=report;
    progress('checking');

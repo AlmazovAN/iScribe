@@ -53,3 +53,5 @@ No issue above is declared fixed without a reproducible test and observed outcom
 PERF-01: browser resource hints and host wall-clock measurements are not CPU/GPU utilization or full process memory; effective WASM threads and transfer time remain unknown. See [PERF-01](performance/PERF-01.md).
 
 PERF-02: browser device memory is a coarse hint, not free memory. Mode pacing is implemented; backend, thread and prefetch optimization remains pending PERF-03–05. The maximum mode does not bypass safeguards.
+
+PERF-03: provider-specific dtype remains controlled by the engine; single-fragment exact text agreement is not a quality guarantee. GPU adapter preference and GPU buffer residency have not been implemented. Calibration may need additional model files and should be run on representative speech.

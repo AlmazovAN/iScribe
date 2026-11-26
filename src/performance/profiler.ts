@@ -3,7 +3,7 @@
 export const perfTimingKeys=['streamOpen','fullAudioPreparation','streamDecode','streamResample','metadataPersistence','pcmCopy','betweenAsrAttempts','workerRecovery','speakerPass'] as const;
 export type PerfTimingKey=typeof perfTimingKeys[number];
 export type BackendObservation='webgpu'|'webnn'|'wasm'|'unknown';
-export type BackendRequest='auto'|'wasm'|'unknown';
+export type BackendRequest='auto'|'wasm'|'webgpu'|'webnn'|'unknown';
 export type DeviceHints={
  logicalProcessors:number|null;deviceMemoryGiB:number|null;
  webGpuApi:boolean|null;webNnApi:boolean|null;wasmSimd:boolean|null;
@@ -44,7 +44,7 @@ export function addPerfTiming(profile:PerformanceProfile,key:PerfTimingKey,ms:nu
 }
 export function observeBackend(profile:PerformanceProfile,actual:unknown,requested:unknown):PerformanceProfile{
  const backend:BackendObservation=actual==='webgpu'||actual==='webnn'||actual==='wasm'?actual:'unknown';
- const request:BackendRequest=requested==='auto'||requested==='wasm'?requested:'unknown';
+ const request:BackendRequest=requested==='auto'||requested==='wasm'||requested==='webgpu'||requested==='webnn'?requested:'unknown';
  return {...profile,backendAttempts:{...profile.backendAttempts,[backend]:(profile.backendAttempts[backend]??0)+1},
   requestedBackendAttempts:{...profile.requestedBackendAttempts,[request]:(profile.requestedBackendAttempts[request]??0)+1}};
 }
@@ -62,7 +62,7 @@ export function performanceReport(profile:PerformanceProfile|undefined){
   effectiveWasmThreads:null,cpuUtilizationPercent:null,gpuUtilizationPercent:null,systemRamBytes:null,gpuMemoryBytes:null},
   timingsMs:Object.fromEntries(perfTimingKeys.map(key=>{const t=profile.timings[key];return [key,t?{count:numeric(t.count),totalMs:numeric(t.totalMs),maxMs:numeric(t.maxMs)}:null]})),
   backendAttempts:{webgpu:numeric(profile.backendAttempts.webgpu??0),webnn:numeric(profile.backendAttempts.webnn??0),wasm:numeric(profile.backendAttempts.wasm??0),unknown:numeric(profile.backendAttempts.unknown??0)},
-  requestedBackendAttempts:{auto:numeric(profile.requestedBackendAttempts.auto??0),wasm:numeric(profile.requestedBackendAttempts.wasm??0),unknown:numeric(profile.requestedBackendAttempts.unknown??0)},
+  requestedBackendAttempts:{auto:numeric(profile.requestedBackendAttempts.auto??0),wasm:numeric(profile.requestedBackendAttempts.wasm??0),webgpu:numeric(profile.requestedBackendAttempts.webgpu??0),webnn:numeric(profile.requestedBackendAttempts.webnn??0),unknown:numeric(profile.requestedBackendAttempts.unknown??0)},
   workerTransferMs:null,
   limitations:['Device hints describe the first profiled run; API presence is not adapter or model compatibility.',
    'WASM thread prerequisites and configured threads are not measured effective threads. Device memory is a coarse browser hint, not free RAM.',

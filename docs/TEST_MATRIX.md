@@ -77,3 +77,10 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-02-U | Persistent profile, conservative targets, cancellable pacing and recovery cap | NOT TESTED |
 | PERF-02-R | Mode switch only at next window; previous checkpoints remain intact | NOT TESTED |
 | PERF-02-H | Real-device mode comparison | NOT TESTED |
+
+## PERF-03
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-03-U | Strict provider requests, no disguised fallback, cached choice expiry and invalidation | NOT TESTED |
+| PERF-03-H | Same real speech fragment on supported providers; compare time and quality externally | NOT TESTED |
