@@ -79,3 +79,6 @@ WASM thread configuration wired into ASR Worker; optional isolated loopback prev
 
 ## PERF-05 (candidate; depends on PERF-04)
 Bounded streamed-audio lookahead integrated with Resource Manager, no parallel decoder reads or speculative storage writes. See [PERF-05](performance/PERF-05.md). Real hardware speedup pending.
+
+## PERF-06 (candidate; depends on PERF-05)
+Direct resampling-buffer mixing, bounded reusable ASR dispatch storage, explicit ASR Worker cleanup and conservative idle release. See [PERF-06](performance/PERF-06.md). Actual RAM savings pending hardware validation.

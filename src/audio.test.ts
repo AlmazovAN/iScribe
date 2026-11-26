@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {mixMono,validateFile,MAX_FILE_BYTES,STREAM_AUDIO_BYTES,usesStreamedAudio} from './audio';
+import {mixMono,mixMonoInto,validateFile,MAX_FILE_BYTES,STREAM_AUDIO_BYTES,usesStreamedAudio} from './audio';
 it('averages channels without changing sample positions or mutating input',()=>{
  const left=Float32Array.of(1,0,-1),right=Float32Array.of(0,1,1);
  expect([...mixMono([left,right])]).toEqual([.5,.5,0]);expect([...left]).toEqual([1,0,-1]);
@@ -62,4 +62,31 @@ it('accepts audio up to 500 MiB and streams only above 128 MiB',()=>{
  expect(()=>validateFile({name:'meeting.mp3',size:MAX_FILE_BYTES})).not.toThrow();
  expect(usesStreamedAudio(STREAM_AUDIO_BYTES)).toBe(false);
  expect(usesStreamedAudio(STREAM_AUDIO_BYTES+1)).toBe(true);
+});
+
+it('mixes directly into the resampling buffer with identical Float32 accumulation',()=>{
+ const channels=[Float32Array.of(.1,.2,-.3),Float32Array.of(.4,-.2,.6),Float32Array.of(.9,-.3,.1)];
+ const target=new Float32Array(3).fill(99);
+ mixMonoInto(channels,target);expect([...target]).toEqual([...mixMono(channels)]);
+ expect(()=>mixMonoInto(channels,channels[0])).toThrow();
+});
+it.each([1,2])('uses one source AudioBuffer for non-16 kHz resampling (%s channels)',async count=>{
+ const {vi}=await import('vitest');
+ const {decodeAudio}=await import('./audio');
+ const data=[new Float32Array(48000).fill(.25),new Float32Array(48000).fill(.75)];
+ const decoded={duration:1,length:48000,numberOfChannels:count,sampleRate:48000,getChannelData:(i:number)=>data[i]};
+ const mono=new Float32Array(48000),result=new Float32Array(16000);
+ const buffer={getChannelData:()=>mono},createBuffer=vi.fn(()=>buffer),close=vi.fn(async()=>{});
+ const source={buffer:null as unknown,connect:vi.fn(),start:vi.fn(),disconnect:vi.fn()};
+ vi.stubGlobal('AudioContext',class{decodeAudioData=async()=>decoded;close=close});
+ vi.stubGlobal('OfflineAudioContext',class{
+  destination={};createBuffer=createBuffer;createBufferSource=()=>source;startRendering=async()=>({getChannelData:()=>result});
+ });
+ try{
+  expect(await decodeAudio(new File(['audio'],'resample.wav'))).toBe(result);
+  expect(source.buffer).toBe(count===1?decoded:buffer);
+  expect(createBuffer).toHaveBeenCalledTimes(count===1?0:1);
+  if(count===2)expect(mono[123]).toBe(.5);
+  expect(source.disconnect).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
+ }finally{vi.unstubAllGlobals()}
 });

@@ -111,6 +111,11 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
      <p>Целевые параметры: WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
      <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы, выбор проверенного бэкенда в начале задания и настройка потоков WASM. Предварительная подготовка применяется для потокового аудио в пределах профиля.</p>
     </details>}
+    {benchmark?.memoryOptimization&&<details aria-label="Memory Optimization"><summary>Memory Optimization</summary>
+     <p>Новых буферов ASR: {benchmark.memoryOptimization.payloadAllocations} · повторно использовано: {benchmark.memoryOptimization.payloadReuses} · отсоединено при успешной передаче: {benchmark.memoryOptimization.detachedPayloads}.</p>
+     <p>Скопировано PCM: {Math.round(benchmark.memoryOptimization.payloadCopyBytes/1000)} кб · наибольший буфер передачи: {Math.round(benchmark.memoryOptimization.peakPayloadBytes/1000)} кб.</p>
+     <p>Освобождений модели: {benchmark.memoryOptimization.idleModelReleases} · ошибок освобождения: {benchmark.memoryOptimization.releaseFailures}. Эти счётчики не измеряют полное потребление RAM/VRAM.</p>
+    </details>}
     {benchmark?.audioPipeline&&<details aria-label="Audio Pipeline"><summary>Audio Pipeline</summary>
      <p>Окон запланировано: {benchmark.audioPipeline.scheduled} · использовано: {benchmark.audioPipeline.consumed} · готовы к моменту запроса: {benchmark.audioPipeline.readyHits} · ошибки: {benchmark.audioPipeline.failed}.</p>
      <p>Максимальная глубина очереди: {benchmark.audioPipeline.peakQueued} · ожидание буфера: {benchmark.audioPipeline.waitMs} мс · подготовка использованных окон: {benchmark.audioPipeline.preparedMs} мс.</p>

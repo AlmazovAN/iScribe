@@ -17,6 +17,7 @@ import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,em
 import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
 import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE_MS,candidates,chooseBackend,isBackend,normalizedText,resourceFailure,type BackendCalibration,type CalibrationSample} from './performance/backendPolicy';
 import {observeWasmThreads} from './performance/wasmThreads';
+import {AsrPayloadPool,emptyMemoryObservations,observePayload,shouldReleaseAfterQueue} from './performance/memoryPolicy';
 import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
@@ -372,6 +373,14 @@ export class JobRunner{
    });
   }else await task();
  }
+ private releaseIdleModel(id:string){
+  try{
+   if(this.manager.releaseIdle?.())this.bench(id,b=>{const memory=b.memory??emptyMemoryObservations();return {...b,memory:{...memory,idleModelReleases:memory.idleModelReleases+1}}});
+  }catch{
+   this.bench(id,b=>{const memory=b.memory??emptyMemoryObservations();return {...b,memory:{...memory,releaseFailures:memory.releaseFailures+1}}});
+   this.set({notice:'Не удалось полностью подтвердить освобождение модели. Сохранённый текст доступен.'});
+  }
+ }
  private async drain(){
   if(this.state.busy)return;
   this.set({busy:true});
@@ -393,9 +402,11 @@ export class JobRunner{
      const runStarted=benchmarkNow();
      try{
       await this.execute(id);
+      if(this.queue.length<=1&&shouldReleaseAfterQueue(this.resources.selected,collectDeviceHints().deviceMemoryGiB,this.manager.active))this.releaseIdleModel(id);
       this.bench(id,b=>addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted));
       await this.persist(id);
      }catch(error){
+      this.releaseIdleModel(id);
       this.bench(id,b=>({...addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted),failedRuns:b.failedRuns+1}));
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
@@ -656,7 +667,8 @@ export class JobRunner{
   const baseline=this.manager.capabilities?.active??this.state.backend;
   if(!isBackend(baseline)||pcm.length<16000)return;
   const signal=this.abort!.signal,started=benchmarkNow();
-  const sample=pcm.slice(0,Math.min(pcm.length,BACKEND_CALIBRATION_SAMPLE_LIMIT));
+  // Keep the authoritative PCM; each calibration request still receives a private copy.
+  const sample=pcm.subarray(0,Math.min(pcm.length,BACKEND_CALIBRATION_SAMPLE_LIMIT));
   const samples:CalibrationSample[]=[];let reference='',chosen=baseline;
   this.set({operation:'Сравнение вычислительных бэкендов'});
   // Each stage has a foreground budget independent of inference heartbeats.
@@ -733,6 +745,7 @@ export class JobRunner{
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    let previousAttemptEnd:number|undefined,previousInferenceMs=0;
    const pipeline=session?new AudioPipeline<PreparedStreamWindow>(this.abort!.signal):undefined;
+   const payloadPool=new AsrPayloadPool();
    try{for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
     // Apply the chosen profile only before a new, uncommitted window.
@@ -812,6 +825,7 @@ export class JobRunner{
      if(previousAttemptEnd!==undefined)this.perf(id,'betweenAsrAttempts',attemptMeasured-previousAttemptEnd);
      this.bench(id,b=>({...b,profiler:observeBackend(b.profiler??emptyPerformanceProfile(),attemptBackend,this.manager.requestedBackend),
       ...(attemptBackend==='wasm'&&this.manager.wasmThreadConfiguration?{wasmThreads:observeWasmThreads(b.wasmThreads,this.manager.wasmThreadConfiguration)}:{})}));
+     let dispatched:Float32Array<ArrayBuffer>|undefined;
      try{
       try{
        result=await withActivityWatchdog(heartbeat=>{
@@ -824,8 +838,9 @@ export class JobRunner{
          const added=pipeline.fill(index+1,depth,(next,signal)=>prepareStreamWindow(decoder,windows[next],next,signal,{decode:this.streamDecodeIdleMs,resample:this.streamResampleIdleMs,pcm:this.streamPcmIdleMs}));
          if(added)this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,scheduled:prev.scheduled+added,peakQueued:Math.max(prev.peakQueued,pipeline.size)}}});
         }
-        const copyStarted=benchmarkNow();const payload=pcm.slice();
+        const copyStarted=benchmarkNow();const {payload,reused}=payloadPool.acquire(pcm);dispatched=payload;
         this.perf(id,'pcmCopy',benchmarkNow()-copyStarted);
+        this.bench(id,b=>({...b,memory:observePayload(b.memory,reused,payload.byteLength)}));
         return this.manager.transcribe(payload,false,()=>{},params.language);
        },{
         timeoutMs:this.asrIdleMs,pollMs:Math.min(1000,Math.max(5,this.asrIdleMs/4)),signal:this.abort!.signal,
@@ -833,11 +848,16 @@ export class JobRunner{
        });
       }finally{previousAttemptEnd=benchmarkNow();this.asrHeartbeat=null}
       this.check();this.patch(id,{error:undefined});
+      if(dispatched&&payloadPool.retain(dispatched)==='detached')this.bench(id,b=>{const memory=b.memory??emptyMemoryObservations();return {...b,memory:{...memory,detachedPayloads:memory.detachedPayloads+1}}});
+      dispatched=undefined;
       successfulAttemptMs=benchmarkNow()-attemptMeasured;
       this.bench(id,b=>({...addBenchmarkTiming(b,'asrAttemptMs',successfulAttemptMs),attempts:b.attempts+1}));
       this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:result.length,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
       break;
      }catch(error){
+      // A timed-out or rejected request may still own its dispatch buffer.
+      // Never retain/reuse it; the original window remains intact for retry.
+      payloadPool.clear();dispatched=undefined;
       const elapsed=benchmarkNow()-attemptMeasured;
       this.bench(id,b=>({...addBenchmarkTiming(b,'asrAttemptMs',elapsed),attempts:b.attempts+1,failedAttempts:b.failedAttempts+1}));
       this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
@@ -877,7 +897,7 @@ export class JobRunner{
     previousInferenceMs=successfulAttemptMs;
     this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1,elapsedMs:checkpointMs});
     this.check();
-   }}finally{await pipeline?.dispose()}
+   }}finally{payloadPool.clear();await pipeline?.dispose()}
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
