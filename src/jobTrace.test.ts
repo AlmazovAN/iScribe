@@ -34,3 +34,16 @@ it('does not leak arbitrary error codes, names, messages or backend strings',()=
  expect(traceBackend('GPU device model USERNAME')).toBe('unknown');
  expect(traceBackend('wasm')).toBe('wasm');
 });
+
+
+it('retains a complete 154-window diagnostic sequence within the bounded journal',()=>{
+ let trace:ReturnType<typeof appendTrace>=[];
+ for(let window=1;window<=154;window++){
+  for(const code of ['stream-read-start','stream-read-end','stream-resample-start','stream-resample-end','stream-pcm-check-start','stream-pcm-check-end','window-attempt','window-result','checkpoint-start','checkpoint-committed'] as const){
+   trace=appendTrace(trace,{at:window,phase:'audio',code,window,decoderId:1});
+  }
+ }
+ expect(trace).toHaveLength(1540);
+ expect(trace[0]).toMatchObject({window:1,code:'stream-read-start'});
+ expect(trace.at(-1)).toMatchObject({window:154,code:'checkpoint-committed'});
+});
