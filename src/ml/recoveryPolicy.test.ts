@@ -32,14 +32,16 @@ it('retries known failed Worker/inference errors and prefers WASM over GPU',()=>
 });
 
 
-it('allows only one fresh stream decoder per window and five per job',()=>{
+it('allows two different recoveries per window and five total per job',()=>{
  const fault=new StreamDecodeStalledError();
  let state=reserveStreamRecovery(fault,41);
  expect(state).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
+ state=reserveStreamRecovery(fault,41,state!);
+ expect(state).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
  expect(reserveStreamRecovery(fault,41,state!)).toBeNull();
- for(let window=42;window<=45;window++)state=reserveStreamRecovery(fault,window,state!);
+ for(let window=42;window<=44;window++)state=reserveStreamRecovery(fault,window,state!);
  expect(state?.totalRecoveries).toBe(MAX_STREAM_JOB_RECOVERIES);
- expect(reserveStreamRecovery(fault,46,state!)).toBeNull();
+ expect(reserveStreamRecovery(fault,45,state!)).toBeNull();
 });
 it('never retries opening, PCM, cancellation, storage or arbitrary errors',()=>{
  for(const error of [new StreamDecodeStalledError('open'),new StreamDecodeStalledError('pcm-check'),new Error('storage'),new Error('decode'),new DOMException('aborted','AbortError')])
