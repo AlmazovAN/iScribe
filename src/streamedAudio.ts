@@ -3,10 +3,18 @@ import {inspectDecodedPcm,PCM_SAMPLE_RATE,type AudioInspectionReport} from './au
 import {audioWindows} from './jobs';
 import type {AudioWindow} from './recognitionProgress';
 
+import type {TraceEvent} from './jobTrace';
+
+export type StreamReadEvent=Pick<TraceEvent,'elapsedMs'|'packets'|'decodedFrames'|'sourceSampleRate'|'pcmSamples'|'streamStage'>&{
+ code:'stream-samples'|'stream-read-end'|'stream-resample-start'|'stream-resample-end';
+};
+export type StreamReadObserver=(event:StreamReadEvent)=>void|Promise<void>;
+let nextDecoderId=0;
 const formats=[MP3,WAVE,MP4,QTFF,OGG,WEBM,ADTS,FLAC];
 
 export async function openStreamedAudio(file:File,signal?:AbortSignal){
  signal?.throwIfAborted();
+ const decoderId=++nextDecoderId;
  const input=new Input({source:new BlobSource(file),formats});
  let closed=false;
  const close=()=>{
@@ -28,7 +36,7 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    throw new Error('Некорректные параметры аудиодорожки.');
   const sink=new AudioSampleSink(track);
 
-  async function read(window:AudioWindow):Promise<Float32Array>{
+  async function read(window:AudioWindow,observe?:StreamReadObserver):Promise<Float32Array>{
    if(closed)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
    signal?.throwIfAborted();
    // Decode a little before the boundary to warm up the decoder and resampler.
@@ -36,10 +44,13 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    const startTime=origin+start/PCM_SAMPLE_RATE;
    const endTime=origin+window.end/PCM_SAMPLE_RATE;
    const mono=new Float32Array(Math.ceil((window.end-start)*rate/PCM_SAMPLE_RATE));
-   let covered=false;
+   let covered=false,packets=0,decodedFrames=0;
+   const readStarted=performance.now();let lastSampleTrace=readStarted;
+   const checkOpen=()=>{signal?.throwIfAborted();if(closed)throw new Error('Потоковый декодер закрыт.');};
+   const stats=()=>({packets,decodedFrames,sourceSampleRate:rate,elapsedMs:performance.now()-readStarted});
    for await(const sample of sink.samples(startTime,endTime)){
     try{
-     signal?.throwIfAborted();
+     checkOpen();packets++;decodedFrames+=sample.numberOfFrames;
      if(sample.sampleRate!==rate||!Number.isFinite(sample.timestamp)||sample.numberOfChannels<1)
       throw new Error('Аудиодорожка меняет формат внутри записи.');
      const offset=Math.round((sample.timestamp-startTime)*rate);
@@ -53,20 +64,29 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
       for(let i=0;i<plane.length;i++)mono[offset+first+i]+=plane[i]/sample.numberOfChannels;
      }
     }finally{sample.close()}
+    if(observe&&performance.now()-lastSampleTrace>=5000){
+     lastSampleTrace=performance.now();await observe({code:'stream-samples',streamStage:'decode',...stats()});checkOpen();
+    }
    }
+   checkOpen();
+   if(observe){await observe({code:'stream-read-end',streamStage:'decode',...stats()});checkOpen();}
    if(!covered)throw new Error('Декодер не вернул данные для текущего окна.');
    const outputLength=window.end-start;
    if(rate===PCM_SAMPLE_RATE)return mono.subarray(window.start-start,outputLength);
+   const resampleStarted=performance.now();
+   if(observe){await observe({code:'stream-resample-start',streamStage:'resample',sourceSampleRate:rate});checkOpen();}
    const context=new OfflineAudioContext(1,outputLength,PCM_SAMPLE_RATE);
    const buffer=context.createBuffer(1,mono.length,rate);
    buffer.copyToChannel(mono,0);
    const node=context.createBufferSource();
    node.buffer=buffer;node.connect(context.destination);node.start();
    const result=await context.startRendering();
-   signal?.throwIfAborted();
-   return result.getChannelData(0).subarray(window.start-start,outputLength);
+   checkOpen();
+   const pcm=result.getChannelData(0).subarray(window.start-start,outputLength);
+   if(observe){await observe({code:'stream-resample-end',streamStage:'resample',elapsedMs:performance.now()-resampleStarted,pcmSamples:pcm.length,sourceSampleRate:rate});checkOpen();}
+   return pcm;
   }
-  return {length,read,close};
+  return {length,read,close,decoderId};
  }catch(error){close();throw error}
 }
 
