@@ -27,3 +27,12 @@ it('caches choice by model/language/build, invalidates and expires',()=>{
  expect(resourceFailure(new Error('out of memory'))).toBe(true);
  expect(resourceFailure(new Error('worker failed'))).toBe(false);
 });
+
+it('does not reuse a calibration measured with a different WASM thread target',()=>{
+ const policy=new BackendPolicy(null,'build1',()=>100);
+ policy.remember('whisper-small','ru','wasm',4);
+ expect(policy.preferred('whisper-small','ru','max',hints,4)).toBe('wasm');
+ expect(policy.preferred('whisper-small','ru','max',hints,7)).toBeUndefined();
+ policy.invalidate('whisper-small','ru','wasm');
+ expect(policy.preferred('whisper-small','ru','max',hints,4)).toBeUndefined();
+});

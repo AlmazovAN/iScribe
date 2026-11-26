@@ -108,8 +108,13 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {benchmark?.resourceManagement&&<details aria-label="Resource Manager"><summary>Resource Manager</summary>
      <p>Запрошено: {performanceLabels[benchmark.resourceManagement.lastPolicy.requested]} · применено: {performanceLabels[benchmark.resourceManagement.lastPolicy.effective]}</p>
      <p>Окон допущено: экономичная {benchmark.resourceManagement.windowCounts.eco}, средняя {benchmark.resourceManagement.windowCounts.medium}, максимальная {benchmark.resourceManagement.windowCounts.max}. Паузы: {benchmark.resourceManagement.pauseCount} · {benchmark.resourceManagement.pauseMs} мс.</p>
-     <p>Целевые параметры (пока не применяются): WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
-     <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы и выбор проверенного бэкенда в начале задания. Потоки и буфер будут подключены в PERF-04–05.</p>
+     <p>Целевые параметры: WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
+     <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы, выбор проверенного бэкенда в начале задания и настройка потоков WASM. Буфер будет подключён в PERF-05.</p>
+    </details>}
+    {benchmark?.wasmThreads&&<details aria-label="Потоки WASM"><summary>Потоки WASM</summary>
+     <p>Последняя попытка: запрошено {benchmark.wasmThreads.last.requested} · подтверждено Worker (настройка ONNX) {benchmark.wasmThreads.last.configured??'недоступно'} · реально активных потоков: недоступно.</p>
+     <p>Попыток WASM: {benchmark.wasmThreads.attempts} · без подтверждения настройки: {benchmark.wasmThreads.unconfirmed}.</p>
+     <p>После сбоя восстановление на WASM ограничено одним потоком до конца задания. Монолитный HTML также ограничен одним потоком.</p>
     </details>}
     {benchmark?.backendCalibration&&<details aria-label="Сравнение бэкендов"><summary>Сравнение бэкендов</summary>
      <p>Исходный: {benchmark.backendCalibration.baseline.toUpperCase()} · выбран: {benchmark.backendCalibration.chosen.toUpperCase()} · фрагмент: {benchmark.backendCalibration.sampleSeconds.toFixed(1)} с.</p>

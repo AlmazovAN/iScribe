@@ -2,6 +2,7 @@ import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTu
 import EngineWorker from './worker?worker';
 import {postSpeakerAudio} from './workerTransfer';
 import type {ResourcePolicy} from '../performance/types';
+import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,type WasmThreadConfiguration} from '../performance/wasmThreads';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
@@ -43,9 +44,17 @@ export class ModelManager{
  private preparingId:WhisperId|null=null;
  // Observed initialization preference, not the actual execution provider.
  requestedBackend:'auto'|BackendId|'unknown'='unknown';
- // Current window policy for later PERF-03/04 integration. Do not configure
- // backend or WASM threads until those stages verify runtime support.
+ // Policy is applied only before initialization or at a committed boundary.
  resourcePolicy:ResourcePolicy|null=null;
+ forceSingleWasmThread=false;
+ private sessionWasmThreads:number|null=null;
+ wasmThreadConfiguration:WasmThreadConfiguration|null=null;
+ get targetWasmThreads():number{
+  return resolveWasmThreads(this.forceSingleWasmThread?1:this.resourcePolicy?.targetWasmThreads??1,localWasmThreadEnvironment(import.meta.env.MODE==='standalone'));
+ }
+ needsWasmThreadRefresh():boolean{
+  return this.active!==null&&this.capabilities?.active==='wasm'&&this.sessionWasmThreads!==this.targetWasmThreads;
+ }
  active:WhisperId|null=null;
  capabilities:CapabilityReport|null=null;
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};
@@ -54,8 +63,9 @@ export class ModelManager{
  async prepare(id:WhisperId,options:{wasmOnly?:boolean;backend?:BackendId}={}):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   const required=options.wasmOnly?'wasm':options.backend;
+  const targetThreads=this.targetWasmThreads;
   // Selecting the already active model must not dispose its ONNX session.
-  if(this.active===id&&this.client&&this.capabilities?.active&&(!required||this.capabilities.active===required)){
+  if(this.active===id&&this.client&&this.capabilities?.active&&(!required||this.capabilities.active===required)&&(this.capabilities.active!=='wasm'||this.sessionWasmThreads===targetThreads)){
    // Cache inspection is asynchronous. The active session may be cancelled or
    // replaced before it completes; never resurrect an old ready status.
    const generation=this.generation,client=this.client,backend=this.capabilities.active;
@@ -67,7 +77,8 @@ export class ModelManager{
   }
   this.busy=true;this.preparingId=id;const generation=++this.generation;
   this.requestedBackend=required??'auto';
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
+  this.sessionWasmThreads=targetThreads;this.wasmThreadConfiguration={requested:targetThreads,configured:null};
   this.phase('initializing',id,null);
   let client:EngineClient|null=null;
   let cachedBefore=false,requests=0,loadedBytes=0,totalBytes=0;
@@ -86,14 +97,21 @@ export class ModelManager{
     const worker=createEngineWorker();
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;
-     if(generation!==this.generation||!d||typeof d!=='object'||!('type' in d)||d.type!=='iscribe:model-http-request'||
-        !('repo' in d)||d.repo!==repos[id])return;
-     if(expired)return;
+     if(generation!==this.generation||expired||!d||typeof d!=='object'||!('type' in d))return;
+     if(d.type==='iscribe:wasm-thread-config'){
+      const verified=validWasmConfiguration(d,targetThreads);
+      if(verified)this.wasmThreadConfiguration=verified;
+      return;
+     }
+     if(d.type!=='iscribe:model-http-request'||!('repo' in d)||d.repo!==repos[id])return;
      requests++;
      initHeartbeat?.();
      progress('loading');
      this.onProgress('Чтение файлов модели (из кэша или сети)…',null);
     });
+    // Worker FIFO: configuration precedes EngineClient.init. Optional call
+    // also tolerates deterministic Worker test doubles without postMessage.
+    worker.postMessage?.({type:'iscribe:wasm-threads',requested:targetThreads});
     return worker;
    });
    this.client=client;
@@ -127,7 +145,7 @@ export class ModelManager{
    progress('error',error instanceof Error?error.message:String(error));
    if(generation===this.generation)this.phase('error',id,null);
    client?.dispose();
-   if(this.client===client){this.client=null;this.active=null;this.capabilities=null}
+   if(this.client===client){this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null}
    throw error;
   }finally{initHeartbeat=null;if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
@@ -136,7 +154,7 @@ export class ModelManager{
   // requests in that worker are not safe to reuse on the next attempt.
   if(this.busy)throw new Error('Невозможно восстановить Worker во время другой операции.');
   this.phase('recovering',id,null);
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   const prepared=await this.prepare(id,{wasmOnly});
   const backend=prepared.backend;
   if(backend!=='webnn'&&backend!=='webgpu'&&backend!=='wasm')throw new Error('Неизвестный backend после восстановления.');
@@ -149,7 +167,7 @@ export class ModelManager{
  async preloadSpeakers(){
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   this.phase('preloading-speakers',null,null);
   let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
@@ -206,7 +224,7 @@ export class ModelManager{
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
   try{
@@ -238,5 +256,5 @@ export class ModelManager{
   }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
- cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false;this.phase('cancelled',null,null)}
+ cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;this.busy=false;this.phase('cancelled',null,null)}
 }

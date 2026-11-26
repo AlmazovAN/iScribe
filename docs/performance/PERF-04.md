@@ -1,0 +1,11 @@
+# PERF-04 — WASM Multithreading
+
+ASR Workers receive the selected thread target before EngineClient.init. Both host and Worker clamp the target to 1–8 threads, reserve one logical processor when possible, and require crossOriginIsolated, SharedArrayBuffer and Atomics; standalone stays single-threaded. Worker acknowledges the value written to Transformers ONNX env (not actual pool size). Existing model IDs, provider-specific dtype and speech generation settings are unchanged. Speaker Workers retain their prior settings until PERF-08.
+
+The selected profile is applied before model preparation. A running WASM session is replaced only at the next uncommitted audio window if its requested thread target changes; the previous checkpoint remains authoritative. GPU sessions are not replaced solely for thread changes. Existing recoverable WASM fallback forces one thread for the remainder of the run, without adding retry attempts. Initialization failure stops the job unless existing backend fallback applies. No unbounded retries. Backend calibration cache is scoped by build, model, language and requested WASM thread target; v1 choices are not reused.
+
+## Launch
+Existing standalone: npm run build, open dist/iScribe.html; one WASM thread.
+Optional isolated local launch: npm run build:web then npm run serve:isolated, open http://127.0.0.1:4175/. The loopback server sets COOP same-origin and COEP require-corp. It serves the local distribution only; audio stays in the browser. Model downloads may still require network. Do not disable browser security controls. Browser data (jobs, cache and preferences) is origin-scoped; the new port is a separate origin from standalone or existing site. Export old results before switching; no migration is performed.
+
+Diagnostics report requested and Worker-confirmed configuration for WASM attempts; actual ORT active threads, CPU load and full memory are unknown. Tests cover clamping, acknowledgment validation, mock session refresh, cache scoping and real browser isolation prerequisites (not inference). Real tests with 1/2/4/6/8 threads, time, RAM and accuracy remain pending PERF-09. No speedup claimed. Full CI and hardware status NOT TESTED until observed.

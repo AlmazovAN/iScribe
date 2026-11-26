@@ -6,11 +6,17 @@ const state=vi.hoisted(()=>({
  stallInit:false,
  pendingInit:false,
  resolveInit:null as null|((value:{active:string})=>void),
- terminatedWorkers:0
+ terminatedWorkers:0,
+ threadRequests:[] as number[]
 }));
 vi.mock('./worker?worker',()=>({default:class{
- addEventListener(){/* Worker listener for lifecycle tests. */}
- postMessage(){/* Intentionally silent speaker worker. */}
+ private handler:((event:MessageEvent<unknown>)=>void)|undefined;
+ addEventListener(type:string,handler:(event:MessageEvent<unknown>)=>void){if(type==='message')this.handler=handler}
+ postMessage(data:{type?:string;requested?:number}){
+  if(data.type!=='iscribe:wasm-threads'||typeof data.requested!=='number')return;
+  state.threadRequests.push(data.requested);
+  this.handler?.({data:{type:'iscribe:wasm-thread-config',requested:data.requested,configured:data.requested}} as MessageEvent<unknown>);
+ }
  terminate(){state.terminatedWorkers++}
 }}));
 vi.mock('@yourdevice/engine',()=>({
@@ -165,4 +171,21 @@ it('requests a specific backend and rejects a different provider',async()=>{
  await expect(manager.prepare('whisper-small',{backend:'webgpu'})).rejects.toThrow('WEBGPU');
  expect(state.preferences).toEqual([['webgpu'],['webnn'],['webgpu']]);
  expect(manager.active).toBeNull();manager.cancel();
+});
+
+it('configures WASM before initialization and refreshes only on a changed thread target',async()=>{
+ const manager=new ModelManager();
+ const target=vi.spyOn(manager,'targetWasmThreads','get');
+ target.mockReturnValue(4);state.backends=['wasm','wasm'];state.preferences=[];state.threadRequests=[];
+ await manager.prepare('whisper-small',{backend:'wasm'});
+ expect(manager.wasmThreadConfiguration).toEqual({requested:4,configured:4});
+ expect(manager.needsWasmThreadRefresh()).toBe(false);
+ await manager.prepare('whisper-small',{backend:'wasm'});
+ expect(state.threadRequests).toEqual([4]);
+ target.mockReturnValue(1);expect(manager.needsWasmThreadRefresh()).toBe(true);
+ await manager.prepare('whisper-small',{backend:'wasm'});
+ expect(state.threadRequests).toEqual([4,1]);
+ expect(manager.wasmThreadConfiguration).toEqual({requested:1,configured:1});
+ manager.cancel();expect(manager.wasmThreadConfiguration).toBeNull();
+ target.mockRestore();
 });

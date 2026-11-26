@@ -55,3 +55,5 @@ PERF-01: browser resource hints and host wall-clock measurements are not CPU/GPU
 PERF-02: browser device memory is a coarse hint, not free memory. Mode pacing is implemented; backend, thread and prefetch optimization remains pending PERF-03–05. The maximum mode does not bypass safeguards.
 
 PERF-03: provider-specific dtype remains controlled by the engine; single-fragment exact text agreement is not a quality guarantee. GPU adapter preference and GPU buffer residency have not been implemented. Calibration may need additional model files and should be run on representative speech.
+
+PERF-04: file-origin standalone remains one WASM thread. Isolated local server uses a separate storage origin. Worker acknowledgement is pre-init configuration, not actual ORT thread count. Real model inference and provider-specific compatibility remain to be tested.

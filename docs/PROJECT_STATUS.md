@@ -73,3 +73,6 @@ Three existing buttons now persist preference and control checkpoint-boundary pa
 
 ## PERF-03 (candidate)
 Opt-in local backend comparison and cached selection for medium/max, retaining bounded WASM recovery. See [PERF-03](performance/PERF-03.md). Real hardware results pending.
+
+## PERF-04 (candidate; depends on PERF-03)
+WASM thread configuration wired into ASR Worker; optional isolated loopback preview (`npm run serve:isolated`), standalone remains single-threaded. See [PERF-04](performance/PERF-04.md). Actual parallel inference and speedup not yet verified.

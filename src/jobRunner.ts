@@ -16,6 +16,7 @@ import {downloadTranscript,formatTranscript} from './formatTranscript';
 import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
 import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE_MS,candidates,chooseBackend,isBackend,normalizedText,resourceFailure,type BackendCalibration,type CalibrationSample} from './performance/backendPolicy';
+import {observeWasmThreads} from './performance/wasmThreads';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
@@ -386,7 +387,7 @@ export class JobRunner{
      if(!this.state.jobs.some(j=>j.id===id&&j.queueOrder!==undefined)){
       this.queue.shift();this.set({queueCount:this.queue.length});continue;
      }
-     this.cancelled=false;this.abort=new AbortController();this.resources.beginRun();this.set({activeId:id,activeResourcePolicy:null});
+     this.cancelled=false;this.abort=new AbortController();this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();this.set({activeId:id,activeResourcePolicy:null});
      const runStarted=benchmarkNow();
      try{
       await this.execute(id);
@@ -685,7 +686,7 @@ export class JobRunner{
   this.set({backend:prepared.backend});this.patch(id,{backend:prepared.backend});
   const report:BackendCalibration={version:1,sampleSeconds:sample.length/16000,baseline,chosen,samples,elapsedMs:benchmarkNow()-started,
    selection:!reference?'no-reference':samples.filter(s=>s.status==='passed').length>1?'compared':'baseline-only'};
-  if(report.selection==='compared')this.backendPolicy.remember(params.model,params.language,chosen);
+  if(report.selection==='compared')this.backendPolicy.remember(params.model,params.language,chosen,this.manager.targetWasmThreads??1);
   this.bench(id,b=>({...b,backendCalibration:report}));
   await this.persist(id);this.check();
  }
@@ -703,8 +704,9 @@ export class JobRunner{
    const initial=checkpointProgress(windows,this.job(id).nextWindow);
    const calibrate=this.state.calibrateNext;
    if(calibrate)this.set({calibrateNext:false});
-   const preferred=calibrate?undefined:this.backendPolicy.preferred(params.model,params.language,this.resources.selected,collectDeviceHints());
-   if(this.manager.active!==params.model||(preferred!==undefined&&this.manager.capabilities?.active!==preferred)){
+   this.manager.resourcePolicy=this.resources.policy();
+   const preferred=calibrate?undefined:this.backendPolicy.preferred(params.model,params.language,this.resources.selected,collectDeviceHints(),this.manager.targetWasmThreads??1);
+   if(this.manager.active!==params.model||(preferred!==undefined&&this.manager.capabilities?.active!==preferred)||this.manager.needsWasmThreadRefresh?.()){
     this.traceEvent(id,'model-start','model');await this.persist(id);
     const modelStarted=Date.now(),modelMeasured=benchmarkNow();
     let prepared:Awaited<ReturnType<ModelManager['prepare']>>;
@@ -726,11 +728,21 @@ export class JobRunner{
    let previousAttemptEnd:number|undefined,previousInferenceMs=0;
    for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
-    // Apply the chosen profile only before a new, uncommitted window. No
-    // session is destroyed; existing retry and checkpoint rules are unchanged.
+    // Apply the chosen profile only before a new, uncommitted window.
+    // WASM sessions are replaced only if their thread target changes.
     const policy=this.resources.policy();this.manager.resourcePolicy=policy;
     this.set({activeResourcePolicy:policy});
     this.bench(id,b=>({...b,resources:observeWindowPolicy(b.resources,policy)}));
+    if(this.manager.needsWasmThreadRefresh?.()){
+     this.set({operation:'Настройка потоков WASM'});
+     const started=benchmarkNow();
+     this.traceEvent(id,'model-start','model',{backend:'wasm'});await this.persist(id);this.check();
+     try{
+      const prepared=await this.manager.prepare(params.model,{backend:'wasm'});this.check();
+      this.set({backend:prepared.backend});this.patch(id,{backend:prepared.backend});
+      this.traceEvent(id,'model-ready','model',{backend:traceBackend(prepared.backend),elapsedMs:benchmarkNow()-started});
+     }finally{this.bench(id,b=>addBenchmarkTiming(b,'modelInitMs',benchmarkNow()-started))}
+    }
     const pauseMs=boundaryPauseMs(policy,previousInferenceMs);
     if(pauseMs>0){
      const pauseStarted=benchmarkNow();
@@ -758,7 +770,8 @@ export class JobRunner{
      const attemptBackend=this.manager.capabilities?.active??this.state.backend;
      const attemptStarted=Date.now(),attemptMeasured=benchmarkNow();
      if(previousAttemptEnd!==undefined)this.perf(id,'betweenAsrAttempts',attemptMeasured-previousAttemptEnd);
-     this.bench(id,b=>({...b,profiler:observeBackend(b.profiler??emptyPerformanceProfile(),attemptBackend,this.manager.requestedBackend)}));
+     this.bench(id,b=>({...b,profiler:observeBackend(b.profiler??emptyPerformanceProfile(),attemptBackend,this.manager.requestedBackend),
+      ...(attemptBackend==='wasm'&&this.manager.wasmThreadConfiguration?{wasmThreads:observeWasmThreads(b.wasmThreads,this.manager.wasmThreadConfiguration)}:{})}));
      try{
       try{
        result=await withActivityWatchdog(heartbeat=>{
@@ -785,6 +798,9 @@ export class JobRunner{
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       if(traceErrorKind(error)==='worker'||(typeof error==='object'&&error!==null&&'code' in error&&(error.code==='gpu-device-lost'||error.code==='webgpu-device-lost')))this.resources.restrictAfterRecovery();
       const next=attempt+1,wasmOnly=preferWasmAfterFailure(attemptBackend);
+      // A retry never increases compute pressure, and the rest of this run
+      // stays at one WASM thread even when the user selects maximum.
+      if(wasmOnly)this.manager.forceSingleWasmThread=true;
       this.traceEvent(id,'window-retry','asr',{window:index+1,totalWindows:windows.length,attempt:next,backend:traceBackend(attemptBackend)});
       this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
       // Throw on failed reinit instead of silently continuing on an unknown
@@ -848,8 +864,9 @@ export class JobRunner{
  cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
  async prepare(model:WhisperId,wasmOnly=false){
   if(this.state.busy)return;this.set({busy:true,operation:'Подготовка модели'});this.cancelled=false;
+  this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();
   try{await this.exclusive(async()=>{const prepared=await this.manager.prepare(model,{wasmOnly});this.set({backend:prepared.backend})})}catch(error){this.set({notice:message(error)})}
-  finally{this.set({busy:false,operation:''});this.continuePending()}
+  finally{this.manager.resourcePolicy=null;this.set({busy:false,operation:''});this.continuePending()}
  }
  async preloadSpeakers(){
   if(this.state.speakerDownload!=='idle')return;

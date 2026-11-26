@@ -84,3 +84,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | --- | --- | --- |
 | PERF-03-U | Strict provider requests, no disguised fallback, cached choice expiry and invalidation | NOT TESTED |
 | PERF-03-H | Same real speech fragment on supported providers; compare time and quality externally | NOT TESTED |
+
+## PERF-04
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-04-U | Thread target clamp, acknowledgement, session reuse/refresh and cache scoping | NOT TESTED |
+| PERF-04-B | Loopback COOP/COEP and shared memory in page and Worker | NOT TESTED |
+| PERF-04-H | Real ASR performance, memory and quality at 1/2/4/6/8 threads on compatible hardware | NOT TESTED |
