@@ -6,13 +6,14 @@ import {expectedWindows} from './jobDiagnostics';
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
  'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'stream-recovery-start'|'stream-reopen-ready'|'stream-recovered'|'stream-recovery-stop'|
  'stream-read-start'|'stream-samples'|'stream-read-end'|'stream-resample-start'|'stream-resample-end'|'stream-pcm-check-start'|'stream-pcm-check-end'|'checkpoint-start'|
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-alignment'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
 export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
-export type StreamStage='decode'|'resample'|'pcm-check';
+export type StreamStage='open'|'decode'|'resample'|'pcm-check';
 export type TraceEvent={
  at:number;
  phase:TracePhase;
@@ -26,6 +27,7 @@ export type TraceEvent={
  endSample?:number;
  pcmSamples?:number;
  decoderId?:number;
+ recoveryCount?:number;
  streamStage?:StreamStage;
  packets?:number;
  decodedFrames?:number;
@@ -90,6 +92,7 @@ export function diagnosticReport(job:Job){
    asrComplete:job.asrComplete,
    backend:traceBackend(job.backend)
   },
+  streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck??null,
   speakerAlignment:job.diagnostics?{
