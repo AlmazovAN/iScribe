@@ -41,7 +41,7 @@ export function traceBackend(raw:unknown):TraceBackend{
 export function traceErrorKind(error:unknown):TraceErrorKind{
  if(error&&typeof error==='object'){
   const value=error as {code?:unknown;name?:unknown};
-  if(value.name==='WorkerStalledError')return 'timeout';
+  if(value.name==='WorkerStalledError'||value.name==='StreamDecodeStalledError')return 'timeout';
   if(value.code==='audio-validation-failed')return 'invalid-audio';
   if(value.code==='worker-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
