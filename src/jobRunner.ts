@@ -9,7 +9,8 @@ import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure} from './ml/recoveryPolicy';
-import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,withActivityWatchdog} from './ml/activityWatchdog';
+import {MAX_STREAM_WINDOW_ATTEMPTS} from './ml/streamRecovery';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -312,7 +313,7 @@ export class JobRunner{
  }
  private readAudio(file:File){
   const signal=this.abort!.signal;
-  return usesStreamedAudio(file.size)?openStreamedAudio(file,signal):this.decode(file,signal);
+  return usesStreamedAudio(file.size)?openStreamedAudio(file,signal,this.streamDecodeIdleMs):this.decode(file,signal);
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -362,24 +363,25 @@ export class JobRunner{
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
     const decodeStarted=benchmarkNow();
-    // The streaming decoder runs BEFORE ASR's own watchdog. Bound this phase
-     // independently, otherwise a stuck Mediabunny iterator can hang forever.
-     // Resume creates a fresh decoder at the last committed IndexedDB window.
-     let pcm:Float32Array;
-     if(streamed){
-      try{
-       pcm=await withActivityWatchdog(()=>audio.read(window),{
-        timeoutMs:this.streamDecodeIdleMs,
-        pollMs:Math.min(1000,Math.max(5,this.streamDecodeIdleMs/4)),
-        signal:this.abort!.signal,
-        onTimeout:()=>audio.close(),
-        timeoutError:()=>new StreamDecodeStalledError()
-       });
-      }catch(error){
-       this.traceEvent(id,'window-error','audio',{window:index+1,totalWindows:windows.length,errorKind:traceErrorKind(error),committedWindows:this.job(id).nextWindow});
-       throw error;
-      }
-     }else pcm=audio.subarray(window.start,window.end);
+    // Decode and retry the same uncommitted window before invoking ASR.
+    let pcm:Float32Array;
+    if(streamed){
+     this.patch(id,{status:`Декодирование · окно ${index+1}/${windows.length}`});
+     this.traceEvent(id,'window-attempt','audio',{window:index+1,totalWindows:windows.length,attempt:1,committedWindows:this.job(id).nextWindow});
+     await this.persist(id);this.check();
+     try{
+      pcm=await audio.read(window,(attempt,error)=>{
+       this.traceEvent(id,'window-error','audio',{window:index+1,totalWindows:windows.length,attempt:attempt-1,errorKind:traceErrorKind(error),committedWindows:this.job(id).nextWindow});
+       this.traceEvent(id,'window-retry','audio',{window:index+1,totalWindows:windows.length,attempt,committedWindows:this.job(id).nextWindow});
+       this.patch(id,{status:`Восстановление декодера · окно ${index+1}/${windows.length} · попытка ${attempt}/${MAX_STREAM_WINDOW_ATTEMPTS}`});
+      });
+      this.traceEvent(id,'window-result','audio',{window:index+1,totalWindows:windows.length,pcmSamples:pcm.length,elapsedMs:benchmarkNow()-decodeStarted});
+      this.patch(id,{status:currentWindowLabel(windows,index)});
+     }catch(error){
+      this.traceEvent(id,'window-error','audio',{window:index+1,totalWindows:windows.length,errorKind:traceErrorKind(error),committedWindows:this.job(id).nextWindow});
+      throw error;
+     }
+    }else pcm=audio.subarray(window.start,window.end);
     if(streamed){
      this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
      const validationStarted=benchmarkNow();
