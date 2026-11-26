@@ -65,3 +65,5 @@ PERF-06: actual engine transport and standalone WASM binary clone remain unchang
 PERF-07: abrupt tab loss can omit deferred noncritical trace events since the last durable transaction; text/checkpoints and retry reservations remain atomic. Whole-transcript immutable append and full visible log rendering on opening remain.
 
 PERF-08: streamed diarization remains unavailable. Engine exposes coarse speaker progress, not separate kernel timings; GPU/NN speaker providers and batched embeddings are not enabled. Actual WASM parallelism and diarization accuracy require hardware testing.
+
+PERF-09: legacy baseline exports lack first-run build context; require manual verification. Comparator uses same size/duration and operator confirmation, not audio hash/device attestation. Real hardware and quality tests remain NOT TESTED. Comparison state is tab-local.

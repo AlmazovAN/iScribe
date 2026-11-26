@@ -18,7 +18,7 @@ test('production application shell reloads offline with local job metadata',asyn
  await expect(page.locator('.offline-strip')).toContainText('Приложение: сохранено');
  await expect(page.locator('.offline-strip')).toContainText('ONNX/WASM: сохранён');
  // The source is local and has no model inference or private transcript.
- await page.locator('input[type=file]').setInputFiles({
+ await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles({
   name:'test-offline.wav',mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
  });
  await expect(page.locator('.file-row')).toHaveCount(1);

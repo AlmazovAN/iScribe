@@ -8,6 +8,7 @@ import {pipelineReport,type PipelineObservations} from './performance/audioPipel
 import {memoryReport,type MemoryObservations} from './performance/memoryPolicy';
 import {storageUiReport,type StorageUiObservations} from './performance/storageUiPolicy';
 import {speakerPerformanceReport,type SpeakerPerformance} from './performance/speakerPerformance';
+import {runContextReport,type BenchmarkRunContext} from './performance/runContext';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -44,6 +45,7 @@ export type JobBenchmark={
  memory?:MemoryObservations;
  storageUi?:StorageUiObservations;
  speakerPerformance?:SpeakerPerformance;
+ firstRunContext?:BenchmarkRunContext;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -98,6 +100,7 @@ export function benchmarkReport(job:Job){
   schema:'iscribe.benchmark.v1',
   source:'browser-observed-timings',
   workload:'real-application-path',
+  firstRunContext:runContextReport(b.firstRunContext),
   model:job.params.model,language:job.params.language,
   diarizationRequested:job.params.diarize,
   durationSeconds:job.duration??null,

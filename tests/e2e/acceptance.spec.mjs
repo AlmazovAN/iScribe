@@ -6,7 +6,7 @@ const row=page=>page.locator('.file-row');
 const small=page=>page.locator('.model-panel .model').nth(1);
 const diagnostics=page=>page.locator('.diagnostics-panel');
 const add=async(page,name)=>{
- await page.locator('input[type="file"]').setInputFiles({
+ await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles({
   name,mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
  });
  await expect(row(page)).toHaveCount(1);
@@ -180,7 +180,7 @@ test('durable FIFO restores three jobs after a reload; one click resumes only un
  await loadFixture(page);
  const names=['queue-one-60s.wav','queue-two-60s.wav','queue-three-60s.wav'];
  for(let i=0;i<names.length;i++){
-  await page.locator('input[type=file]').setInputFiles({
+  await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles({
    name:names[i],mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
   });
   await expect(row(page)).toHaveCount(i+1);
@@ -301,7 +301,7 @@ test('large audio decodes only the current windows and resumes after reload',asy
   });
   await page.reload();
   await page.evaluate(()=>localStorage.setItem('iscribe-e2e:pauseAfterCalls','2'));
-  await page.locator('input[type="file"]').setInputFiles(path);
+  await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles(path);
   await expect(row(page)).toContainText('потоковый режим');
   await row(page).getByRole('button',{name:'Начать',exact:true}).click();
   await expect.poll(async()=>(await snapshot(page))[0]?.nextWindow).toBe(1);
@@ -329,7 +329,7 @@ test('FIFO rows move above waiting records, allow removal, and schedule speaker 
  });
  await page.reload();
  const records=['unused-60s.wav','remove-60s.wav','first-60s.wav','second-60s.wav'];
- await page.locator('input[type=file]').setInputFiles(records.map(name=>({
+ await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles(records.map(name=>({
   name,mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
  })));
  const file=name=>page.getByRole('article',{name,exact:true});
