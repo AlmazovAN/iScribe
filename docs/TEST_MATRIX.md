@@ -92,3 +92,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-04-U | Thread target clamp, acknowledgement, session reuse/refresh and cache scoping | NOT TESTED |
 | PERF-04-B | Loopback COOP/COEP and shared memory in page and Worker | NOT TESTED |
 | PERF-04-H | Real ASR performance, memory and quality at 1/2/4/6/8 threads on compatible hardware | NOT TESTED |
+
+## PERF-05
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-05-U | Bounded sequential producer, FIFO, cancellation and backpressure | NOT TESTED |
+| PERF-05-R | Overlap, exactly-once commits, deferred decoder recovery | NOT TESTED |
+| PERF-05-H | Same long recording, compare RTF, memory, failures and text | NOT TESTED |

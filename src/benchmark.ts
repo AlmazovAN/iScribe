@@ -4,6 +4,7 @@ import {resourceReport} from './performance/resourcePolicy';
 import type {ResourceObservations} from './performance/types';
 import {calibrationReport,type BackendCalibration} from './performance/backendPolicy';
 import {wasmThreadReport,type WasmThreadObservations} from './performance/wasmThreads';
+import {pipelineReport,type PipelineObservations} from './performance/audioPipeline';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -36,6 +37,7 @@ export type JobBenchmark={
  resources?:ResourceObservations;
  backendCalibration?:BackendCalibration;
  wasmThreads?:WasmThreadObservations;
+ audioPipeline?:PipelineObservations;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -111,7 +113,8 @@ export function benchmarkReport(job:Job){
   asrRtf:round(rtf,4),
   measuredRunRtf:round(b.uniqueAudioSeconds>0&&b.runMs>0?b.runMs/(b.uniqueAudioSeconds*1000):null,4),
   performanceProfiler:performanceReport(b.profiler),
-  resourceManagement:resourceReport(b.resources,Boolean(b.wasmThreads&&b.wasmThreads.attempts>b.wasmThreads.unconfirmed)),
+  resourceManagement:resourceReport(b.resources,Boolean(b.wasmThreads&&b.wasmThreads.attempts>b.wasmThreads.unconfirmed),Boolean(b.audioPipeline?.scheduled)),
+  audioPipeline:pipelineReport(b.audioPipeline),
   wasmThreads:wasmThreadReport(b.wasmThreads),
   backendCalibration:calibrationReport(b.backendCalibration),
   mainThreadHeap:{

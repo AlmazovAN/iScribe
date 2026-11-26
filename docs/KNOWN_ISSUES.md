@@ -57,3 +57,5 @@ PERF-02: browser device memory is a coarse hint, not free memory. Mode pacing is
 PERF-03: provider-specific dtype remains controlled by the engine; single-fragment exact text agreement is not a quality guarantee. GPU adapter preference and GPU buffer residency have not been implemented. Calibration may need additional model files and should be run on representative speech.
 
 PERF-04: file-origin standalone remains one WASM thread. Isolated local server uses a separate storage origin. Worker acknowledgement is pre-init configuration, not actual ORT thread count. Real model inference and provider-specific compatibility remain to be tested.
+
+PERF-05: prefetch disabled for unknown/low memory hints; reported device memory is not free RAM. Prefetch timing overlaps ASR and native decoder memory is not measured. Existing queued windows may drain after a profile change; failure retires lookahead.
