@@ -3,6 +3,9 @@
 // that a worker is stuck. Heartbeats must represent actual model progress.
 export const DEFAULT_ASR_IDLE_MS=5*60*1000;
 export const DEFAULT_STREAM_DECODE_IDLE_MS=2*60*1000;
+export const DEFAULT_STREAM_RESAMPLE_IDLE_MS=2*60*1000;
+export const DEFAULT_STREAM_PCM_IDLE_MS=30*1000;
+export type StreamWatchdogStage='decode'|'resample'|'pcm-check';
 export const MAX_ASR_WINDOW_SAMPLES=30*16000;
 export class WorkerStalledError extends Error{
  readonly code='worker-failed';
@@ -10,7 +13,10 @@ export class WorkerStalledError extends Error{
 }
 export class StreamDecodeStalledError extends Error{
  readonly code='stream-decode-stalled';
- constructor(){super('Потоковый декодер аудио не отвечает. Сохранённые окна не затронуты; продолжите задание с последней контрольной точки.');this.name='StreamDecodeStalledError'}
+ constructor(readonly stage:StreamWatchdogStage='decode'){
+  const label=stage==='decode'?'Потоковый декодер аудио':stage==='resample'?'Ресэмплинг аудио':'Проверка PCM';
+  super(label+' не отвечает. Сохранённые окна не затронуты; продолжите задание с последней контрольной точки.');this.name='StreamDecodeStalledError';
+ }
 }
 type Visibility=Pick<Document,'visibilityState'|'addEventListener'|'removeEventListener'>;
 export interface WatchdogOptions{
@@ -21,8 +27,8 @@ export interface WatchdogOptions{
  onTimeout:()=>void;
  timeoutError?:()=>Error;
 }
-export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,options:WatchdogOptions):Promise<T>{
- const timeoutMs=options.timeoutMs??DEFAULT_ASR_IDLE_MS;
+export function withActivityWatchdog<T>(work:(heartbeat:()=>void,beginStage:(timeoutMs:number)=>void)=>Promise<T>,options:WatchdogOptions):Promise<T>{
+ let timeoutMs=options.timeoutMs??DEFAULT_ASR_IDLE_MS;
  const pollMs=options.pollMs??1000;
  if(!Number.isFinite(timeoutMs)||timeoutMs<=0||!Number.isFinite(pollMs)||pollMs<=0)
   return Promise.reject(new Error('Некорректные настройки watchdog.'));
@@ -57,11 +63,19 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void)=>Promise<T>,op
    last=Date.now();
   };
   const heartbeat=()=>{if(finished)return;tick();idleMs=0;last=Date.now()};
+  // A stage transition is real progress, with its own idle budget. Charge
+  // the previous stage first; a transition must not revive a timed-out task.
+  const beginStage=(limit:number)=>{
+   if(finished)return;
+   if(!Number.isFinite(limit)||limit<=0)throw new Error('Некорректный тайм-аут стадии.');
+   tick();if(finished)return;
+   timeoutMs=limit;idleMs=0;last=Date.now();
+  };
   const onAbort=()=>settle(new Error('Отменено.'));
   if(options.signal?.aborted){onAbort();return}
   visible?.addEventListener('visibilitychange',onVisibility);
   options.signal?.addEventListener('abort',onAbort,{once:true});
   timer.id=setInterval(tick,pollMs);
-  Promise.resolve().then(()=>finished?undefined:work(heartbeat)).then(value=>settle(undefined,value as T),error=>settle(error));
+  Promise.resolve().then(()=>finished?undefined:work(heartbeat,beginStage)).then(value=>settle(undefined,value as T),error=>settle(error));
  });
 }
