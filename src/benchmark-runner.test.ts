@@ -6,6 +6,7 @@ import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {ModelManager} from './ml/manager';
 import type {benchmarkReport} from './benchmark';
+import {ResourceManager} from './performance/resourceManager';
 
 function setup(){
  const store=new JobStore('pr29-'+crypto.randomUUID());
@@ -21,9 +22,11 @@ function setup(){
  const downloadBenchmark=vi.fn((_report:ReturnType<typeof benchmarkReport>,_name:string)=>{
   void _report;void _name;
  });
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,
+ const resources=new ResourceManager(null);
+ const boundaryWait=vi.fn(async(_ms:number,_signal:AbortSignal)=>{void _ms;void _signal});
+ const runner=new JobRunner({store,resources,boundaryWait,manager:fake as unknown as ModelManager,
   decode:async()=>new Float32Array(60*16000),download:()=>{},downloadBenchmark});
- return {store,fake,runner,downloadBenchmark};
+ return {store,fake,runner,downloadBenchmark,boundaryWait};
 }
 async function finished(runner:JobRunner){
  await vi.waitFor(()=>expect(runner.snapshot().busy).toBe(false));
@@ -97,4 +100,23 @@ it('speaker-only retry increases run counter but does not add ASR timings or pro
  expect(fake.transcribe).toHaveBeenCalledTimes(count);
  expect(second.benchmark).toMatchObject({runs:2,resumedRuns:1,failedRuns:1,
   committedWindows:3,uniqueAudioSeconds:60,attempts:3});
+});
+
+it('changes performance mode only on the next window and keeps existing checkpoints',async()=>{
+ const {store,fake,runner,boundaryWait}=setup();
+ await runner.init();runner.setPerformanceMode('eco');
+ fake.transcribe.mockImplementationOnce(async()=>{
+  expect(runner.snapshot().activeResourcePolicy?.effective).toBe('eco');
+  runner.setPerformanceMode('max');
+  expect(runner.snapshot().activeResourcePolicy?.effective).toBe('eco');
+  return [{start:3,end:4,text:'first'}];
+ });
+ await runner.add([new File(['a'],'profile.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{resources:{windowCounts:{eco:1,medium:0,max:2},lastPolicy:{effective:'max'}}}});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(boundaryWait).not.toHaveBeenCalled();
+ expect(runner.snapshot().activeResourcePolicy).toBeNull();
 });

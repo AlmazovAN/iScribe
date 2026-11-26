@@ -1,5 +1,7 @@
 import type {Job} from './jobs';
 import {performanceReport,type PerformanceProfile} from './performance/profiler';
+import {resourceReport} from './performance/resourcePolicy';
+import type {ResourceObservations} from './performance/types';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -29,6 +31,7 @@ export type JobBenchmark={
  mainThreadHeapPeakBytes?:number;
  memorySamples:number;
  profiler?:PerformanceProfile;
+ resources?:ResourceObservations;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -104,6 +107,7 @@ export function benchmarkReport(job:Job){
   asrRtf:round(rtf,4),
   measuredRunRtf:round(b.uniqueAudioSeconds>0&&b.runMs>0?b.runMs/(b.uniqueAudioSeconds*1000):null,4),
   performanceProfiler:performanceReport(b.profiler),
+  resourceManagement:resourceReport(b.resources),
   mainThreadHeap:{
    sampleCount:b.memorySamples,
    observedPeakBytes:b.mainThreadHeapPeakBytes??null,

@@ -5,6 +5,7 @@ import {WhisperDownloadStatus} from './WhisperDownloadStatus';
 import {OfflineReadinessPanel} from './OfflineReadinessPanel';
 import {DiagnosticsPanel} from './DiagnosticsPanel';
 import {JobRunner} from './jobRunner';
+import {performanceLabels} from './performance/profiles';
 import {JobRow} from './JobRow';
 import {useModels} from './useModels';
 import {useProtection} from './useProtection';
@@ -21,7 +22,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const state=useSyncExternalStore(runner.subscribe,runner.snapshot,runner.snapshot);
  const [selected,setSelected]=useState<WhisperId>('whisper-small');
  const [language,setLanguage]=useState<'ru'|'en'>('ru');
- const [performanceMode,setPerformanceMode]=useState<'eco'|'medium'|'max'>('medium');
+ const performanceMode=state.performanceMode;
  const [diarize,setDiarize]=useState(true);
  const [drag,setDrag]=useState(false),[error,setError]=useState('');
  const [previewId,setPreviewId]=useState<string|null>(null);
@@ -72,7 +73,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><div className="local-header-actions"><span className="local"><i/>Обработка на вашем устройстве</span><button ref={colabButton} type="button" onClick={()=>setColab('open')}>Google Drive / Colab</button></div></header>
   <main>
    <section className="intro"><p className="eyebrow">ИЗ ЗАПИСИ — В ТЕКСТ</p><h1>Лишнее уходит.<span> Нужное остаётся</span></h1><p>Добавьте записи. Получайте текст, время и спикеров — по мере готовности.</p></section>
-   <section className="panel model-panel" aria-label="Модели и настройки"><div className="panel-heading"><h2>Модель распознавания</h2><div className="model-settings"><div className="setting-group"><span>Производительность:</span><div className="segmented-setting" role="group" aria-label="Производительность">{([{id:'eco',label:'Экономичная'},{id:'medium',label:'Средняя'},{id:'max',label:'Максимальная'}] as const).map(mode=><button type="button" key={mode.id} aria-pressed={performanceMode===mode.id} onClick={()=>setPerformanceMode(mode.id)}>{mode.label}</button>)}</div></div><div className="setting-group"><span>Язык:</span><div className="segmented-setting" role="group" aria-label="Язык"><button type="button" aria-pressed={language==='ru'} onClick={()=>setLanguage('ru')}>RUS</button><button type="button" aria-pressed={language==='en'} onClick={()=>setLanguage('en')}>ENG</button></div></div></div></div>
+   <section className="panel model-panel" aria-label="Модели и настройки"><div className="panel-heading"><h2>Модель распознавания</h2><div className="model-settings"><div className="setting-group"><span>Производительность:</span><div className="segmented-setting" role="group" aria-label="Производительность">{([{id:'eco',label:'Экономичная'},{id:'medium',label:'Средняя'},{id:'max',label:'Максимальная'}] as const).map(mode=><button type="button" key={mode.id} aria-pressed={performanceMode===mode.id} onClick={()=>runner.setPerformanceMode(mode.id)}>{mode.label}</button>)}</div></div><div className="setting-group"><span>Язык:</span><div className="segmented-setting" role="group" aria-label="Язык"><button type="button" aria-pressed={language==='ru'} onClick={()=>setLanguage('ru')}>RUS</button><button type="button" aria-pressed={language==='en'} onClick={()=>setLanguage('en')}>ENG</button></div></div></div></div>
     <div className="models">{models.map(m=><article className={'model '+(selected===m.id?'selected':'')} key={m.id}>
      <label className="model-name"><input type="radio" name="model" checked={selected===m.id} onChange={()=>setSelected(m.id)}/><strong>{m.name}</strong></label><span className="tag">{m.tag}</span><p>{m.description}</p>
      <WhisperDownloadStatus name={m.name} cached={modelState.cached[m.id]} active={runner.manager.active===m.id} download={modelState.downloads[m.id]}/>
@@ -80,7 +81,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
     </article>)}
     <article className={'model speakers '+(diarize?'enabled':'')}><label className="model-name"><strong>Разделение говорящих</strong><input type="checkbox" checked={diarize} onChange={e=>setDiarize(e.target.checked)} aria-label="Разделять говорящих"/></label><span className="tag">Pyannote + WeSpeaker</span><p>Кто говорил и когда. После получения текста.</p><div className="download-status" role="status"><strong>{modelState.speakers.ready?'Скачаны · в кэше':'Комплект из двух моделей'}</strong><span>Pyannote: {modelState.speakers.segmentation}</span><span>WeSpeaker: {modelState.speakers.embedding}</span></div><button className="secondary" disabled={state.speakerDownload!=='idle'||modelState.speakers.ready} onClick={()=>void runner.preloadSpeakers()}>{speakerButton}</button></article>
     </div>
-     {state.busy&&<p className="next-settings">Настройки применятся к следующим заданиям. Текущая обработка продолжится со своими параметрами.</p>}
+     {state.busy&&<p className="next-settings">Модель, язык и спикеры применятся к следующим заданиям. Производительность — на границе следующего окна.{state.activeResourcePolicy&&<> Текущий режим: {performanceLabels[state.activeResourcePolicy.effective]}.{state.activeResourcePolicy.reasons.includes('recovery-cap')?' Ограничен после сбоя Worker/GPU.':''}{state.activeResourcePolicy.requested!==performanceMode?' Новый режим ожидает применения.':''}</>}</p>}
    </section>
    <section className="panel audio-panel"><div className="panel-heading"><h2>Аудиозаписи <span className="count">{state.jobs.length}</span></h2><div className="heading-actions">{state.busy&&state.activeId===null&&<button type="button" className="trash-button" onClick={openCancel} aria-label="Отменить операцию" title="Отменить операцию"><span className="trash-icon" aria-hidden="true"/></button>}{state.jobs.filter(j=>j.stage==='waiting').length>1&&<button className="secondary" onClick={()=>{if(selected==='whisper-large-v3'&&!largeAllowed())return;state.jobs.filter(j=>j.stage==='waiting').forEach(j=>runner.enqueue(j.id,params))}}>Начать все</button>}</div></div>
     {state.queueCount>0&&<div className="queue-banner" role="status"><span>Очередь: {state.queueCount} {state.queueCount===1?'задание':'заданий'}{!state.busy?' · восстановлена':''}</span>{!state.busy&&<button className="start" onClick={()=>runner.resumeQueue()}>Продолжить очередь</button>}</div>}

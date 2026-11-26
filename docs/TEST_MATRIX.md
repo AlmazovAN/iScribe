@@ -69,3 +69,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-01-U | Bounded aggregate timings, backend counters, privacy and null unavailable fields | NOT TESTED |
 | PERF-01-R | Runner persists observations across existing checkpoints | NOT TESTED |
 | PERF-01-H | Real recording and external CPU/GPU/RAM profiling | NOT TESTED |
+
+## PERF-02
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-02-U | Persistent profile, conservative targets, cancellable pacing and recovery cap | NOT TESTED |
+| PERF-02-R | Mode switch only at next window; previous checkpoints remain intact | NOT TESTED |
+| PERF-02-H | Real-device mode comparison | NOT TESTED |
