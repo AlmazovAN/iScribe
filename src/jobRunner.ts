@@ -382,8 +382,16 @@ export class JobRunner{
  private closeStreamSession(id:string,session:StreamSession,reason:'rotation'|'recovery'|'finish'|'error'|'cancel'){
   if(session.closed)return;
   session.closed=true;
-  session.audio.close();
-  this.traceEvent(id,'stream-session-closed','audio',{decoderId:session.audio.decoderId,decoderWindows:session.windows,rotationCount:session.rotations,closeReason:reason,committedWindows:this.job(id).nextWindow,jsHeapBytes:traceHeapBytes()});
+  const fields={decoderId:session.audio.decoderId,decoderWindows:session.windows,rotationCount:session.rotations,closeReason:reason,committedWindows:this.job(id).nextWindow,jsHeapBytes:traceHeapBytes()};
+  try{session.audio.close()}
+  catch(error){
+   this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error)});
+   // Do not open another decoder after a disposal failure. On terminal
+   // cleanup retain the original job error or successfully committed text.
+   if(reason==='rotation'||reason==='recovery')throw error;
+   return;
+  }
+  this.traceEvent(id,'stream-session-closed','audio',fields);
  }
  private async replaceStream(id:string,session:StreamSession,file:File,reason:'rotation'|'recovery'){
   const length=session.audio.length;
