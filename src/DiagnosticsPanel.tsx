@@ -52,7 +52,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
  const defaultWindow=job?Math.max(1,Math.min(job.nextWindow+1,total??Infinity)):1;
  const inputValue=selection?.id===job?.id?selection?.value??String(defaultWindow):String(defaultWindow);
  const windowNumber=Number(inputValue);
- const valid=Number.isSafeInteger(windowNumber)&&windowNumber>=1&&(total===null||windowNumber<=total);
+ const valid=Number.isSafeInteger(windowNumber)&&Number.isSafeInteger((windowNumber-1)*25*16000)&&windowNumber>=1&&(total===null||windowNumber<=total);
  const blocked=busy||!job||isRunning(job.stage)||job.stage==='queued'||!valid;
  const benchmark=job?.benchmark?.committedWindows?benchmarkReport(job):null;
  const events=job?.trace??[];
@@ -72,7 +72,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
    {job&&onInspectWindow&&<section className="diagnostics-record" aria-label="Проверка отдельного окна">
     <strong>Проверка отдельного окна без Whisper</strong>
     <label>Номер окна <input type="number" min={1} max={total??undefined} step={1} value={inputValue} disabled={busy} onChange={e=>setSelection({id:job.id,value:e.target.value})}/>{total!==null&&<span> из {total}</span>}</label>
-    {valid&&<p>Номинальный интервал: {formatTime((windowNumber-1)*25)} – {formatTime(Math.min((windowNumber-1)*25+30,job.duration??Infinity))}</p>}
+    {valid&&<p>Номинальный интервал: {formatTime((windowNumber-1)*25)} – {formatTime(Math.min((windowNumber-1)*25+30,total===null?Infinity:job.duration!))}</p>}
     <div className="diagnostics-actions">
      <button type="button" disabled={blocked} onClick={()=>onInspectWindow(job.id,windowNumber,'whole')}>Проверить целиком</button>
      <button type="button" disabled={blocked} onClick={()=>onInspectWindow(job.id,windowNumber,'split')}>Проверить частями по 5 с</button>
