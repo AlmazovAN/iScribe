@@ -76,3 +76,6 @@ Opt-in local backend comparison and cached selection for medium/max, retaining b
 
 ## PERF-04 (candidate; depends on PERF-03)
 WASM thread configuration wired into ASR Worker; optional isolated loopback preview (`npm run serve:isolated`), standalone remains single-threaded. See [PERF-04](performance/PERF-04.md). Actual parallel inference and speedup not yet verified.
+
+## PERF-05 (candidate; depends on PERF-04)
+Bounded streamed-audio lookahead integrated with Resource Manager, no parallel decoder reads or speculative storage writes. See [PERF-05](performance/PERF-05.md). Real hardware speedup pending.

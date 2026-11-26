@@ -17,6 +17,8 @@ import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,em
 import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
 import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE_MS,candidates,chooseBackend,isBackend,normalizedText,resourceFailure,type BackendCalibration,type CalibrationSample} from './performance/backendPolicy';
 import {observeWasmThreads} from './performance/wasmThreads';
+import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
+import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
@@ -610,12 +612,16 @@ export class JobRunner{
   await this.persist(id);this.check();
   return {pcm,report};
  }
- private async readRecoverableStreamWindow(id:string,session:StreamSession,file:File,window:AudioWindow,index:number,total:number){
+ private async readRecoverableStreamWindow(id:string,session:StreamSession,file:File,window:AudioWindow,index:number,total:number,priorFailure?:{error:unknown}){
   const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow};
   let attempt=1;
   for(;;){
    this.check();
    try{
+    if(priorFailure){const error=priorFailure.error;priorFailure=undefined;
+     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error)});
+     throw error;
+    }
     const result=attempt===3?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
     if(attempt>1)this.traceEvent(id,'stream-recovered','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',recoveryCount:this.job(id).streamRecovery?.totalRecoveries});
     return result;
@@ -726,7 +732,8 @@ export class JobRunner{
    this.set({operation:'Распознавание'});
    this.patch(id,{stage:'recognizing',status:checkpointLabel(initial),percent:initial.percent,backend:this.manager.capabilities?.active??this.state.backend});
    let previousAttemptEnd:number|undefined,previousInferenceMs=0;
-   for(let index=initial.completedWindows;index<windows.length;index++){
+   const pipeline=session?new AudioPipeline<PreparedStreamWindow>(this.abort!.signal):undefined;
+   try{for(let index=initial.completedWindows;index<windows.length;index++){
     this.check();const window=windows[index];
     // Apply the chosen profile only before a new, uncommitted window.
     // WASM sessions are replaced only if their thread target changes.
@@ -756,7 +763,40 @@ export class JobRunner{
     // Retry only the current uncommitted window. Previous windows must not
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
-    const pcm=streamed?(await this.readRecoverableStreamWindow(id,session!,file,window,index,windows.length)).pcm:audio.subarray(window.start,window.end);
+    let pcm:Float32Array;
+    if(session&&pipeline){
+     const waitStarted=benchmarkNow(),prefetched=await pipeline.take(index);this.check();
+     if(prefetched){
+      const waitMs=benchmarkNow()-waitStarted;
+      this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,
+       consumed:prev.consumed+(prefetched.result.ok?1:0),readyHits:prev.readyHits+(prefetched.ready&&prefetched.result.ok?1:0),
+       failed:prev.failed+(prefetched.result.ok?0:1),waitMs:prev.waitMs+waitMs}}});
+      if(prefetched.result.ok){
+       const prepared=prefetched.result.value;
+       if(prepared.decoderId!==session.audio.decoderId)throw new Error('Устаревший буфер декодера.');
+       pcm=prepared.pcm;
+       const fields={window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,decoderId:prepared.decoderId,attempt:1,committedWindows:this.job(id).nextWindow,strategy:'whole' as const};
+       this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage:'decode'});
+       for(const event of prepared.events){
+        const {code,...detail}=event;
+        this.traceEvent(id,code,'audio',{...fields,...detail});
+        if(typeof detail.elapsedMs==='number'){
+         if(code==='stream-read-end')this.perf(id,'streamDecode',detail.elapsedMs);
+         if(code==='stream-resample-end')this.perf(id,'streamResample',detail.elapsedMs);
+        }
+       }
+       this.traceEvent(id,'stream-pcm-check-start','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length});
+       this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length,elapsedMs:prepared.validationMs});
+       this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...addBenchmarkTiming(addBenchmarkTiming(b,'decodeMs',prepared.decodeMs),'pcmCheckMs',prepared.validationMs),audioPipeline:{...prev,preparedMs:prev.preparedMs+prepared.decodeMs+prepared.validationMs}}});
+      }else{
+       // Retire all lookahead on decoder failure. Reserve recovery only now,
+       // after the preceding ASR window has been durably committed.
+       await pipeline.dispose();this.check();
+       pcm=(await this.readRecoverableStreamWindow(id,session,file,window,index,windows.length,{error:prefetched.result.error})).pcm;
+      }
+     }else pcm=(await this.readRecoverableStreamWindow(id,session,file,window,index,windows.length)).pcm;
+    }else if(audio instanceof Float32Array)pcm=audio.subarray(window.start,window.end);
+    else throw new Error('Потоковый декодер недоступен.');
     if(calibrate&&index===initial.completedWindows)await this.calibrateBackend(id,pcm,params);
     this.set({operation:'Распознавание'});
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
@@ -776,6 +816,14 @@ export class JobRunner{
       try{
        result=await withActivityWatchdog(heartbeat=>{
         this.asrHeartbeat=heartbeat;
+        if(attempt===1&&session&&pipeline&&!this.manager.forceSingleWasmThread){
+         // Never read beyond the next mandatory decoder rotation. At most
+         // two queued windows, one producer, one active inference.
+         const depth=Math.max(0,Math.min(policy.targetPrefetchWindows,windows.length-index-1,this.streamRotateWindows-session.windows-1));
+         const decoder=session.audio;
+         const added=pipeline.fill(index+1,depth,(next,signal)=>prepareStreamWindow(decoder,windows[next],next,signal,{decode:this.streamDecodeIdleMs,resample:this.streamResampleIdleMs,pcm:this.streamPcmIdleMs}));
+         if(added)this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,scheduled:prev.scheduled+added,peakQueued:Math.max(prev.peakQueued,pipeline.size)}}});
+        }
         const copyStarted=benchmarkNow();const payload=pcm.slice();
         this.perf(id,'pcmCopy',benchmarkNow()-copyStarted);
         return this.manager.transcribe(payload,false,()=>{},params.language);
@@ -829,7 +877,7 @@ export class JobRunner{
     previousInferenceMs=successfulAttemptMs;
     this.traceEvent(id,'checkpoint-committed','checkpoint',{window:index+1,totalWindows:windows.length,committedWindows:index+1,elapsedMs:checkpointMs});
     this.check();
-   }
+   }}finally{await pipeline?.dispose()}
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
   }
