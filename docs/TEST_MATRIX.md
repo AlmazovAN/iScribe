@@ -100,3 +100,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-05-U | Bounded sequential producer, FIFO, cancellation and backpressure | NOT TESTED |
 | PERF-05-R | Overlap, exactly-once commits, deferred decoder recovery | NOT TESTED |
 | PERF-05-H | Same long recording, compare RTF, memory, failures and text | NOT TESTED |
+
+## PERF-06
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-06-U | Direct mixing/resampling, detached buffer rejection, transfer scope, idle release | NOT TESTED |
+| PERF-06-R | Reuse during ASR and intact checkpoints; existing recovery regression | NOT TESTED |
+| PERF-06-H | Actual peak RAM/VRAM and sample accuracy during long recordings/queue | NOT TESTED |

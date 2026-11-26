@@ -38,3 +38,14 @@ it('reports readiness without pretending the cache exists',async()=>{
  expect(manager.active).toBe('whisper-tiny');
  manager.cancel();
 });
+
+it('releases idle sessions without dropping the model cache or recreating a disposed client',async()=>{
+ ctx.initCount=0;ctx.disposeCount=0;ctx.cache=true;
+ const manager=new ModelManager();
+ await manager.prepare('whisper-small');
+ expect(manager.releaseIdle()).toBe(true);
+ expect(manager.active).toBeNull();expect(manager.lifecycle.phase).toBe('idle');
+ expect(manager.releaseIdle()).toBe(false);expect(ctx.disposeCount).toBe(1);
+ expect(await manager.cached('whisper-small')).toBe(true);
+ await manager.prepare('whisper-small');expect(ctx.initCount).toBe(2);manager.cancel();
+});

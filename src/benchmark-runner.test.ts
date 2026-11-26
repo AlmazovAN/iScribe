@@ -120,3 +120,15 @@ it('changes performance mode only on the next window and keeps existing checkpoi
  expect(boundaryWait).not.toHaveBeenCalled();
  expect(runner.snapshot().activeResourcePolicy).toBeNull();
 });
+
+it('reuses settled ASR payload storage without changing checkpoints',async()=>{
+ const {store,fake,runner}=setup();
+ await runner.init();runner.setPerformanceMode('max');
+ await runner.add([new File(['a'],'memory.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{memory:{payloadAllocations:2,payloadReuses:1,detachedPayloads:0,peakPayloadBytes:1920000}}});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
+ await store.remove(id);
+});

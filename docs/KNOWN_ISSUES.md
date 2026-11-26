@@ -59,3 +59,5 @@ PERF-03: provider-specific dtype remains controlled by the engine; single-fragme
 PERF-04: file-origin standalone remains one WASM thread. Isolated local server uses a separate storage origin. Worker acknowledgement is pre-init configuration, not actual ORT thread count. Real model inference and provider-specific compatibility remain to be tested.
 
 PERF-05: prefetch disabled for unknown/low memory hints; reported device memory is not free RAM. Prefetch timing overlaps ASR and native decoder memory is not measured. Existing queued windows may drain after a profile change; failure retires lookahead.
+
+PERF-06: actual engine transport and standalone WASM binary clone remain unchanged. Idle model release may add initialization time on subsequent jobs. Browser/OS memory reclamation is not guaranteed by disposal.

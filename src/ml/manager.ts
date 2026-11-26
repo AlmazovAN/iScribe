@@ -10,9 +10,10 @@ function createEngineWorker():Worker{
  const worker=new EngineWorker();
  // This message arrives before the engine's init/preload message. Keep the
  // original buffer for replacement workers used by recovery and diarization.
- if(import.meta.env.MODE==='standalone')
-  worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
- return worker;
+ try{
+  if(import.meta.env.MODE==='standalone')worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
+  return worker;
+ }catch(error){worker.terminate?.();throw error}
 }
 
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -36,6 +37,20 @@ export class ModelManager{
   this.speakerIdleMs=options.speakerIdleMs??DEFAULT_SPEAKER_IDLE_MS;
  }
  private client:EngineClient|null=null;
+ private asrWorker:Worker|null=null;
+ // Always clear references first and terminate the owned Worker even if
+ // EngineClient disposal throws. Worker.terminate is idempotent.
+ private disposeAsr(){
+  const client=this.client,worker=this.asrWorker;
+  this.client=null;this.asrWorker=null;this.active=null;this.capabilities=null;
+  this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
+  try{client?.dispose()}finally{worker?.terminate?.()}
+ }
+ releaseIdle():boolean{
+  if(this.busy||(!this.client&&!this.asrWorker))return false;
+  ++this.generation;
+  try{this.disposeAsr();return true}finally{this.phase('idle',null,null)}
+ }
  private busy=false;
  private speakerWorker:Worker|null=null;
  private rejectPreload:((error:Error)=>void)|null=null;
@@ -75,9 +90,9 @@ export class ModelManager{
    this.onWhisperProgress(id,{phase:'ready',cachedBefore:cached,cachedAfter:cached,httpRequests:0});
    return {cached,backend};
   }
+  this.disposeAsr();
   this.busy=true;this.preparingId=id;const generation=++this.generation;
   this.requestedBackend=required??'auto';
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   this.sessionWasmThreads=targetThreads;this.wasmThreadConfiguration={requested:targetThreads,configured:null};
   this.phase('initializing',id,null);
   let client:EngineClient|null=null;
@@ -94,7 +109,7 @@ export class ModelManager{
    progress('initializing');
    this.onProgress(cachedBefore?'Инициализация модели из сохранённых файлов…':'Подготовка и проверка файлов модели…',null);
    client=new EngineClient(()=>{
-    const worker=createEngineWorker();
+    const worker=createEngineWorker();this.asrWorker=worker;
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;
      if(generation!==this.generation||expired||!d||typeof d!=='object'||!('type' in d))return;
@@ -129,7 +144,7 @@ export class ModelManager{
    },{
     timeoutMs:this.initIdleMs,
     pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),
-    onTimeout:()=>{expired=true;client?.dispose()}
+    onTimeout:()=>{expired=true;if(generation===this.generation)this.disposeAsr()}
    });
    if(generation!==this.generation)throw new Error('Операция отменена.');
    if(required&&report.active!==required)throw new Error('Запрошенный backend '+required.toUpperCase()+' недоступен.');
@@ -143,9 +158,10 @@ export class ModelManager{
    return {cached,backend:report.active};
   }catch(error){
    progress('error',error instanceof Error?error.message:String(error));
-   if(generation===this.generation)this.phase('error',id,null);
-   client?.dispose();
-   if(this.client===client){this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null}
+   if(generation===this.generation){
+    try{this.disposeAsr()}catch{/* Preserve the original initialization error. */}
+    this.phase('error',id,null);
+   }
    throw error;
   }finally{initHeartbeat=null;if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
@@ -154,7 +170,7 @@ export class ModelManager{
   // requests in that worker are not safe to reuse on the next attempt.
   if(this.busy)throw new Error('Невозможно восстановить Worker во время другой операции.');
   this.phase('recovering',id,null);
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
+  this.disposeAsr();
   const prepared=await this.prepare(id,{wasmOnly});
   const backend=prepared.backend;
   if(backend!=='webnn'&&backend!=='webgpu'&&backend!=='wasm')throw new Error('Неизвестный backend после восстановления.');
@@ -166,8 +182,8 @@ export class ModelManager{
  }
  async preloadSpeakers(){
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.disposeAsr();
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   this.phase('preloading-speakers',null,null);
   let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
@@ -223,8 +239,8 @@ export class ModelManager{
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.disposeAsr();
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
   try{
@@ -256,5 +272,13 @@ export class ModelManager{
   }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
- cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;this.busy=false;this.phase('cancelled',null,null)}
+ cancel(){
+  if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;
+  this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;
+  const speaker=this.speakerWorker;this.speakerWorker=null;
+  try{speaker?.terminate()}finally{
+   try{this.disposeAsr()}catch{/* Owned Worker was terminated; cancellation must settle. */}
+   finally{this.busy=false;this.phase('cancelled',null,null)}
+  }
+ }
 }

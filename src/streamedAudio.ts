@@ -50,7 +50,11 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    const start=Math.max(0,window.start-PCM_SAMPLE_RATE);
    const startTime=origin+start/PCM_SAMPLE_RATE;
    const endTime=origin+window.end/PCM_SAMPLE_RATE;
-   const mono=new Float32Array(Math.ceil((window.end-start)*rate/PCM_SAMPLE_RATE));
+   const sourceLength=Math.ceil((window.end-start)*rate/PCM_SAMPLE_RATE);
+   // Mix directly into the AudioBuffer used by OfflineAudioContext. At
+   // native 16 kHz retain the original independent Float32Array path.
+   const sourceBuffer=rate===PCM_SAMPLE_RATE?undefined:new AudioBuffer({length:sourceLength,numberOfChannels:1,sampleRate:rate});
+   const mono=sourceBuffer?sourceBuffer.getChannelData(0):new Float32Array(sourceLength);
    let covered=false,packets=0,decodedFrames=0,furthestFrame=0;
    // Reuse one per-read channel scratch buffer instead of allocating a
    // new Float32Array backing buffer for every decoded sample.
@@ -102,11 +106,9 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    const resampleStarted=performance.now();
    if(observe){await observe({code:'stream-resample-start',streamStage:'resample',sourceSampleRate:rate});checkOpen();}
    const context=new OfflineAudioContext(1,outputLength,PCM_SAMPLE_RATE);
-   const buffer=context.createBuffer(1,mono.length,rate);
-   buffer.copyToChannel(mono,0);
    const node=context.createBufferSource();
    try{
-    node.buffer=buffer;node.connect(context.destination);node.start();
+    node.buffer=sourceBuffer!;node.connect(context.destination);node.start();
     const result=await context.startRendering();
     checkOpen();
     const pcm=result.getChannelData(0).subarray(window.start-start,outputLength);

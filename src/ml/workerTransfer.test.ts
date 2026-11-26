@@ -36,3 +36,13 @@ it('never retries cloning a buffer already detached during a failed dispatch',()
  expect(()=>postSpeakerAudio(worker as unknown as Pick<Worker,'postMessage'>,{type:'iscribe:speakers',requestId:'c',audio})).toThrow('unexpected failure');
  expect(worker.postMessage).toHaveBeenCalledTimes(1);
 });
+
+it('transfers only the requested subarray without detaching its backing owner',()=>{
+ const original=Float32Array.of(9,.25,.5,8),audio=original.subarray(1,3);
+ let received:Float32Array|undefined;
+ const worker={postMessage:vi.fn((message:unknown,transfer?:Transferable[])=>{
+  received=(structuredClone(message,{transfer}) as {audio:Float32Array}).audio;
+ })};
+ expect(postSpeakerAudio(worker as unknown as Pick<Worker,'postMessage'>,{type:'iscribe:speakers',requestId:'sub',audio})).toBe('transferred');
+ expect([...original]).toEqual([9,.25,.5,8]);expect([...received!]).toEqual([.25,.5]);expect(received!.buffer.byteLength).toBe(8);
+});
