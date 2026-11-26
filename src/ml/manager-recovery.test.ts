@@ -7,13 +7,19 @@ const state=vi.hoisted(()=>({
  pendingInit:false,
  resolveInit:null as null|((value:{active:string})=>void),
  terminatedWorkers:0,
- threadRequests:[] as number[]
+ threadRequests:[] as number[],speakerMessages:[] as string[],finishSpeaker:false
 }));
 vi.mock('./worker?worker',()=>({default:class{
  private handler:((event:MessageEvent<unknown>)=>void)|undefined;
  addEventListener(type:string,handler:(event:MessageEvent<unknown>)=>void){if(type==='message')this.handler=handler}
- postMessage(data:{type?:string;requested?:number}){
+ postMessage(data:{type?:string;requested?:number;requestId?:string}){
+  if(data.type==='iscribe:speakers'&&state.finishSpeaker){
+   state.speakerMessages.push(data.type);
+   this.handler?.({data:{type:'iscribe:speaker-progress',requestId:data.requestId,status:'Поиск речи',percent:20}} as MessageEvent<unknown>);
+   this.handler?.({data:{type:'iscribe:speaker-result',requestId:data.requestId,turns:[{start:0,end:1,speaker:'A'}]}} as MessageEvent<unknown>);return;
+  }
   if(data.type!=='iscribe:wasm-threads'||typeof data.requested!=='number')return;
+  if(state.finishSpeaker)state.speakerMessages.push(data.type);
   state.threadRequests.push(data.requested);
   this.handler?.({data:{type:'iscribe:wasm-thread-config',requested:data.requested,configured:data.requested}} as MessageEvent<unknown>);
  }
@@ -41,7 +47,7 @@ vi.mock('./cache',()=>({
 }));
 import {ModelManager} from './manager';
 import {checkWhisperCache} from './cache';
-afterEach(()=>{vi.useRealTimers();state.stallInit=false;state.pendingInit=false;state.resolveInit=null;state.terminatedWorkers=0});
+afterEach(()=>{vi.useRealTimers();state.stallInit=false;state.pendingInit=false;state.resolveInit=null;state.terminatedWorkers=0;state.finishSpeaker=false;state.speakerMessages=[]});
 it('restarts failed accelerated inference with a new Worker and selects real WASM',async()=>{
  state.backends=['webgpu','wasm'];state.preferences=[];state.disposeCount=0;
  const manager=new ModelManager();
@@ -188,4 +194,14 @@ it('configures WASM before initialization and refreshes only on a changed thread
  expect(manager.wasmThreadConfiguration).toEqual({requested:1,configured:1});
  manager.cancel();expect(manager.wasmThreadConfiguration).toBeNull();
  target.mockRestore();
+});
+
+it('configures independent speaker Worker before dispatch and records acknowledgement',async()=>{
+ const manager=new ModelManager();
+ vi.spyOn(manager,'targetWasmThreads','get').mockReturnValue(4);
+ state.finishSpeaker=true;state.speakerMessages=[];state.threadRequests=[];
+ expect(await manager.diarize(new Float32Array(16000))).toEqual([{start:0,end:1,speaker:'A'}]);
+ expect(state.speakerMessages).toEqual(['iscribe:wasm-threads','iscribe:speakers']);
+ expect(manager.lastSpeakerPass).toMatchObject({status:'passed',requestedBackend:'wasm',dtype:'q8',threads:{requested:4,configured:4},audioSeconds:1,progressEvents:1});
+ expect(manager.active).toBeNull();expect(manager.lifecycle.phase).toBe('idle');
 });

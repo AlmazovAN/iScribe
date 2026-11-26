@@ -1,6 +1,7 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {postSpeakerAudio} from './workerTransfer';
+import {SpeakerPassMeter,type SpeakerPassObservation} from '../performance/speakerPerformance';
 import type {ResourcePolicy} from '../performance/types';
 import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,type WasmThreadConfiguration} from '../performance/wasmThreads';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
@@ -53,6 +54,7 @@ export class ModelManager{
  }
  private busy=false;
  private speakerWorker:Worker|null=null;
+ lastSpeakerPass:SpeakerPassObservation|null=null;
  private rejectPreload:((error:Error)=>void)|null=null;
  onSpeakerProgress:(id:keyof typeof speakerRepos,status:string)=>void=()=>{};
  private generation=0;
@@ -206,6 +208,7 @@ export class ModelManager{
       this.onSpeakerProgress(id,stage);this.onProgress(`${label}: ${stage}`,null);
      }
     });
+    worker.postMessage({type:'iscribe:wasm-threads',requested:this.targetWasmThreads});
     worker.postMessage({type:'iscribe:preload',requestId});
    }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
@@ -239,7 +242,11 @@ export class ModelManager{
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.lastSpeakerPass=null;
+  if(!Number.isSafeInteger(audio.length)||audio.length<1||audio.length>3600*16000)throw new Error('Некорректный размер PCM для диаризации.');
   this.disposeAsr();
+  const requested=this.targetWasmThreads,meter=new SpeakerPassMeter(requested,audio.length,performance.now());
+  this.lastSpeakerPass=meter.observation;
   this.busy=true;const generation=++this.generation;
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
@@ -250,9 +257,13 @@ export class ModelManager{
     worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
     worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
     worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
-     const d=event.data;if(stopped||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
+     const d=event.data;if(stopped||!d||typeof d!=='object'||!('type' in d)||generation!==this.generation)return;
+     if(d.type==='iscribe:wasm-thread-config'){
+      const verified=validWasmConfiguration(d,requested);if(verified)meter.observation.threads=verified;return;
+     }
+     if(!('requestId' in d)||d.requestId!==requestId)return;
      if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string'){
-      heartbeat();
+      heartbeat();meter.progress(d.status,performance.now());
       this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
      }
      if(d.type==='iscribe:preload-error'&&'message' in d&&typeof d.message==='string')reject(new Error(d.message));
@@ -264,12 +275,13 @@ export class ModelManager{
       heartbeat();resolve(d.turns as SpeakerTurn[]);
      }
     });
-    postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
+    worker!.postMessage({type:'iscribe:wasm-threads',requested});
+    meter.observation.transfer=postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
    }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
-   this.phase('idle',null,null);
+   meter.finish(true,performance.now());this.phase('idle',null,null);
    return turns;
-  }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
+  }catch(error){meter.finish(false,performance.now());if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
  cancel(){

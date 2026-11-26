@@ -19,6 +19,7 @@ import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE
 import {observeWasmThreads} from './performance/wasmThreads';
 import {AsrPayloadPool,emptyMemoryObservations,observePayload,shouldReleaseAfterQueue} from './performance/memoryPolicy';
 import {emptyStorageUi,ProgressGate,shouldPersistStreamEvent,type StorageUiObservations} from './performance/storageUiPolicy';
+import {emptySpeakerPerformance} from './performance/speakerPerformance';
 import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
@@ -932,15 +933,24 @@ export class JobRunner{
    this.set({operation:'Разделение говорящих'});
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
+   // Select thread configuration once before creating the independent
+   // speaker Worker. Do not restart the pass or re-run ASR on mode changes.
+   this.manager.resourcePolicy=this.resources.policy();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
    const speakerMeasured=benchmarkNow();
    try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
-   finally{this.perf(id,'speakerPass',benchmarkNow()-speakerMeasured)}
+   finally{
+    this.perf(id,'speakerPass',benchmarkNow()-speakerMeasured);
+    const pass=this.manager.lastSpeakerPass;
+    if(pass)this.bench(id,b=>{const prev=b.speakerPerformance??emptySpeakerPerformance();return {...b,speakerPerformance:{...prev,passes:prev.passes+1,failedPasses:prev.failedPasses+(pass.status==='passed'?0:1),lastPass:{...pass,threads:{...pass.threads}}}}});
+   }
    this.check();
    this.bench(id,b=>addBenchmarkTiming(b,'speakerMs',benchmarkNow()-speakerMeasured));
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
    const segments=this.job(id).segments;
-   const aligned=alignSpeakers(segments,turns),speakerSegments=aligned.segments;
+   const alignmentStarted=benchmarkNow();let alignmentQueries=0,alignmentCandidates=0;
+   const aligned=alignSpeakers(segments,turns,(queries,candidates)=>{alignmentQueries=queries;alignmentCandidates=candidates}),speakerSegments=aligned.segments;
+   this.bench(id,b=>{const prev=b.speakerPerformance??emptySpeakerPerformance();return {...b,speakerPerformance:{...prev,alignmentMs:prev.alignmentMs+benchmarkNow()-alignmentStarted,alignmentQueries:prev.alignmentQueries+alignmentQueries,alignmentCandidates:prev.alignmentCandidates+alignmentCandidates}}});
    const stats=aligned.stats;
    // Mapping diagnostics are numeric, contain no audio, speaker identifiers,
    // transcript text or source filename. ASR checkpoints remain untouched.
@@ -970,6 +980,7 @@ export class JobRunner{
  }
  private async downloadSpeakers(){
   this.cancelled=false;
+  this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();
   this.set({speakerDownload:'loading',operation:'Загрузка моделей говорящих'});
   try{
    const cached=await this.manager.speakersCached();
@@ -978,7 +989,7 @@ export class JobRunner{
     this.set({backend:'Не инициализировано'});
    }
   }catch(error){if(!this.cancelled)this.set({notice:message(error)})}
-  finally{this.set({speakerDownload:'idle',operation:''})}
+  finally{this.manager.resourcePolicy=null;this.set({speakerDownload:'idle',operation:''})}
  }
  exportDiagnostics(id:string){
   const job=this.job(id);
