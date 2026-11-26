@@ -105,6 +105,12 @@ export class JobStore{
      if(!Number.isSafeInteger(oldCount)||oldCount<0||
         job.segments.length<oldCount||(old&&job.nextWindow<old.nextWindow))
       throw new Error('Отказ от записи: сохранённый текст или контрольная точка не могут уменьшиться.');
+     // Stale metadata from a second tab must never reset a durable retry
+     // reservation, even if its ASR checkpoint is still identical.
+     const previous=old?.streamRecovery,next=job.streamRecovery;
+     if(previous&&(!next||next.totalRecoveries<previous.totalRecoveries||next.window<previous.window||
+       (next.window===previous.window&&next.windowRecoveries<previous.windowRecoveries)))
+      throw new Error('Лимит восстановления изменился в другой вкладке. Обновите страницу.');
      if(old&&job.segments.length>oldCount&&job.nextWindow<=old.nextWindow)
       throw new Error('Нельзя записать новый текст без подтверждённого номера следующего окна.');
      if(old?.storageLayout!==2){
