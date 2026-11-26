@@ -64,3 +64,33 @@ All real-hardware gates HW-1–HW-7 are **NOT TESTED**.
 
 ## Streaming reliability PR-01–07 (2026-11-26)
 Stacked PRs #36–41 plus PR-07 cover the 41/154 stall, stage watchdogs, two durable recovery reservations per window (five per job), split fallback, proactive rotation, and isolated inspection. See [streaming acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md). PR-06 verify: 161/161 tests, [CI](https://github.com/AlmazovAN/iScribe/actions/runs/45803738028). PR-07 CI and real 63:54 MP3 acceptance must be recorded independently. No deployment claimed.
+
+## PERF-01 (candidate)
+Optional performance profiler in Benchmark JSON and Diagnostics, preserving v1 jobs and checkpoint semantics. See [PERF-01](performance/PERF-01.md). No hardware acceptance or speedup claimed.
+
+## PERF-02 (candidate; depends on PERF-01)
+Three existing buttons now persist preference and control checkpoint-boundary pacing; WASM/prefetch targets are subsequently wired in PERF-04/05. See [PERF-02](performance/PERF-02.md). No hardware speedup or energy savings claimed.
+
+## PERF-03 (candidate)
+Opt-in local backend comparison and cached selection for medium/max, retaining bounded WASM recovery. See [PERF-03](performance/PERF-03.md). Real hardware results pending.
+
+## PERF-04 (candidate; depends on PERF-03)
+WASM thread configuration wired into ASR Worker; optional isolated loopback preview (`npm run serve:isolated`), standalone remains single-threaded. See [PERF-04](performance/PERF-04.md). Actual parallel inference and speedup not yet verified.
+
+## PERF-05 (candidate; depends on PERF-04)
+Bounded streamed-audio lookahead integrated with Resource Manager, no parallel decoder reads or speculative storage writes. See [PERF-05](performance/PERF-05.md). Real hardware speedup pending.
+
+## PERF-06 (candidate; depends on PERF-05)
+Direct resampling-buffer mixing, bounded reusable ASR dispatch storage, explicit ASR Worker cleanup and conservative idle release. See [PERF-06](performance/PERF-06.md). Actual RAM savings pending hardware validation.
+
+## PERF-07 (candidate; depends on PERF-06)
+Coalesced intermediate trace writes, immediate atomic checkpoints, stable memoized queue rows, throttled noncritical engine progress and lazy closed log rendering. See [PERF-07](performance/PERF-07.md). Real-device savings pending.
+
+## PERF-08 (candidate; depends on corrected PERF-07)
+Speaker WASM thread policy, indexed alignment and progress-milestone diagnostics. WASM/q8 retained. See [PERF-08](performance/PERF-08.md). GPU/batching and real-device performance not confirmed.
+
+## PERF-09 (candidate; depends on PERF-08)
+Local comparative benchmark imports, run provenance, combined evidence export and T01–T10 protocol. See [PERF-09](performance/PERF-09.md). Actual hardware results NOT TESTED.
+
+## PERF-10 — integrated candidate
+PERF-01–08 exact-head CI PASS; PERF-09 original CI failed due to ambiguous file/scenario test selectors, corrected in 2ac6983. Final integration CI and actual hardware gate are independent. See [PERF-10](performance/PERF-10.md) for verified run IDs, remaining limits and local commands. Older integration notes above are historical; the final candidate is based on main dfdd1ebcabdae45e3a3ba3c4e003929e3c832785. Do not equate source integration with publication.

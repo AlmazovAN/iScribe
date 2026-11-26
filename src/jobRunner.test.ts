@@ -7,6 +7,7 @@ import {createJob} from './jobs';
 import type {diagnosticReport} from './jobTrace';
 import type {ModelManager} from './ml/manager';
 import type {StreamedAudio,openStreamedAudio} from './streamedAudio';
+import {ResourceManager} from './performance/resourceManager';
 function setup(){
  const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),diagnosticDownload=vi.fn((_report:ReturnType<typeof diagnosticReport>,_filename:string)=>{void _report;void _filename}),decode=vi.fn(async()=>new Float32Array(60*16000));
@@ -666,5 +667,82 @@ it('does not open another decoder if watchdog disposal failed',async()=>{
  expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
  expect(fake.transcribe).not.toHaveBeenCalled();
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'recovery'})]));
+ await store.remove(job.id);
+});
+
+it('prefetches next streamed window during ASR and commits in original order',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'pipeline.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(job,file);Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const resources=new ResourceManager(null),policy={...resources.policy(),targetPrefetchWindows:2 as const,pauseRatio:0,maxPauseMs:0};
+ vi.spyOn(resources,'policy').mockReturnValue(policy);
+ const read=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
+ const close=vi.fn();
+ const openStream=vi.fn<typeof openStreamedAudio>(async()=>({length:60*16000,decoderId:1,read,close}));
+ const runner=new JobRunner({store,resources,manager:fake as unknown as ModelManager,openStream});
+ fake.transcribe.mockImplementationOnce(async()=>{
+  await vi.waitFor(()=>expect(read.mock.calls.length).toBeGreaterThanOrEqual(2));
+  expect((await store.get(job.id,false))?.nextWindow).toBe(0);
+  return [{start:3,end:4,text:'текст'}];
+ });
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{audioPipeline:{scheduled:2,consumed:2,failed:0,peakQueued:2}}});
+ expect(read.mock.calls.map(c=>c[0].start)).toEqual([0,25*16000,50*16000]);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
+ expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
+ await store.remove(job.id);
+});
+it('defers speculative decoder failure until preceding window commits and uses existing recovery',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'pipeline-stall.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(job,file);Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const resources=new ResourceManager(null),policy={...resources.policy(),targetPrefetchWindows:2 as const,pauseRatio:0,maxPauseMs:0};
+ vi.spyOn(resources,'policy').mockReturnValue(policy);
+ const read=vi.fn<StreamedAudio['read']>(async w=>w.start===0?new Float32Array(w.end-w.start):new Promise<Float32Array>(()=>{}));
+ const close=vi.fn(),newRead=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length:60*16000,decoderId:1,read,close})
+  .mockImplementationOnce(async()=>{
+   expect((await store.get(job.id,false))?.nextWindow).toBe(1);
+   return {length:60*16000,decoderId:2,read:newRead,close:vi.fn()};
+  });
+ const runner=new JobRunner({store,resources,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,streamRecovery:{window:2,totalRecoveries:1},benchmark:{audioPipeline:{failed:1}}});
+ expect(openStream).toHaveBeenCalledTimes(2);expect(read).toHaveBeenCalledTimes(2);
+ expect(newRead.mock.calls.map(c=>c[0].start)).toEqual([25*16000,50*16000]);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
+ await store.remove(job.id);
+});
+
+it('coalesces streamed completion metadata but commits every window and preserves trace',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'storage-ui.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(job,file);Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const resources=new ResourceManager(null);
+ vi.spyOn(resources,'policy').mockReturnValue({...resources.policy(),targetPrefetchWindows:0,pauseRatio:0,maxPauseMs:0});
+ const read=vi.fn<StreamedAudio['read']>(async(w,observe)=>{
+  await observe?.({code:'stream-samples',streamStage:'decode',packets:1});
+  await observe?.({code:'stream-read-end',streamStage:'decode',elapsedMs:1});
+  await observe?.({code:'stream-resample-start',streamStage:'resample'});
+  await observe?.({code:'stream-resample-end',streamStage:'resample',elapsedMs:1});
+  return new Float32Array(w.end-w.start);
+ });
+ const runner=new JobRunner({store,resources,manager:fake as unknown as ModelManager,openStream:async()=>({length:60*16000,decoderId:1,read,close:()=>{}})});
+ await runner.init();const writes=vi.spyOn(store,'save');runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{storageUi:{deferredMetadataWrites:12}}});
+ expect(saved.segments).toHaveLength(3);
+ expect(saved.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
+ expect(saved.trace?.filter(e=>e.code==='stream-resample-end')).toHaveLength(3);
+ // A completion event is stored with the next critical stage, not omitted.
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===1&&j.segments.length===1)).toBe(true);
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===2&&j.segments.length===2)).toBe(true);
+ expect(writes.mock.calls.some(([j])=>j.nextWindow===3&&j.segments.length===3)).toBe(true);
  await store.remove(job.id);
 });

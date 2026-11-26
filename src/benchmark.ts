@@ -1,4 +1,14 @@
 import type {Job} from './jobs';
+import {performanceReport,type PerformanceProfile} from './performance/profiler';
+import {resourceReport} from './performance/resourcePolicy';
+import type {ResourceObservations} from './performance/types';
+import {calibrationReport,type BackendCalibration} from './performance/backendPolicy';
+import {wasmThreadReport,type WasmThreadObservations} from './performance/wasmThreads';
+import {pipelineReport,type PipelineObservations} from './performance/audioPipeline';
+import {memoryReport,type MemoryObservations} from './performance/memoryPolicy';
+import {storageUiReport,type StorageUiObservations} from './performance/storageUiPolicy';
+import {speakerPerformanceReport,type SpeakerPerformance} from './performance/speakerPerformance';
+import {runContextReport,type BenchmarkRunContext} from './performance/runContext';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -27,6 +37,15 @@ export type JobBenchmark={
  windowTimings:BenchmarkWindow[];
  mainThreadHeapPeakBytes?:number;
  memorySamples:number;
+ profiler?:PerformanceProfile;
+ resources?:ResourceObservations;
+ backendCalibration?:BackendCalibration;
+ wasmThreads?:WasmThreadObservations;
+ audioPipeline?:PipelineObservations;
+ memory?:MemoryObservations;
+ storageUi?:StorageUiObservations;
+ speakerPerformance?:SpeakerPerformance;
+ firstRunContext?:BenchmarkRunContext;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -81,6 +100,7 @@ export function benchmarkReport(job:Job){
   schema:'iscribe.benchmark.v1',
   source:'browser-observed-timings',
   workload:'real-application-path',
+  firstRunContext:runContextReport(b.firstRunContext),
   model:job.params.model,language:job.params.language,
   diarizationRequested:job.params.diarize,
   durationSeconds:job.duration??null,
@@ -100,6 +120,15 @@ export function benchmarkReport(job:Job){
   checkpointWindowMs:{count:checkpoint.length,p50:round(percentile(checkpoint,.5)),
    p95:round(percentile(checkpoint,.95)),max:round(checkpoint.at(-1)??null)},
   asrRtf:round(rtf,4),
+  measuredRunRtf:round(b.uniqueAudioSeconds>0&&b.runMs>0?b.runMs/(b.uniqueAudioSeconds*1000):null,4),
+  performanceProfiler:performanceReport(b.profiler),
+  resourceManagement:resourceReport(b.resources,Boolean(b.wasmThreads&&b.wasmThreads.attempts>b.wasmThreads.unconfirmed),Boolean(b.audioPipeline?.scheduled)),
+  audioPipeline:pipelineReport(b.audioPipeline),
+  memoryOptimization:memoryReport(b.memory),
+  storageUiOptimization:storageUiReport(b.storageUi),
+  speakerOptimization:speakerPerformanceReport(b.speakerPerformance),
+  wasmThreads:wasmThreadReport(b.wasmThreads),
+  backendCalibration:calibrationReport(b.backendCalibration),
   mainThreadHeap:{
    sampleCount:b.memorySamples,
    observedPeakBytes:b.mainThreadHeapPeakBytes??null,
@@ -111,6 +140,7 @@ export function benchmarkReport(job:Job){
   })),
   limitations:[
    'RTF is ASR attempt time divided by newly committed unique audio seconds; failed attempts increase numerator.',
+   'Measured run RTF uses recorded run wall time divided by measured unique committed audio; includes retries, speaker passes and resumed runs, not unmeasured historical work.',
    'The stage timings are cumulative across resumed runs, not a precise CPU or full-system memory profile.',
    'This report alone does not establish quality, accuracy or real hardware benchmark acceptance.'
   ]

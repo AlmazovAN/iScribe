@@ -1,4 +1,5 @@
 import type {SpeakerTurn,TranscriptSegment} from '@yourdevice/engine';
+import {SpeakerIntervalIndex} from '../performance/speakerIndex';
 
 // Keep the decision conservative: never invent a label across long pauses
 // or a segment with nearly equal overlap evidence for two speakers.
@@ -71,8 +72,9 @@ function distance(segment:TranscriptSegment,turn:Interval):number{
  if(segment.start>=turn.end)return segment.start-turn.end;
  return 0;
 }
-export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readonly SpeakerTurn[]):SpeakerAlignment{
+export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readonly SpeakerTurn[],observe?:(queries:number,candidates:number)=>void):SpeakerAlignment{
  const prepared=normalizedTurns(turns),valid=prepared.merged;
+ const index=new SpeakerIntervalIndex(valid);let queries=0,candidateCount=0;
  const stats:SpeakerAlignmentStats={
   turns:turns.length,validTurns:prepared.validTurns,invalidTurns:prepared.invalidTurns,
   mergedTurns:valid.length,speakerCount:prepared.speakerCount,
@@ -95,7 +97,12 @@ export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readon
   const length=segment.end-segment.start;
   if(length===0)stats.zeroDuration++;
   const evidence=new Map<string,number>();
-  for(const t of valid){
+  // Include the bounded edge tolerance for short segments; the original
+  // exact overlap/distance tests below remain the authority for labels.
+  const pad=length<=MAX_BOUNDARY_SEGMENT_SECONDS?MAX_BOUNDARY_GAP_SECONDS+2*EPS:0;
+  const candidates=index.candidates(segment.start-pad,segment.end+pad);
+  queries++;candidateCount+=candidates.length;
+  for(const t of candidates){
    const overlap=length===0
     ?segment.start>=t.start&&segment.start<t.end?1:0
     :Math.max(0,Math.min(segment.end,t.end)-Math.max(segment.start,t.start));
@@ -119,7 +126,7 @@ export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readon
   // sub-250ms segments and gaps within 80ms qualify, never an arbitrary
   // nearest-speaker search through silence.
   if(length<=MAX_BOUNDARY_SEGMENT_SECONDS){
-   const nearest=valid.map(t=>({speaker:t.speaker,delta:distance(segment,t)}))
+   const nearest=candidates.map(t=>({speaker:t.speaker,delta:distance(segment,t)}))
     .filter(x=>x.delta<=MAX_BOUNDARY_GAP_SECONDS+EPS)
     .sort((a,b)=>a.delta-b.delta||a.speaker.localeCompare(b.speaker));
    if(nearest.length){
@@ -134,6 +141,7 @@ export function alignSpeakers(segments:readonly TranscriptSegment[],turns:readon
   }
   stats.uncovered++;stats.unlabeled++;return plain;
  });
+ observe?.(queries,candidateCount);
  return {segments:result,stats};
 }
 export function mapSpeakers(segments:readonly TranscriptSegment[],turns:readonly SpeakerTurn[]):TranscriptSegment[]{

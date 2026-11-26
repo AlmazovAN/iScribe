@@ -6,6 +6,7 @@ import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {ModelManager} from './ml/manager';
 import type {benchmarkReport} from './benchmark';
+import {ResourceManager} from './performance/resourceManager';
 
 function setup(){
  const store=new JobStore('pr29-'+crypto.randomUUID());
@@ -21,9 +22,11 @@ function setup(){
  const downloadBenchmark=vi.fn((_report:ReturnType<typeof benchmarkReport>,_name:string)=>{
   void _report;void _name;
  });
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,
+ const resources=new ResourceManager(null);
+ const boundaryWait=vi.fn(async(_ms:number,_signal:AbortSignal)=>{void _ms;void _signal});
+ const runner=new JobRunner({store,resources,boundaryWait,manager:fake as unknown as ModelManager,
   decode:async()=>new Float32Array(60*16000),download:()=>{},downloadBenchmark});
- return {store,fake,runner,downloadBenchmark};
+ return {store,fake,runner,downloadBenchmark,boundaryWait};
 }
 async function finished(runner:JobRunner){
  await vi.waitFor(()=>expect(runner.snapshot().busy).toBe(false));
@@ -44,9 +47,15 @@ it('persists observed run, 3 checkpoint timings, inferred RTF and redacted JSON 
  expect(saved.benchmark?.checkpointMs).toBeGreaterThanOrEqual(0);
  expect(saved.benchmark?.speakerMs).toBeGreaterThanOrEqual(0);
  expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved.benchmark?.profiler?.timings.pcmCopy?.count).toBe(3);
+ expect(saved.benchmark?.profiler?.timings.betweenAsrAttempts?.count).toBe(2);
+ expect(saved.benchmark?.profiler?.timings.fullAudioPreparation?.count).toBe(1);
+ expect(saved.benchmark?.profiler?.backendAttempts.wasm).toBe(3);
  runner.exportBenchmark(id);
  const report=downloadBenchmark.mock.calls[0][0];
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',measuredCommittedWindows:3,measuredUniqueAudioSeconds:60,asrWindowMs:{count:3}});
+ expect(report.performanceProfiler?.device.cpuUtilizationPercent).toBeNull();
+ expect(report.performanceProfiler?.workerTransferMs).toBeNull();
  expect(JSON.stringify(report)).not.toContain('PRIVATE-MEETING');
  expect(JSON.stringify(report)).not.toContain('confidential source text');
  const restarted=new JobRunner({store,manager:fake as unknown as ModelManager,
@@ -91,4 +100,35 @@ it('speaker-only retry increases run counter but does not add ASR timings or pro
  expect(fake.transcribe).toHaveBeenCalledTimes(count);
  expect(second.benchmark).toMatchObject({runs:2,resumedRuns:1,failedRuns:1,
   committedWindows:3,uniqueAudioSeconds:60,attempts:3});
+});
+
+it('changes performance mode only on the next window and keeps existing checkpoints',async()=>{
+ const {store,fake,runner,boundaryWait}=setup();
+ await runner.init();runner.setPerformanceMode('eco');
+ fake.transcribe.mockImplementationOnce(async()=>{
+  expect(runner.snapshot().activeResourcePolicy?.effective).toBe('eco');
+  runner.setPerformanceMode('max');
+  expect(runner.snapshot().activeResourcePolicy?.effective).toBe('eco');
+  return [{start:3,end:4,text:'first'}];
+ });
+ await runner.add([new File(['a'],'profile.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{resources:{windowCounts:{eco:1,medium:0,max:2},lastPolicy:{effective:'max'}}}});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(boundaryWait).not.toHaveBeenCalled();
+ expect(runner.snapshot().activeResourcePolicy).toBeNull();
+});
+
+it('reuses settled ASR payload storage without changing checkpoints',async()=>{
+ const {store,fake,runner}=setup();
+ await runner.init();runner.setPerformanceMode('max');
+ await runner.add([new File(['a'],'memory.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{memory:{payloadAllocations:2,payloadReuses:1,detachedPayloads:0,peakPayloadBytes:1920000}}});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
+ await store.remove(id);
 });

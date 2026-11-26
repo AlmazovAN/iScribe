@@ -1,0 +1,11 @@
+# PERF-02 — Resource Manager
+
+Depends on PERF-01. The existing three buttons select a single global runtime preference (medium by default, stored locally; denied storage does not prevent operation). Running windows keep their chosen policy until the next boundary; model/language/speaker settings are unchanged. JobRunner applies a small cooperative delay before the next ASR window, based on the previous successful attempt: eco 15%, capped at 1000 ms; medium 3%, capped at 100 ms; max 0. No delay before first or after final window. Cancellation clears a pending timer. Existing retry budgets and atomic checkpoint writes remain untouched. This pacing reduces offered work only, not hardware clock speed or guaranteed power consumption. Do not claim acceleration compared with the pre-PERF-02 baseline.
+
+A recoverable Worker or explicitly coded GPU loss can lower the effective mode for the remaining run at the next window. Existing recovery decides whether to retry; resource policy never retries or restarts sessions on its own. Explicit OOM remains nonretryable under current policy. The cap resets at the next run. User preference stays unchanged.
+
+Policy computes conservative **targets** for WASM and prefetch, with one thread if unavailable or standalone, up to 8 threads with a logical processor reserved, and at most one prefetched window for a reported 8 GiB device (zero if <=4 or unknown). They are passed as a policy object to ModelManager but are **not applied to ONNX/Worker** until PERF-04/05. Backend selection is unchanged until PERF-03. No model quality, dtype, audio window, storage schema, or standalone build changes.
+
+Resource Management report in Benchmark JSON identifies selected/effective counts, applied pacing, actual pause wall time, targets and limitations. Optional fields preserve old jobs. Counts mean admitted windows, not successful commits. The profile report is bounded; no raw audio, transcript, file name or device identifiers.
+
+Tests: policy limits, invalid/blocked storage, mode restoration, recovery cap, abortable waits, and checkpoint-safe mode switching in mocked runner. Full CI and hardware acceptance NOT TESTED until actual results. Compare performance and resource usage on target hardware in PERF-09.

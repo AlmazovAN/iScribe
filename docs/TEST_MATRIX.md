@@ -61,3 +61,76 @@ For each real-device run record commit SHA, OS/browser, GPU/RAM, model/backend, 
 | STR-5 | Standalone/web builds, release preflight, offline browser tests | Pending CI |
 | HW-S1–6 | Real original MP3/Whisper Small and resource measurements | NOT TESTED |
 See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and criteria.
+
+## PERF-01
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-01-U | Bounded aggregate timings, backend counters, privacy and null unavailable fields | NOT TESTED |
+| PERF-01-R | Runner persists observations across existing checkpoints | NOT TESTED |
+| PERF-01-H | Real recording and external CPU/GPU/RAM profiling | NOT TESTED |
+
+## PERF-02
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-02-U | Persistent profile, conservative targets, cancellable pacing and recovery cap | NOT TESTED |
+| PERF-02-R | Mode switch only at next window; previous checkpoints remain intact | NOT TESTED |
+| PERF-02-H | Real-device mode comparison | NOT TESTED |
+
+## PERF-03
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-03-U | Strict provider requests, no disguised fallback, cached choice expiry and invalidation | NOT TESTED |
+| PERF-03-H | Same real speech fragment on supported providers; compare time and quality externally | NOT TESTED |
+
+## PERF-04
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-04-U | Thread target clamp, acknowledgement, session reuse/refresh and cache scoping | NOT TESTED |
+| PERF-04-B | Loopback COOP/COEP and shared memory in page and Worker | NOT TESTED |
+| PERF-04-H | Real ASR performance, memory and quality at 1/2/4/6/8 threads on compatible hardware | NOT TESTED |
+
+## PERF-05
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-05-U | Bounded sequential producer, FIFO, cancellation and backpressure | NOT TESTED |
+| PERF-05-R | Overlap, exactly-once commits, deferred decoder recovery | NOT TESTED |
+| PERF-05-H | Same long recording, compare RTF, memory, failures and text | NOT TESTED |
+
+## PERF-06
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-06-U | Direct mixing/resampling, detached buffer rejection, transfer scope, idle release | NOT TESTED |
+| PERF-06-R | Reuse during ASR and intact checkpoints; existing recovery regression | NOT TESTED |
+| PERF-06-H | Actual peak RAM/VRAM and sample accuracy during long recordings/queue | NOT TESTED |
+
+## PERF-07
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-07-U | Trace flush decision and stage-aware UI progress limiter | NOT TESTED |
+| PERF-07-R | Sequential streaming commits and trace persist after coalescing | NOT TESTED |
+| PERF-07-H | Actual transaction latency, React render cost, RTF on real device | NOT TESTED |
+
+## PERF-08
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-08-U | Index candidates, preserved labels/thresholds, milestone reporting and configuration ordering | NOT TESTED |
+| PERF-08-H | Real Pyannote/WeSpeaker output, thread comparison, memory and speaker accuracy | NOT TESTED |
+
+## PERF-09
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-09-U | Validate input, reject incomparable/resumed runs, median and privacy | NOT TESTED |
+| PERF-09-R | Combined hardware/benchmark export with first run context | NOT TESTED |
+| PERF-09-H | T01–T10 real device and external quality/resource observations | NOT TESTED |
+
+## PERF-10 release candidate
+The initial PERF-01–09 NOT TESTED entries above describe status at creation; see exact-head automated run IDs in [PERF-10](performance/PERF-10.md). PERF-01–08 have passed; PERF-09 selectors corrected, rerun required. Final candidate full CI must pass before source integration. Hardware entries remain NOT TESTED. New comparison browser test imports synthetic independent reports, tests median, duplicate protection and redaction. No genuine ML performance claim.

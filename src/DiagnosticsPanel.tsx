@@ -1,7 +1,8 @@
-import {useState,type ReactNode} from 'react';
+import {useMemo,useState,type ReactNode} from 'react';
 import {expectedWindows} from './jobDiagnostics';
 import {formatTime} from './formatTranscript';
 import {benchmarkReport} from './benchmark';
+import {performanceLabels} from './performance/profiles';
 import {HardwareAcceptancePanel} from './HardwareAcceptancePanel';
 import type {Job,WindowInspectionStrategy} from './jobs';
 import {isRunning} from './jobs';
@@ -48,13 +49,20 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
  onHardware:(id:string)=>Promise<void>;children:ReactNode;
 }){
  const [selection,setSelection]=useState<{id:string;value:string}|null>(null);
+ const [logOpen,setLogOpen]=useState(false);
  const total=expectedWindows(job?.duration);
  const defaultWindow=job?Math.max(1,Math.min(job.nextWindow+1,total??Infinity)):1;
  const inputValue=selection?.id===job?.id?selection?.value??String(defaultWindow):String(defaultWindow);
  const windowNumber=Number(inputValue);
  const valid=Number.isSafeInteger(windowNumber)&&Number.isSafeInteger((windowNumber-1)*25*16000)&&windowNumber>=1&&(total===null||windowNumber<=total);
  const blocked=busy||!job||isRunning(job.stage)||job.stage==='queued'||!valid;
- const benchmark=job?.benchmark?.committedWindows?benchmarkReport(job):null;
+ const benchmark=useMemo(()=>job?.benchmark?.runs?benchmarkReport(job):null,[job]);
+ const profiler=benchmark?.performanceProfiler;
+ const metrics=benchmark?.timingsMs;
+ const measuredStages=metrics?Object.entries(metrics).filter(([key,value])=>key!=='jobRuns'&&typeof value==='number'&&value>0).sort((a,b)=>Number(b[1])-Number(a[1])):[];
+ const stageNames:Record<string,string>={decode:'подготовка аудио',pcmIntegrityCheck:'проверка PCM',modelInitialization:'инициализация модели',asrIncludingFailedAttempts:'Whisper',checkpointPersistence:'контрольные точки',speakerInference:'диаризация'};
+ const timingLabels:Record<string,string>={streamOpen:'Открытие потока',fullAudioPreparation:'Подготовка полного аудио',streamDecode:'Декодирование окон',streamResample:'Ресэмплинг',metadataPersistence:'Служебное сохранение',pcmCopy:'Копирование PCM',betweenAsrAttempts:'Интервалы между попытками Whisper',workerRecovery:'Восстановление Worker',speakerPass:'Проход диаризации'};
+ const available=(v:boolean|null)=>v===null?'недоступно':v?'да':'нет';
  const events=job?.trace??[];
 
  return <details className="panel diagnostics-panel">
@@ -90,12 +98,58 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {job.audioCheck?.status==='passed'&&<p>PCM проверен: {job.audioCheck.report.windowCount} окон · {job.audioCheck.report.quietWindows} тихих · {job.audioCheck.report.nearClippedWindows} с пиковыми уровнями · пик {job.audioCheck.report.peakAbsolute.toFixed(3)}</p>}
     {job.audioCheck?.status==='failed'&&<p role="alert">Проверка аудио: {job.audioCheck.problem}</p>}
     {benchmark&&<p aria-label="Измерения производительности">Бенчмарк: {benchmark.measuredCommittedWindows} окон · RTF ASR: {benchmark.asrRtf??'—'} · p95 окна: {benchmark.asrWindowMs.p95??'—'} мс · запись контрольных точек: {benchmark.timingsMs.checkpointPersistence??'—'} мс · возобновлений: {benchmark.resumedRuns}{benchmark.mainThreadHeap.observedPeakBytes!==null?' · оценка JS heap: '+(benchmark.mainThreadHeap.observedPeakBytes/1e6).toFixed(1)+' МБ':''}</p>}
+    {profiler&&<details aria-label="Performance Profiler"><summary>Performance Profiler</summary>
+     <p>Логические процессоры: {profiler.device.logicalProcessors??'недоступно'} · RAM (оценка браузера): {profiler.device.deviceMemoryGiB??'недоступно'} Гб · WebGPU API: {available(profiler.device.webGpuApi)} · WebNN API: {available(profiler.device.webNnApi)}</p>
+     <p>WASM SIMD: {available(profiler.device.wasmSimd)} · предпосылки многопоточности: {available(profiler.device.wasmThreadPrerequisites)} · настроено потоков: {profiler.device.configuredWasmThreads??'недоступно'} · фактические потоки: недоступно</p>
+     <p>Попытки ASR: WebGPU {profiler.backendAttempts.webgpu} · WebNN {profiler.backendAttempts.webnn} · WASM {profiler.backendAttempts.wasm} · неизвестно {profiler.backendAttempts.unknown}. Запрос: авто {profiler.requestedBackendAttempts.auto} · WASM {profiler.requestedBackendAttempts.wasm} · WebGPU {profiler.requestedBackendAttempts.webgpu} · WebNN {profiler.requestedBackendAttempts.webnn} · неизвестно {profiler.requestedBackendAttempts.unknown}.</p>
+     <p>RTF измеренных запусков: {benchmark?.measuredRunRtf??'—'} · наибольшая из измеренных стадий: {measuredStages.length?stageNames[measuredStages[0][0]]:'недоступно'}</p>
+     {Object.entries(profiler.timingsMs).map(([key,timing])=><p key={key}>{timingLabels[key]}: {timing?timing.totalMs+' мс ('+timing.count+' изм.)':'недоступно'}</p>)}
+     <p>Интервалы могут перекрываться. Загрузка CPU/GPU, полная RAM/VRAM, время передачи в Worker и фактическое число потоков недоступны; измеряются внешними средствами. Наличие API не подтверждает работоспособность модели.</p>
+    </details>}
+    {benchmark?.resourceManagement&&<details aria-label="Resource Manager"><summary>Resource Manager</summary>
+     <p>Запрошено: {performanceLabels[benchmark.resourceManagement.lastPolicy.requested]} · применено: {performanceLabels[benchmark.resourceManagement.lastPolicy.effective]}</p>
+     <p>Окон допущено: экономичная {benchmark.resourceManagement.windowCounts.eco}, средняя {benchmark.resourceManagement.windowCounts.medium}, максимальная {benchmark.resourceManagement.windowCounts.max}. Паузы: {benchmark.resourceManagement.pauseCount} · {benchmark.resourceManagement.pauseMs} мс.</p>
+     <p>Целевые параметры: WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
+     <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы, выбор проверенного бэкенда в начале задания и настройка потоков WASM. Предварительная подготовка применяется для потокового аудио в пределах профиля.</p>
+    </details>}
+    {benchmark?.speakerOptimization&&<details aria-label="Speaker Optimization"><summary>Speaker Optimization</summary>
+     {benchmark.speakerOptimization.lastPass&&<>
+      <p>Профиль моделей: WASM/q8 · потоков запрошено {benchmark.speakerOptimization.lastPass.threads.requested} · настройка подтверждена Worker: {benchmark.speakerOptimization.lastPass.threads.configured??'недоступно'} · передача PCM: {benchmark.speakerOptimization.lastPass.transfer??'недоступно'}.</p>
+      <p>До первого сигнала поиска речи: {benchmark.speakerOptimization.lastPass.preparationToFirstSpeechMs?.toFixed(0)??'—'} мс · до первого сигнала разделения говорящих после поиска речи: {benchmark.speakerOptimization.lastPass.firstSpeechToFirstSpeakerMs?.toFixed(0)??'—'} мс · от него до завершения: {benchmark.speakerOptimization.lastPass.firstSpeakerToEndMs?.toFixed(0)??'—'} мс.</p>
+     </>}
+     <p>Сопоставление интервалов: {benchmark.speakerOptimization.alignmentMs} мс · запросов {benchmark.speakerOptimization.alignmentQueries} · проверено кандидатов {benchmark.speakerOptimization.alignmentCandidates}.</p>
+     <p>Измерения по сигналам прогресса не являются точным временем отдельных моделей; фактическая загрузка GPU/CPU и количество активных потоков недоступны.</p>
+    </details>}
+    {benchmark?.storageUiOptimization&&<details aria-label="Storage & UI Optimization"><summary>Storage &amp; UI Optimization</summary>
+     <p>Промежуточных записей объединено со следующими обязательными сохранениями: {benchmark.storageUiOptimization.deferredMetadataWrites} · пропущено частых обновлений прогресса: {benchmark.storageUiOptimization.suppressedProgressUpdates}.</p>
+     <p>Контрольные точки, ошибки и резервирование восстановления не откладываются. Счётчики не являются замером числа перерисовок React или задержки IndexedDB.</p>
+    </details>}
+    {benchmark?.memoryOptimization&&<details aria-label="Memory Optimization"><summary>Memory Optimization</summary>
+     <p>Новых буферов ASR: {benchmark.memoryOptimization.payloadAllocations} · повторно использовано: {benchmark.memoryOptimization.payloadReuses} · отсоединено при успешной передаче: {benchmark.memoryOptimization.detachedPayloads}.</p>
+     <p>Скопировано PCM: {Math.round(benchmark.memoryOptimization.payloadCopyBytes/1000)} кб · наибольший буфер передачи: {Math.round(benchmark.memoryOptimization.peakPayloadBytes/1000)} кб.</p>
+     <p>Освобождений модели: {benchmark.memoryOptimization.idleModelReleases} · ошибок освобождения: {benchmark.memoryOptimization.releaseFailures}. Эти счётчики не измеряют полное потребление RAM/VRAM.</p>
+    </details>}
+    {benchmark?.audioPipeline&&<details aria-label="Audio Pipeline"><summary>Audio Pipeline</summary>
+     <p>Окон запланировано: {benchmark.audioPipeline.scheduled} · использовано: {benchmark.audioPipeline.consumed} · готовы к моменту запроса: {benchmark.audioPipeline.readyHits} · ошибки: {benchmark.audioPipeline.failed}.</p>
+     <p>Максимальная глубина очереди: {benchmark.audioPipeline.peakQueued} · ожидание буфера: {benchmark.audioPipeline.waitMs} мс · подготовка использованных окон: {benchmark.audioPipeline.preparedMs} мс.</p>
+     <p>Время подготовки может перекрываться с распознаванием. Глубина очереди не измеряет полную память декодера.</p>
+    </details>}
+    {benchmark?.wasmThreads&&<details aria-label="Потоки WASM"><summary>Потоки WASM</summary>
+     <p>Последняя попытка: запрошено {benchmark.wasmThreads.last.requested} · подтверждено Worker (настройка ONNX) {benchmark.wasmThreads.last.configured??'недоступно'} · реально активных потоков: недоступно.</p>
+     <p>Попыток WASM: {benchmark.wasmThreads.attempts} · без подтверждения настройки: {benchmark.wasmThreads.unconfirmed}.</p>
+     <p>После сбоя восстановление на WASM ограничено одним потоком до конца задания. Монолитный HTML также ограничен одним потоком.</p>
+    </details>}
+    {benchmark?.backendCalibration&&<details aria-label="Сравнение бэкендов"><summary>Сравнение бэкендов</summary>
+     <p>Исходный: {benchmark.backendCalibration.baseline.toUpperCase()} · выбран: {benchmark.backendCalibration.chosen.toUpperCase()} · фрагмент: {benchmark.backendCalibration.sampleSeconds.toFixed(1)} с.</p>
+     {benchmark.backendCalibration.samples.map(s=><p key={s.backend}>{s.backend.toUpperCase()}: {s.status==='passed'?'совпадение текста':s.status==='mismatch'?'текст отличается':s.status==='empty'?'нет текста':'ошибка'} · {s.inferenceMs===null?'—':s.inferenceMs.toFixed(0)+' мс'} · инициализация {s.initializationMs===null?'—':s.initializationMs.toFixed(0)+' мс'}</p>)}
+     <p>Сравнение на одном фрагменте не подтверждает точность распознавания всей записи или аппаратную приёмку.</p>
+    </details>}
     {job.failure&&<p aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null? ' / '+job.failure.totalWindows:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?' из '+Math.round(job.failure.durationSeconds)+' с':''} · backend: {job.failure.backend??'неизвестен'}{job.failure.observedExit==='pagehide'?' · зафиксирован выход со страницы (не обязательно перезагрузка)':''} · {job.failure.message}</p>}
     {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}
    </div>}
-   <details className="diagnostics-log">
-    <summary>Журнал логирования{events.length>0&&<span>{events.length}</span>}</summary>
-    {events.length>0?<ol aria-label="События выбранной записи">
+   <details className="diagnostics-log" onToggle={e=>setLogOpen(e.currentTarget.open)}>
+    <summary>Журнал логирования{events.length>0&&<span>{events.length} · {labels[events.at(-1)!.code]??events.at(-1)!.code}</span>}</summary>
+    {logOpen&&(events.length>0?<ol aria-label="События выбранной записи">
      {[...events].reverse().map((event,index)=>{
       const details=eventDetails(event);
       return <li key={event.at+'-'+index}>
@@ -103,7 +157,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
        <div><strong>{labels[event.code]??event.code}</strong>{details&&<small>{details}</small>}</div>
       </li>;
      })}
-    </ol>:<p>{job?'События появятся после проверки аудио или запуска распознавания.':'Выберите запись, чтобы открыть журнал.'}</p>}
+    </ol>:<p>{job?'События появятся после проверки аудио или запуска распознавания.':'Выберите запись, чтобы открыть журнал.'}</p>)}
     {job&&(events.length>0||job.failure)&&<button type="button" onClick={()=>onLog(job.id)} title="Скачать журнал без аудио, текста и имени записи">Скачать журнал JSON</button>}
    </details>
    <HardwareAcceptancePanel job={job} onExport={onHardware} busy={busy}/>

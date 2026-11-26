@@ -1,5 +1,6 @@
 import {compressedWasmFetch,validatedModelFetch,observedWhisperHttpFetch,offlineModelFetch} from './runtimeFetch';
 import {env} from '@huggingface/transformers';
+import {clampWasmRequest,localWasmThreadEnvironment,resolveWasmThreads} from '../performance/wasmThreads';
 import {preloadDiarizationModels,runSpeakerPass} from '@yourdevice/engine/worker';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
 import mjsUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.mjs?url';
@@ -21,9 +22,21 @@ if(wasm){
   wasm.wasmPaths={wasm:wasmUrl,mjs:mjsUrl};
  }
 }
+// Both ASR and independent speaker hosts send this once before initializing
+// models. Speaker backend/dtype remain pinned by the engine's q8/WASM patch.
+let threadsConfigured=false;
 let preloading=false;
 addEventListener('message',(event:MessageEvent<unknown>)=>{
  const data=event.data;
+ if(data&&typeof data==='object'&&'type' in data&&data.type==='iscribe:wasm-threads'){
+  if(threadsConfigured||!wasm)return;
+  threadsConfigured=true;
+  const requested=clampWasmRequest('requested' in data?data.requested:undefined);
+  const configured=resolveWasmThreads(requested,localWasmThreadEnvironment(import.meta.env.MODE==='standalone'));
+  wasm.numThreads=configured;
+  postMessage({type:'iscribe:wasm-thread-config',requested,configured});
+  return;
+ }
  if(import.meta.env.MODE==='standalone'&&wasm&&data&&typeof data==='object'&&
     'type' in data&&data.type==='iscribe:runtime-wasm'&&'binary' in data&&data.binary instanceof ArrayBuffer){
   wasm.wasmBinary=data.binary;

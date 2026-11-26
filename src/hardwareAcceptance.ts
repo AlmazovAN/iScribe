@@ -1,6 +1,7 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {traceBackend} from './jobTrace';
+import {benchmarkReport} from './benchmark';
 declare const __ISCRIBE_BUILD_SHA__:string;
 
 // All seven hardware gates remain unverified until a real-device operator
@@ -65,6 +66,7 @@ export type HardwareEvidenceReport={
   traceGpuErrors:number;
   traceWasmAttempts:number;
  };
+ performanceBenchmark?:ReturnType<typeof benchmarkReport>;
  gates:HardwareGateReport[];
  warnings:string[];
 };
@@ -160,6 +162,7 @@ export function createHardwareEvidence(
    workerRecoveries:b?.workerRecoveries??0,
    traceGpuErrors:gpuErrors,traceWasmAttempts:wasmAttempts
   },
+  ...(job.benchmark?.runs?{performanceBenchmark:benchmarkReport(job)}:{}),
   gates,
   warnings:[
    'Этот файл содержит структурные наблюдения в браузере, но не подтверждает реальные веса Whisper, GPU, источник аудио или устройство.',

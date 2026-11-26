@@ -158,3 +158,6 @@ button.trash-button:hover:not(:disabled) { color: #843f32; border-color: #c2988c
 @media(prefers-reduced-motion:reduce) {
  .audio-panel .file-row { transition: none; }
 }
+
+/* PERF-10: keep the optional comparison tools contained on small screens. */
+.performance-comparison{min-width:0;max-width:100%;margin:12px 0 0}.performance-comparison .diagnostics-record{min-width:0}.performance-comparison input[type=file]{max-width:100%;font-size:11px}.performance-comparison-table{max-width:100%;overflow-x:auto;margin:12px 0}.performance-comparison-table table{border-collapse:collapse;width:100%;min-width:650px;font-variant-numeric:tabular-nums}.performance-comparison-table th,.performance-comparison-table td{padding:7px 8px;text-align:right;border-bottom:1px solid #e0e6dd;white-space:nowrap}.performance-comparison-table th:first-child,.performance-comparison-table td:first-child{text-align:left}.performance-comparison-table td small{display:block;color:#6d7c6c}

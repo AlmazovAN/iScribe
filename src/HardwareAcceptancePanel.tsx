@@ -1,6 +1,7 @@
 import {useState} from 'react';
 import type {Job} from './jobs';
 import {HARDWARE_GATES} from './hardwareAcceptance';
+import {PerformanceComparisonPanel} from './PerformanceComparisonPanel';
 
 export function HardwareAcceptancePanel({job,onExport,busy}:{
  job:Job|undefined;
@@ -26,5 +27,6 @@ export function HardwareAcceptancePanel({job,onExport,busy}:{
    </button>
   </div>
   {error&&<p role="alert">{error}</p>}
+  <PerformanceComparisonPanel busy={busy}/>
  </details>;
 }

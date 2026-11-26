@@ -1,6 +1,9 @@
 import {EngineClient,type CapabilityReport,type TranscriptSegment,type SpeakerTurn,type BackendId} from '@yourdevice/engine';
 import EngineWorker from './worker?worker';
 import {postSpeakerAudio} from './workerTransfer';
+import {SpeakerPassMeter,type SpeakerPassObservation} from '../performance/speakerPerformance';
+import type {ResourcePolicy} from '../performance/types';
+import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,type WasmThreadConfiguration} from '../performance/wasmThreads';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
@@ -8,9 +11,10 @@ function createEngineWorker():Worker{
  const worker=new EngineWorker();
  // This message arrives before the engine's init/preload message. Keep the
  // original buffer for replacement workers used by recovery and diarization.
- if(import.meta.env.MODE==='standalone')
-  worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
- return worker;
+ try{
+  if(import.meta.env.MODE==='standalone')worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
+  return worker;
+ }catch(error){worker.terminate?.();throw error}
 }
 
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -34,21 +38,51 @@ export class ModelManager{
   this.speakerIdleMs=options.speakerIdleMs??DEFAULT_SPEAKER_IDLE_MS;
  }
  private client:EngineClient|null=null;
+ private asrWorker:Worker|null=null;
+ // Always clear references first and terminate the owned Worker even if
+ // EngineClient disposal throws. Worker.terminate is idempotent.
+ private disposeAsr(){
+  const client=this.client,worker=this.asrWorker;
+  this.client=null;this.asrWorker=null;this.active=null;this.capabilities=null;
+  this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
+  try{client?.dispose()}finally{worker?.terminate?.()}
+ }
+ releaseIdle():boolean{
+  if(this.busy||(!this.client&&!this.asrWorker))return false;
+  ++this.generation;
+  try{this.disposeAsr();return true}finally{this.phase('idle',null,null)}
+ }
  private busy=false;
  private speakerWorker:Worker|null=null;
+ lastSpeakerPass:SpeakerPassObservation|null=null;
  private rejectPreload:((error:Error)=>void)|null=null;
  onSpeakerProgress:(id:keyof typeof speakerRepos,status:string)=>void=()=>{};
  private generation=0;
  private preparingId:WhisperId|null=null;
+ // Observed initialization preference, not the actual execution provider.
+ requestedBackend:'auto'|BackendId|'unknown'='unknown';
+ // Policy is applied only before initialization or at a committed boundary.
+ resourcePolicy:ResourcePolicy|null=null;
+ forceSingleWasmThread=false;
+ private sessionWasmThreads:number|null=null;
+ wasmThreadConfiguration:WasmThreadConfiguration|null=null;
+ get targetWasmThreads():number{
+  return resolveWasmThreads(this.forceSingleWasmThread?1:this.resourcePolicy?.targetWasmThreads??1,localWasmThreadEnvironment(import.meta.env.MODE==='standalone'));
+ }
+ needsWasmThreadRefresh():boolean{
+  return this.active!==null&&this.capabilities?.active==='wasm'&&this.sessionWasmThreads!==this.targetWasmThreads;
+ }
  active:WhisperId|null=null;
  capabilities:CapabilityReport|null=null;
  onWhisperProgress:(id:WhisperId,progress:WhisperDownloadProgress)=>void=()=>{};
  onProgress:(text:string,percent:number|null)=>void=()=>{};
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
- async prepare(id:WhisperId,options:{wasmOnly?:boolean}={}):Promise<{cached:boolean,backend:string}>{
+ async prepare(id:WhisperId,options:{wasmOnly?:boolean;backend?:BackendId}={}):Promise<{cached:boolean,backend:string}>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  const required=options.wasmOnly?'wasm':options.backend;
+  const targetThreads=this.targetWasmThreads;
   // Selecting the already active model must not dispose its ONNX session.
-  if(this.active===id&&this.client&&this.capabilities?.active&&(!options.wasmOnly||this.capabilities.active==='wasm')){
+  if(this.active===id&&this.client&&this.capabilities?.active&&(!required||this.capabilities.active===required)&&(this.capabilities.active!=='wasm'||this.sessionWasmThreads===targetThreads)){
    // Cache inspection is asynchronous. The active session may be cancelled or
    // replaced before it completes; never resurrect an old ready status.
    const generation=this.generation,client=this.client,backend=this.capabilities.active;
@@ -58,8 +92,10 @@ export class ModelManager{
    this.onWhisperProgress(id,{phase:'ready',cachedBefore:cached,cachedAfter:cached,httpRequests:0});
    return {cached,backend};
   }
+  this.disposeAsr();
   this.busy=true;this.preparingId=id;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.requestedBackend=required??'auto';
+  this.sessionWasmThreads=targetThreads;this.wasmThreadConfiguration={requested:targetThreads,configured:null};
   this.phase('initializing',id,null);
   let client:EngineClient|null=null;
   let cachedBefore=false,requests=0,loadedBytes=0,totalBytes=0;
@@ -75,17 +111,24 @@ export class ModelManager{
    progress('initializing');
    this.onProgress(cachedBefore?'Инициализация модели из сохранённых файлов…':'Подготовка и проверка файлов модели…',null);
    client=new EngineClient(()=>{
-    const worker=createEngineWorker();
+    const worker=createEngineWorker();this.asrWorker=worker;
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;
-     if(generation!==this.generation||!d||typeof d!=='object'||!('type' in d)||d.type!=='iscribe:model-http-request'||
-        !('repo' in d)||d.repo!==repos[id])return;
-     if(expired)return;
+     if(generation!==this.generation||expired||!d||typeof d!=='object'||!('type' in d))return;
+     if(d.type==='iscribe:wasm-thread-config'){
+      const verified=validWasmConfiguration(d,targetThreads);
+      if(verified)this.wasmThreadConfiguration=verified;
+      return;
+     }
+     if(d.type!=='iscribe:model-http-request'||!('repo' in d)||d.repo!==repos[id])return;
      requests++;
      initHeartbeat?.();
      progress('loading');
      this.onProgress('Чтение файлов модели (из кэша или сети)…',null);
     });
+    // Worker FIFO: configuration precedes EngineClient.init. Optional call
+    // also tolerates deterministic Worker test doubles without postMessage.
+    worker.postMessage?.({type:'iscribe:wasm-threads',requested:targetThreads});
     return worker;
    });
    this.client=client;
@@ -99,14 +142,14 @@ export class ModelManager{
    };
    const report=await withActivityWatchdog(heartbeat=>{
     initHeartbeat=heartbeat;
-    return client!.init(id,options.wasmOnly?{backendPreference:['wasm']}:{})
+    return client!.init(id,required?{backendPreference:[required]}:{})
    },{
     timeoutMs:this.initIdleMs,
     pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),
-    onTimeout:()=>{expired=true;client?.dispose()}
+    onTimeout:()=>{expired=true;if(generation===this.generation)this.disposeAsr()}
    });
    if(generation!==this.generation)throw new Error('Операция отменена.');
-   if(options.wasmOnly&&report.active!=='wasm')throw new Error('Безопасное восстановление на WASM недоступно.');
+   if(required&&report.active!==required)throw new Error('Запрошенный backend '+required.toUpperCase()+' недоступен.');
    if(!report.active)throw new Error('Вычислительный backend не инициализирован.');
    this.active=id;this.capabilities=report;
    progress('checking');
@@ -117,9 +160,10 @@ export class ModelManager{
    return {cached,backend:report.active};
   }catch(error){
    progress('error',error instanceof Error?error.message:String(error));
-   if(generation===this.generation)this.phase('error',id,null);
-   client?.dispose();
-   if(this.client===client){this.client=null;this.active=null;this.capabilities=null}
+   if(generation===this.generation){
+    try{this.disposeAsr()}catch{/* Preserve the original initialization error. */}
+    this.phase('error',id,null);
+   }
    throw error;
   }finally{initHeartbeat=null;if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
@@ -128,7 +172,7 @@ export class ModelManager{
   // requests in that worker are not safe to reuse on the next attempt.
   if(this.busy)throw new Error('Невозможно восстановить Worker во время другой операции.');
   this.phase('recovering',id,null);
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
+  this.disposeAsr();
   const prepared=await this.prepare(id,{wasmOnly});
   const backend=prepared.backend;
   if(backend!=='webnn'&&backend!=='webgpu'&&backend!=='wasm')throw new Error('Неизвестный backend после восстановления.');
@@ -140,8 +184,8 @@ export class ModelManager{
  }
  async preloadSpeakers(){
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.disposeAsr();
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('preloading-speakers',null,null);
   let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
@@ -164,6 +208,7 @@ export class ModelManager{
       this.onSpeakerProgress(id,stage);this.onProgress(`${label}: ${stage}`,null);
      }
     });
+    worker.postMessage({type:'iscribe:wasm-threads',requested:this.targetWasmThreads});
     worker.postMessage({type:'iscribe:preload',requestId});
    }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
@@ -197,8 +242,12 @@ export class ModelManager{
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   if(this.busy)throw new Error('Дождитесь текущей операции.');
+  this.lastSpeakerPass=null;
+  if(!Number.isSafeInteger(audio.length)||audio.length<1||audio.length>3600*16000)throw new Error('Некорректный размер PCM для диаризации.');
+  this.disposeAsr();
+  const requested=this.targetWasmThreads,meter=new SpeakerPassMeter(requested,audio.length,performance.now());
+  this.lastSpeakerPass=meter.observation;
   this.busy=true;const generation=++this.generation;
-  this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
   try{
@@ -208,9 +257,13 @@ export class ModelManager{
     worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
     worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
     worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
-     const d=event.data;if(stopped||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d)||generation!==this.generation)return;
+     const d=event.data;if(stopped||!d||typeof d!=='object'||!('type' in d)||generation!==this.generation)return;
+     if(d.type==='iscribe:wasm-thread-config'){
+      const verified=validWasmConfiguration(d,requested);if(verified)meter.observation.threads=verified;return;
+     }
+     if(!('requestId' in d)||d.requestId!==requestId)return;
      if(d.type==='iscribe:speaker-progress'&&'status' in d&&typeof d.status==='string'){
-      heartbeat();
+      heartbeat();meter.progress(d.status,performance.now());
       this.onProgress(d.status,'percent' in d&&typeof d.percent==='number'&&Number.isFinite(d.percent)?d.percent:null);
      }
      if(d.type==='iscribe:preload-error'&&'message' in d&&typeof d.message==='string')reject(new Error(d.message));
@@ -222,13 +275,22 @@ export class ModelManager{
       heartbeat();resolve(d.turns as SpeakerTurn[]);
      }
     });
-    postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
+    worker!.postMessage({type:'iscribe:wasm-threads',requested});
+    meter.observation.transfer=postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
    }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
-   this.phase('idle',null,null);
+   meter.finish(true,performance.now());this.phase('idle',null,null);
    return turns;
-  }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
+  }catch(error){meter.finish(false,performance.now());if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
  }
- cancel(){if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;this.speakerWorker?.terminate();this.speakerWorker=null;this.client?.dispose();this.client=null;this.active=null;this.capabilities=null;this.busy=false;this.phase('cancelled',null,null)}
+ cancel(){
+  if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;
+  this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;
+  const speaker=this.speakerWorker;this.speakerWorker=null;
+  try{speaker?.terminate()}finally{
+   try{this.disposeAsr()}catch{/* Owned Worker was terminated; cancellation must settle. */}
+   finally{this.busy=false;this.phase('cancelled',null,null)}
+  }
+ }
 }
