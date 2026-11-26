@@ -7,6 +7,7 @@ import {wasmThreadReport,type WasmThreadObservations} from './performance/wasmTh
 import {pipelineReport,type PipelineObservations} from './performance/audioPipeline';
 import {memoryReport,type MemoryObservations} from './performance/memoryPolicy';
 import {storageUiReport,type StorageUiObservations} from './performance/storageUiPolicy';
+import {speakerPerformanceReport,type SpeakerPerformance} from './performance/speakerPerformance';
 
 // Wall-clock timings inside a single tab are monotonic when possible.
 // Persist only elapsed durations; performance.now() origins change on reload.
@@ -42,6 +43,7 @@ export type JobBenchmark={
  audioPipeline?:PipelineObservations;
  memory?:MemoryObservations;
  storageUi?:StorageUiObservations;
+ speakerPerformance?:SpeakerPerformance;
 };
 // Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
@@ -121,6 +123,7 @@ export function benchmarkReport(job:Job){
   audioPipeline:pipelineReport(b.audioPipeline),
   memoryOptimization:memoryReport(b.memory),
   storageUiOptimization:storageUiReport(b.storageUi),
+  speakerOptimization:speakerPerformanceReport(b.speakerPerformance),
   wasmThreads:wasmThreadReport(b.wasmThreads),
   backendCalibration:calibrationReport(b.backendCalibration),
   mainThreadHeap:{

@@ -22,8 +22,8 @@ if(wasm){
   wasm.wasmPaths={wasm:wasmUrl,mjs:mjsUrl};
  }
 }
-// The dedicated ASR host sends this once, before the engine init message.
-// Speaker Workers keep the existing configuration until PERF-08.
+// Both ASR and independent speaker hosts send this once before initializing
+// models. Speaker backend/dtype remain pinned by the engine's q8/WASM patch.
 let threadsConfigured=false;
 let preloading=false;
 addEventListener('message',(event:MessageEvent<unknown>)=>{

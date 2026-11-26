@@ -116,3 +116,10 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | PERF-07-U | Trace flush decision and stage-aware UI progress limiter | NOT TESTED |
 | PERF-07-R | Sequential streaming commits and trace persist after coalescing | NOT TESTED |
 | PERF-07-H | Actual transaction latency, React render cost, RTF on real device | NOT TESTED |
+
+## PERF-08
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-08-U | Index candidates, preserved labels/thresholds, milestone reporting and configuration ordering | NOT TESTED |
+| PERF-08-H | Real Pyannote/WeSpeaker output, thread comparison, memory and speaker accuracy | NOT TESTED |

@@ -85,3 +85,6 @@ Direct resampling-buffer mixing, bounded reusable ASR dispatch storage, explicit
 
 ## PERF-07 (candidate; depends on PERF-06)
 Coalesced intermediate trace writes, immediate atomic checkpoints, stable memoized queue rows, throttled noncritical engine progress and lazy closed log rendering. See [PERF-07](performance/PERF-07.md). Real-device savings pending.
+
+## PERF-08 (candidate; depends on corrected PERF-07)
+Speaker WASM thread policy, indexed alignment and progress-milestone diagnostics. WASM/q8 retained. See [PERF-08](performance/PERF-08.md). GPU/batching and real-device performance not confirmed.

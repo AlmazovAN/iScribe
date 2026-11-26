@@ -112,6 +112,14 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
      <p>Целевые параметры: WASM до {benchmark.resourceManagement.lastPolicy.targetWasmThreads} потоков · буфер до {benchmark.resourceManagement.lastPolicy.targetPrefetchWindows} окон.</p>
      <p>{benchmark.resourceManagement.lastPolicy.reasons.includes('recovery-cap')?'Режим ограничен после восстановления Worker/GPU. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('thread-prerequisites')?'Многопоточность не подтверждена или standalone ограничен одним потоком. ':''}{benchmark.resourceManagement.lastPolicy.reasons.includes('memory-hint')?'Целевой буфер ограничен по оценке памяти. ':''}Действуют паузы, выбор проверенного бэкенда в начале задания и настройка потоков WASM. Предварительная подготовка применяется для потокового аудио в пределах профиля.</p>
     </details>}
+    {benchmark?.speakerOptimization&&<details aria-label="Speaker Optimization"><summary>Speaker Optimization</summary>
+     {benchmark.speakerOptimization.lastPass&&<>
+      <p>Профиль моделей: WASM/q8 · потоков запрошено {benchmark.speakerOptimization.lastPass.threads.requested} · настройка подтверждена Worker: {benchmark.speakerOptimization.lastPass.threads.configured??'недоступно'} · передача PCM: {benchmark.speakerOptimization.lastPass.transfer??'недоступно'}.</p>
+      <p>До первого сигнала поиска речи: {benchmark.speakerOptimization.lastPass.preparationToFirstSpeechMs?.toFixed(0)??'—'} мс · до первого сигнала разделения говорящих после поиска речи: {benchmark.speakerOptimization.lastPass.firstSpeechToFirstSpeakerMs?.toFixed(0)??'—'} мс · от него до завершения: {benchmark.speakerOptimization.lastPass.firstSpeakerToEndMs?.toFixed(0)??'—'} мс.</p>
+     </>}
+     <p>Сопоставление интервалов: {benchmark.speakerOptimization.alignmentMs} мс · запросов {benchmark.speakerOptimization.alignmentQueries} · проверено кандидатов {benchmark.speakerOptimization.alignmentCandidates}.</p>
+     <p>Измерения по сигналам прогресса не являются точным временем отдельных моделей; фактическая загрузка GPU/CPU и количество активных потоков недоступны.</p>
+    </details>}
     {benchmark?.storageUiOptimization&&<details aria-label="Storage & UI Optimization"><summary>Storage &amp; UI Optimization</summary>
      <p>Промежуточных записей объединено со следующими обязательными сохранениями: {benchmark.storageUiOptimization.deferredMetadataWrites} · пропущено частых обновлений прогресса: {benchmark.storageUiOptimization.suppressedProgressUpdates}.</p>
      <p>Контрольные точки, ошибки и резервирование восстановления не откладываются. Счётчики не являются замером числа перерисовок React или задержки IndexedDB.</p>
