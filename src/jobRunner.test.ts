@@ -407,3 +407,55 @@ it('reopens a fresh decoder at window 41 and commits each remaining window exact
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovered',window:41,decoderId:2,attempt:2})]));
  await store.remove(job.id);
 });
+
+
+it('bounds a stalled decoder reopening and closes any late decoder without touching the checkpoint',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'stream-reopen-timeout.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const oldClose=vi.fn(),lateClose=vi.fn(),length=1055*16000;
+ const read=vi.fn<StreamedAudio['read']>(()=>new Promise(()=>{}));
+ let late:(audio:StreamedAudio)=>void=()=>{};
+ let retrySignal:AbortSignal|undefined;
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length,decoderId:1,read,close:oldClose})
+  .mockImplementationOnce((_file,signal)=>{retrySignal=signal;return new Promise(resolve=>{late=resolve})});
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:50,streamOpenIdleMs:50});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ expect(retrySignal?.aborted).toBe(true);
+ late({length,decoderId:2,read,close:lateClose});
+ await vi.waitFor(()=>expect(lateClose).toHaveBeenCalledOnce());
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'error',nextWindow:40,streamRecovery:{totalRecoveries:1}});
+ expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovery-stop',streamStage:'open',window:41,errorKind:'timeout'})]));
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(fake.transcribe).not.toHaveBeenCalled();
+ await store.remove(job.id);
+});
+
+it('does not reopen a decoder after invalid PCM',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'stream-invalid-pcm.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const close=vi.fn();
+ const read=vi.fn<StreamedAudio['read']>(async window=>{
+  const pcm=new Float32Array(window.end-window.start);pcm[0]=NaN;return pcm;
+ });
+ const openStream=vi.fn(async()=>({length:1055*16000,decoderId:1,read,close}));
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'error',nextWindow:40});
+ expect(saved.streamRecovery).toBeUndefined();
+ expect(openStream).toHaveBeenCalledOnce();
+ expect(fake.transcribe).not.toHaveBeenCalled();
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',streamStage:'pcm-check',errorKind:'invalid-audio'})]));
+ await store.remove(job.id);
+});
