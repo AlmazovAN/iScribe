@@ -33,7 +33,7 @@ export function JobRow({job,active,onStart,onExport,onTrash,onPreview,checking=f
   queued&&job.status==='В очереди'?null:job.status;
  const trashLabel=(checking?'Остановить проверку':queuePosition!==undefined||active?'Убрать из очереди':'Удалить запись')+' · '+job.name;
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
-  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ{streamed?' · потоковый режим':''}</small></div></div>
+  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Выбрать запись для диагностики">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ{streamed?' · потоковый режим':''}</small></div></div>
   <div className="file-state">
    <div className="file-queue-status">
     {queuePosition!==undefined&&<span className="file-queue-number" aria-label={'Место в очереди: '+queuePosition}>{queuePosition}</span>}
