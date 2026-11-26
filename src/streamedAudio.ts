@@ -15,13 +15,17 @@ const formats=[MP3,WAVE,MP4,QTFF,OGG,WEBM,ADTS,FLAC];
 export async function openStreamedAudio(file:File,signal?:AbortSignal){
  signal?.throwIfAborted();
  const decoderId=++nextDecoderId;
- const input=new Input({source:new BlobSource(file),formats});
- let closed=false;
+ let input:Input|null=new Input({source:new BlobSource(file),formats});
+ let sink:AudioSampleSink|null=null;
+ let closed=false,reading=false;
  const close=()=>{
   if(closed)return;
   closed=true;
   signal?.removeEventListener('abort',close);
-  input.dispose();
+  // Drop our references even when native disposal throws. A pending read
+  // still owns its local buffers until the browser actually settles it.
+  const owned=input;input=null;sink=null;
+  owned?.dispose();
  };
  signal?.addEventListener('abort',close,{once:true});
  try{
@@ -34,22 +38,34 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
   if(!Number.isSafeInteger(length)||length<=0||Math.ceil(length/(25*PCM_SAMPLE_RATE))>file.size||
      !Number.isInteger(rate)||rate<8000||rate>384000)
    throw new Error('Некорректные параметры аудиодорожки.');
-  const sink=new AudioSampleSink(track);
+  sink=new AudioSampleSink(track);
 
   async function read(window:AudioWindow,observe?:StreamReadObserver,onProgress?:()=>void,strictCoverage=false):Promise<Float32Array>{
-   if(closed)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
+   if(closed||!sink)throw new Error('Потоковый декодер закрыт. Продолжите с сохранённого окна.');
+   if(reading)throw new Error('Параллельное чтение потокового декодера запрещено.');
    signal?.throwIfAborted();
+   reading=true;
+   try{
    // Decode a little before the boundary to warm up the decoder and resampler.
    const start=Math.max(0,window.start-PCM_SAMPLE_RATE);
    const startTime=origin+start/PCM_SAMPLE_RATE;
    const endTime=origin+window.end/PCM_SAMPLE_RATE;
    const mono=new Float32Array(Math.ceil((window.end-start)*rate/PCM_SAMPLE_RATE));
    let covered=false,packets=0,decodedFrames=0,furthestFrame=0;
+   // Reuse one per-read channel scratch buffer instead of allocating a
+   // new Float32Array backing buffer for every decoded sample.
+   let scratch=new Float32Array(0);
+   let lastYield=performance.now();
    const readStarted=performance.now();let lastSampleTrace=readStarted;
    const checkOpen=()=>{signal?.throwIfAborted();if(closed)throw new Error('Потоковый декодер закрыт.');};
    const stats=()=>({packets,decodedFrames,sourceSampleRate:rate,elapsedMs:performance.now()-readStarted});
    for await(const sample of sink.samples(startTime,endTime)){
+    // Yield even if a codec produces duplicate or out-of-range samples in
+    // a tight microtask loop. The watchdog and cancellation need a task turn.
     try{
+     if(performance.now()-lastYield>=25){
+      await new Promise<void>(resolve=>setTimeout(resolve,0));lastYield=performance.now();
+     }
      checkOpen();packets++;decodedFrames+=sample.numberOfFrames;
      if(sample.sampleRate!==rate||!Number.isFinite(sample.timestamp)||sample.numberOfChannels<1)
       throw new Error('Аудиодорожка меняет формат внутри записи.');
@@ -62,7 +78,8 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
      if(strictCoverage&&offset+first>Math.max(furthestFrame,Math.floor((window.start-start)*rate/PCM_SAMPLE_RATE)))
       throw new Error('Неполное покрытие аудиоданных в резервном фрагменте.');
      covered=true;
-     const plane=new Float32Array(last-first);
+     if(scratch.length<last-first)scratch=new Float32Array(last-first);
+     const plane=scratch.subarray(0,last-first);
      for(let channel=0;channel<sample.numberOfChannels;channel++){
       sample.copyTo(plane,{format:'f32-planar',planeIndex:channel,frameOffset:first,frameCount:last-first});
       for(let i=0;i<plane.length;i++)mono[offset+first+i]+=plane[i]/sample.numberOfChannels;
@@ -88,12 +105,15 @@ export async function openStreamedAudio(file:File,signal?:AbortSignal){
    const buffer=context.createBuffer(1,mono.length,rate);
    buffer.copyToChannel(mono,0);
    const node=context.createBufferSource();
-   node.buffer=buffer;node.connect(context.destination);node.start();
-   const result=await context.startRendering();
-   checkOpen();
-   const pcm=result.getChannelData(0).subarray(window.start-start,outputLength);
-   if(observe){await observe({code:'stream-resample-end',streamStage:'resample',elapsedMs:performance.now()-resampleStarted,pcmSamples:pcm.length,sourceSampleRate:rate});checkOpen();}
-   return pcm;
+   try{
+    node.buffer=buffer;node.connect(context.destination);node.start();
+    const result=await context.startRendering();
+    checkOpen();
+    const pcm=result.getChannelData(0).subarray(window.start-start,outputLength);
+    if(observe){await observe({code:'stream-resample-end',streamStage:'resample',elapsedMs:performance.now()-resampleStarted,pcmSamples:pcm.length,sourceSampleRate:rate});checkOpen();}
+    return pcm;
+   }finally{node.disconnect()}
+   }finally{reading=false}
   }
   return {length,read,close,decoderId};
  }catch(error){close();throw error}
