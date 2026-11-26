@@ -5,7 +5,8 @@ export const DEFAULT_ASR_IDLE_MS=5*60*1000;
 export const DEFAULT_STREAM_DECODE_IDLE_MS=2*60*1000;
 export const DEFAULT_STREAM_RESAMPLE_IDLE_MS=2*60*1000;
 export const DEFAULT_STREAM_PCM_IDLE_MS=30*1000;
-export type StreamWatchdogStage='decode'|'resample'|'pcm-check';
+export const DEFAULT_STREAM_OPEN_IDLE_MS=2*60*1000;
+export type StreamWatchdogStage='open'|'decode'|'resample'|'pcm-check';
 export const MAX_ASR_WINDOW_SAMPLES=30*16000;
 export class WorkerStalledError extends Error{
  readonly code='worker-failed';
@@ -14,7 +15,7 @@ export class WorkerStalledError extends Error{
 export class StreamDecodeStalledError extends Error{
  readonly code='stream-decode-stalled';
  constructor(readonly stage:StreamWatchdogStage='decode'){
-  const label=stage==='decode'?'Потоковый декодер аудио':stage==='resample'?'Ресэмплинг аудио':'Проверка PCM';
+  const label=stage==='open'?'Открытие потокового декодера':stage==='decode'?'Потоковый декодер аудио':stage==='resample'?'Ресэмплинг аудио':'Проверка PCM';
   super(label+' не отвечает. Сохранённые окна не затронуты; продолжите задание с последней контрольной точки.');this.name='StreamDecodeStalledError';
  }
 }
