@@ -33,6 +33,7 @@ export class JobRunner{
  private benchmarkDownload:typeof downloadBenchmarkJson;
  private hardwareDownload:typeof downloadHardwareEvidence;
  private decode:typeof decodeAudio;
+ private openStream:typeof openStreamedAudio;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -41,8 +42,9 @@ export class JobRunner{
  private readonly streamDecodeIdleMs:number;
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
- constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number}={}){
+ constructor(options:{store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number}={}){
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
+  this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;
   this.streamResampleIdleMs=options.streamResampleIdleMs??DEFAULT_STREAM_RESAMPLE_IDLE_MS;
@@ -317,7 +319,7 @@ export class JobRunner{
  }
  private readAudio(file:File){
   const signal=this.abort!.signal;
-  return usesStreamedAudio(file.size)?openStreamedAudio(file,signal):this.decode(file,signal);
+  return usesStreamedAudio(file.size)?this.openStream(file,signal):this.decode(file,signal);
  }
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
@@ -350,7 +352,8 @@ export class JobRunner{
    pcm=await withActivityWatchdog((heartbeat,beginStage)=>audio.read(window,async event=>{
     if(!accepting||signal.aborted)return;
     const {code,...detail}=event;
-    if(code==='stream-read-end')heartbeat();
+    if(code==='stream-read-end'||code==='stream-resample-end')heartbeat();
+    if(!accepting||signal.aborted)return;
     if(code==='stream-resample-start'){
      beginStage(this.streamResampleIdleMs);
      if(!accepting||signal.aborted)return;
