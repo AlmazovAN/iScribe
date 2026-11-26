@@ -32,9 +32,10 @@ export function OfflineReadinessPanel({model,diarize,busy,onPrepareWasm}:{
   return()=>{live=false};
  },[model,diarize,revision,busy]);
  const shell=report?.shell;
+ const embedded=import.meta.env.MODE==='standalone';
  const status=report?.preliminaryReady
   ?'Файлы предварительно готовы'
-  :report?.registration==='unsupported'
+  :!embedded&&report?.registration==='unsupported'
    ?'Автономный запуск не поддерживается'
    :report?.registration==='installing'
     ?'Сохраняем файлы приложения'
@@ -46,8 +47,8 @@ export function OfflineReadinessPanel({model,diarize,busy,onPrepareWasm}:{
   </div>
   {report&&<div className="offline-facts">
    <span>Сеть: {report.connection==='online'?'доступна по данным браузера':'отключена'}</span>
-   <span>Приложение: {shell?.shellComplete?'сохранено':report.registration==='unsupported'?'не поддерживается':'не подтверждено'}</span>
-   <span>ONNX/WASM: {shell?.wasmCached?'сохранён':'не подтверждён'}</span>
+   <span>Приложение: {embedded?'встроено в HTML':shell?.shellComplete?'сохранено':report.registration==='unsupported'?'не поддерживается':'не подтверждено'}</span>
+   <span>ONNX/WASM: {embedded?'встроен в HTML':shell?.wasmCached?'сохранён':'не подтверждён'}</span>
    <span>Модель: {report.modelCached?'в кэше':'не полная'}</span>
    <span>Профиль WASM q8: {report.wasmProfileCached?'в кэше':'не найден'}</span>
    {diarize&&<span>Спикеры: {report.speakerFilesCached?'в кэше':'не полные'}</span>}

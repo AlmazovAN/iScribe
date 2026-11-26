@@ -1,0 +1,78 @@
+import type {ReactNode} from 'react';
+import {benchmarkReport} from './benchmark';
+import {HardwareAcceptancePanel} from './HardwareAcceptancePanel';
+import type {Job} from './jobs';
+import {isRunning} from './jobs';
+import type {TraceCode,TraceErrorKind,TraceEvent} from './jobTrace';
+
+const labels: Record<TraceCode,string>={
+ 'job-start':'Обработка начата','audio-start':'Подготовка аудио','audio-ready':'Аудио подготовлено',
+ 'audio-check-start':'Проверка PCM начата','audio-check-pass':'PCM проверен','audio-check-error':'Ошибка проверки аудио',
+ 'model-start':'Подготовка модели','model-ready':'Модель готова',
+ 'window-start':'Подготовка окна','window-attempt':'Распознавание окна','window-result':'Окно распознано',
+ 'window-error':'Ошибка окна','window-retry':'Повтор распознавания','checkpoint-committed':'Контрольная точка сохранена',
+ 'checkpoint-error':'Ошибка записи контрольной точки','speaker-start':'Разделение говорящих начато',
+ 'speaker-result':'Разделение говорящих завершено','speaker-alignment':'Реплики сопоставлены с говорящими',
+ 'speaker-error':'Ошибка разделения говорящих','job-complete':'Обработка завершена',
+ 'job-error':'Ошибка обработки','job-cancelled':'Обработка отменена'
+};
+const errors:Record<TraceErrorKind,string>={
+ worker:'сбой Worker',timeout:'тайм-аут',inference:'ошибка распознавания',network:'сетевая ошибка',
+ storage:'ошибка хранилища',cancelled:'отмена','invalid-audio':'некорректное аудио',other:'прочая ошибка'
+};
+const date=new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+function eventDetails(event:TraceEvent){
+ return [
+  event.window===undefined?null:'окно '+event.window+(event.totalWindows?'/'+event.totalWindows:''),
+  event.attempt===undefined?null:'попытка '+event.attempt,
+  event.backend==='unknown'?null:event.backend?.toUpperCase(),
+  event.elapsedMs===undefined?null:event.elapsedMs+' мс',
+  event.errorKind&&errors[event.errorKind]
+ ].filter(Boolean).join(' · ');
+}
+
+export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onLog,onBenchmark,onHardware,children}:{
+ job:Job|undefined;jobs:Job[];busy:boolean;checking:boolean;
+ onSelect:(id:string)=>void;onInspect:(id:string)=>void;onLog:(id:string)=>void;onBenchmark:(id:string)=>void;
+ onHardware:(id:string)=>Promise<void>;children:ReactNode;
+}){
+ const benchmark=job?.benchmark?.committedWindows?benchmarkReport(job):null;
+ const events=job?.trace??[];
+
+ return <details className="panel diagnostics-panel">
+  <summary>Диагностика</summary>
+  <div className="diagnostics-body">
+   {job&&<div className="diagnostics-record">
+    <label>Запись <select value={job.id} onChange={e=>onSelect(e.target.value)}>
+     {jobs.map(item=><option key={item.id} value={item.id}>{item.name}</option>)}
+    </select></label>
+    <div className="diagnostics-actions">
+     <button type="button" disabled={busy||isRunning(job.stage)||job.stage==='queued'} onClick={()=>onInspect(job.id)}>{checking?'Проверка аудио…':'Проверить аудио'}</button>
+     {!!job.benchmark?.runs&&<button type="button" onClick={()=>onBenchmark(job.id)}>Бенчмарк JSON</button>}
+    </div>
+   </div>}
+   {job&&<div className="diagnostics-metrics">
+    {job.audioCheck?.status==='passed'&&<p>PCM проверен: {job.audioCheck.report.windowCount} окон · {job.audioCheck.report.quietWindows} тихих · {job.audioCheck.report.nearClippedWindows} с пиковыми уровнями · пик {job.audioCheck.report.peakAbsolute.toFixed(3)}</p>}
+    {job.audioCheck?.status==='failed'&&<p role="alert">Проверка аудио: {job.audioCheck.problem}</p>}
+    {benchmark&&<p aria-label="Измерения производительности">Бенчмарк: {benchmark.measuredCommittedWindows} окон · RTF ASR: {benchmark.asrRtf??'—'} · p95 окна: {benchmark.asrWindowMs.p95??'—'} мс · запись контрольных точек: {benchmark.timingsMs.checkpointPersistence??'—'} мс · возобновлений: {benchmark.resumedRuns}{benchmark.mainThreadHeap.observedPeakBytes!==null?' · оценка JS heap: '+(benchmark.mainThreadHeap.observedPeakBytes/1e6).toFixed(1)+' МБ':''}</p>}
+    {job.failure&&<p aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null? ' / '+job.failure.totalWindows:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?' из '+Math.round(job.failure.durationSeconds)+' с':''} · backend: {job.failure.backend??'неизвестен'}{job.failure.observedExit==='pagehide'?' · зафиксирован выход со страницы (не обязательно перезагрузка)':''} · {job.failure.message}</p>}
+    {job.diagnostics&&<p>Говорящие: интервалов {job.diagnostics.turns} · сегментов {job.diagnostics.segments} · без спикера {job.diagnostics.unlabeled} · точечных сегментов {job.diagnostics.zeroDuration}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?' · неверные интервалы: '+job.diagnostics.invalidTurns:''}</>}</p>}
+   </div>}
+   <details className="diagnostics-log">
+    <summary>Журнал логирования{events.length>0&&<span>{events.length}</span>}</summary>
+    {events.length>0?<ol aria-label="События выбранной записи">
+     {[...events].reverse().map((event,index)=>{
+      const details=eventDetails(event);
+      return <li key={event.at+'-'+index}>
+       <time dateTime={new Date(event.at).toISOString()}>{date.format(event.at)}</time>
+       <div><strong>{labels[event.code]??event.code}</strong>{details&&<small>{details}</small>}</div>
+      </li>;
+     })}
+    </ol>:<p>{job?'События появятся после проверки аудио или запуска распознавания.':'Выберите запись, чтобы открыть журнал.'}</p>}
+    {job&&(events.length>0||job.failure)&&<button type="button" onClick={()=>onLog(job.id)} title="Скачать журнал без аудио, текста и имени записи">Скачать журнал JSON</button>}
+   </details>
+   <HardwareAcceptancePanel job={job} onExport={onHardware} busy={busy}/>
+   <details className="diagnostics-cache"><summary>Автономная работа и кэш</summary>{children}</details>
+  </div>
+ </details>;
+}

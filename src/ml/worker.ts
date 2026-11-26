@@ -7,13 +7,28 @@ import mjsUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-thread
 env.allowLocalModels=false;
 env.fetch=validatedModelFetch(offlineModelFetch(env.fetch));
 env.fetch=observedWhisperHttpFetch(env.fetch,repo=>postMessage({type:'iscribe:model-http-request',repo}));
-env.useWasmCache=true;
-if(import.meta.env.PROD)env.fetch=compressedWasmFetch(env.fetch,new URL(wasmUrl,import.meta.url).href);
+env.useWasmCache=import.meta.env.MODE!=='standalone';
+if(import.meta.env.PROD&&import.meta.env.MODE!=='standalone')env.fetch=compressedWasmFetch(env.fetch,new URL(wasmUrl,import.meta.url).href);
 env.experimental_useCrossOriginStorage=false;
-if(env.backends.onnx.wasm)env.backends.onnx.wasm.wasmPaths={wasm:wasmUrl,mjs:mjsUrl};
+const wasm=env.backends.onnx.wasm;
+if(wasm){
+ if(import.meta.env.MODE==='standalone'){
+  // Use ORT's bundled loader in the classic Worker. A separate module import
+  // from a blob:null URL can fail when the HTML is opened from disk.
+  wasm.numThreads=1;
+  wasm.wasmPaths={wasm:wasmUrl};
+ }else{
+  wasm.wasmPaths={wasm:wasmUrl,mjs:mjsUrl};
+ }
+}
 let preloading=false;
 addEventListener('message',(event:MessageEvent<unknown>)=>{
  const data=event.data;
+ if(import.meta.env.MODE==='standalone'&&wasm&&data&&typeof data==='object'&&
+    'type' in data&&data.type==='iscribe:runtime-wasm'&&'binary' in data&&data.binary instanceof ArrayBuffer){
+  wasm.wasmBinary=data.binary;
+  return;
+ }
  if(!data||typeof data!=='object'||!('type' in data)||(data.type!=='iscribe:preload'&&data.type!=='iscribe:speakers')||!('requestId' in data)||typeof data.requestId!=='string')return;
  const requestId=data.requestId;
  if(preloading){postMessage({type:'iscribe:preload-error',requestId,message:'Предварительная загрузка уже выполняется.'});return}

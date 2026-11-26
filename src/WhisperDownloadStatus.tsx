@@ -9,8 +9,8 @@ export function WhisperDownloadStatus({name,cached,active,download}:{name:string
  let title=effectiveCache===undefined?'Проверяем локальный кэш…':effectiveCache?'В кэше':'Не скачана';
  let detail='';
  if(download?.phase==='loading'){
-  title='HTTP-запросы файлов модели';
-  detail='Запросов: '+(download.httpRequests??0)+'. Ответ может прийти из HTTP-кэша браузера.';
+  title='Чтение файлов модели';
+  detail='Запросов к файлам: '+(download.httpRequests??0)+'. Повторный запрос может получить ответ из HTTP-кэша браузера.';
  }else if(download?.phase==='initializing'){
   title=download.cachedBefore?'Файлы найдены · инициализация':'Проверка и подготовка файлов';
   detail=download.cachedBefore?'Загрузка в оперативную память и создание ONNX-сессии.':'Файлы могут потребовать сетевой загрузки.';
@@ -28,7 +28,7 @@ export function WhisperDownloadStatus({name,cached,active,download}:{name:string
   detail=effectiveCache?'Повторная инициализация после перезагрузки необходима.':'После перезагрузки могут потребоваться файлы из сети.';
  }else if(effectiveCache){title='В кэше · не инициализирована';detail='Файлы на устройстве; после освобождения модели потребуется повторная инициализация.'}
  if(preparing&&download?.loadedBytes!==undefined){
-  detail+=' Обработано файлов: '+size(download.loadedBytes)+' (не сетевой трафик).';
+  detail+=' Объём обработанных данных: '+size(download.loadedBytes)+'. Включает данные из кэша и из сети.';
  }
  return <div className={'download-status '+(effectiveCache?'saved':'')} role="status" aria-live="polite" aria-atomic="true">
   <strong>{title}</strong>

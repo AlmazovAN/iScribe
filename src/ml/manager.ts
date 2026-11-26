@@ -3,6 +3,16 @@ import EngineWorker from './worker?worker';
 import {postSpeakerAudio} from './workerTransfer';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
+declare const __iscribeWasmBinary:ArrayBuffer;
+function createEngineWorker():Worker{
+ const worker=new EngineWorker();
+ // This message arrives before the engine's init/preload message. Keep the
+ // original buffer for replacement workers used by recovery and diarization.
+ if(import.meta.env.MODE==='standalone')
+  worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
+ return worker;
+}
+
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
 export const repos:Record<WhisperId,string>={'whisper-tiny':'onnx-community/whisper-tiny','whisper-small':'onnx-community/whisper-small','whisper-large-v3':'onnx-community/whisper-large-v3-ONNX'};
 export type WhisperDownloadProgress={phase:'loading'|'initializing'|'checking'|'ready'|'error'|'cancelled';loadedBytes?:number;totalBytes?:number;httpRequests?:number;cachedBefore?:boolean;cachedAfter?:boolean;message?:string};
@@ -65,7 +75,7 @@ export class ModelManager{
    progress('initializing');
    this.onProgress(cachedBefore?'Инициализация модели из сохранённых файлов…':'Подготовка и проверка файлов модели…',null);
    client=new EngineClient(()=>{
-    const worker=new EngineWorker();
+    const worker=createEngineWorker();
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;
      if(generation!==this.generation||!d||typeof d!=='object'||!('type' in d)||d.type!=='iscribe:model-http-request'||
@@ -74,7 +84,7 @@ export class ModelManager{
      requests++;
      initHeartbeat?.();
      progress('loading');
-     this.onProgress('HTTP-запрос файлов модели (возможен кэш браузера)…',null);
+     this.onProgress('Чтение файлов модели (из кэша или сети)…',null);
     });
     return worker;
    });
@@ -136,7 +146,7 @@ export class ModelManager{
   let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
   try{
-   const worker=new EngineWorker();createdWorker=worker;this.speakerWorker=worker;
+   const worker=createEngineWorker();createdWorker=worker;this.speakerWorker=worker;
    await withActivityWatchdog(heartbeat=>new Promise<void>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker.addEventListener('error',()=>reject(new Error('Worker загрузки моделей говорящих завершился с ошибкой.')));
@@ -192,7 +202,7 @@ export class ModelManager{
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
   try{
-   worker=new EngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
+   worker=createEngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
    const turns=await withActivityWatchdog(heartbeat=>new Promise<SpeakerTurn[]>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));

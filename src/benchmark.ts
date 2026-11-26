@@ -28,8 +28,7 @@ export type JobBenchmark={
  mainThreadHeapPeakBytes?:number;
  memorySamples:number;
 };
-// The input audio length is capped at one hour, hence at most 145 windows.
-// Even repeated speaker-only retries never grow this list beyond 150 entries.
+// Keep the recent timing sample bounded for long streamed jobs and retries.
 export const MAX_BENCH_WINDOW_TIMINGS=150;
 export function emptyBenchmark():JobBenchmark{
  return {version:1,runs:0,resumedRuns:0,failedRuns:0,attempts:0,

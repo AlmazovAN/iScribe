@@ -13,6 +13,7 @@ export type OfflineReadiness={
  speakerFilesCached:boolean;
  preliminaryReady:boolean;
 };
+const embeddedShell=import.meta.env.MODE==='standalone';
 const UNKNOWN:ShellReport|null=null;
 const SW_MESSAGE_TIMEOUT_MS=4000;
 function swScope():URL{
@@ -20,7 +21,7 @@ function swScope():URL{
  return new URL(import.meta.env.BASE_URL,document.baseURI);
 }
 export async function registerOfflineShell():Promise<boolean>{
- if(import.meta.env.DEV||typeof navigator==='undefined'||!('serviceWorker' in navigator))return false;
+ if(embeddedShell||import.meta.env.DEV||typeof navigator==='undefined'||!('serviceWorker' in navigator))return false;
  try{
   const scope=swScope();
   await navigator.serviceWorker.register(new URL('sw.js',scope).href,{
@@ -60,7 +61,7 @@ export async function inspectOfflineReadiness(model:WhisperId,diarize:boolean):P
  const support=typeof navigator!=='undefined'&&'serviceWorker' in navigator&&typeof caches!=='undefined';
  let registration:OfflineReadiness['registration']=support?'missing':'unsupported';
  let shell=UNKNOWN;
- if(support&&!import.meta.env.DEV){
+ if(support&&!embeddedShell&&!import.meta.env.DEV){
   try{
    const active=await navigator.serviceWorker.getRegistration(swScope().href);
    if(active){
@@ -77,5 +78,5 @@ export async function inspectOfflineReadiness(model:WhisperId,diarize:boolean):P
  ]);
  const speakerFilesCached=segmentation&&embedding;
  return {connection,registration,shell,modelCached,wasmProfileCached,speakerFilesCached,
-  preliminaryReady:!!shell?.shellComplete&&shell.wasmCached&&wasmProfileCached&&(!diarize||speakerFilesCached)};
+  preliminaryReady:(embeddedShell||!!shell?.shellComplete&&shell.wasmCached)&&wasmProfileCached&&(!diarize||speakerFilesCached)};
 }

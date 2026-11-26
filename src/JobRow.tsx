@@ -1,46 +1,66 @@
 import type {Job} from './jobs';
+import {usesStreamedAudio} from './audio';
 import {isRunning,audioWindows} from './jobs';
-import {checkpointLabel,checkpointProgress} from './recognitionProgress';
-import {benchmarkReport} from './benchmark';
-export function JobRow({job,active,onStart,onExport,onCancel,onRemove,onPreview,onDiagnostics,onBenchmark,onInspectAudio,checking=false,inspectDisabled=false,queuePosition}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onCancel:()=>void;onRemove:()=>void;onPreview:()=>void;onDiagnostics?:()=>void;onBenchmark?:()=>void;onInspectAudio?:()=>void;checking?:boolean;inspectDisabled?:boolean;queuePosition?:number}){
- const queued=job.stage==='queued',running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
- const duration=job.duration,validDuration=typeof duration==='number'&&Number.isFinite(duration)&&duration>0&&duration<=3600;
- const windows=validDuration?audioWindows(Math.round(duration*16000)):[];
+import {checkpointProgress} from './recognitionProgress';
+import {formatTime} from './formatTranscript';
+export function JobRow({job,active,onStart,onExport,onTrash,onPreview,checking=false,queuePosition}:{job:Job;active:boolean;onStart:()=>void;onExport:(variant:'plain'|'time'|'speakers')=>void;onTrash:()=>void;onPreview:()=>void;checking?:boolean;queuePosition?:number}){
+ const queued=queuePosition!==undefined&&!active,running=isRunning(job.stage),hasText=(job.volatileSegments??job.segments).some(s=>s.text.trim());
+ const streamed=usesStreamedAudio(job.size);
+ const duration=job.duration,validDuration=typeof duration==='number'&&Number.isFinite(duration)&&duration>0&&(streamed||duration<=3600);
+ const samples=validDuration?Math.round(duration*16000):0;
+ const windows=Number.isSafeInteger(samples)&&(!streamed||Math.ceil(samples/(25*16000))<=job.size)
+  ?audioWindows(samples,streamed):[];
  const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
  const retry=job.stage==='partial'||job.stage==='error'||job.stage==='interrupted'||job.stage==='cancelled';
- const benchmark=job.benchmark?.committedWindows?benchmarkReport(job):null;
- const detailsAvailable=!!(job.audioCheck||job.failure||job.diagnostics||benchmark||(!job.asrComplete&&job.nextWindow>0));
+ const status=checking?'Проверка аудио':
+  active&&queuePosition!==undefined&&job.stage!=='recognizing'&&!job.asrComplete?'Ожидание окружения':
+  active&&(job.stage==='recognizing'||job.stage==='speakers')?'Распознавание':
+  queued?'Ожидание очереди':
+  job.asrComplete?'Распознано':
+  job.stage==='waiting'?'Ожидание запуска':job.status;
+ const hasMeter=running||queued||checking||job.nextWindow>0;
+ const currentWindow=progress&&job.stage==='recognizing'
+  ?Math.min(progress.completedWindows+1,progress.totalWindows):progress?.completedWindows;
+ const timeline=(seconds:number)=>progress
+  ?`${formatTime(seconds)} / ${formatTime(progress.totalSeconds)}`:'—';
+ const timeCodeEnd=job.asrComplete?progress?.totalSeconds??0:Math.min(progress?.seconds??0,
+  job.segments.reduce((end,segment)=>Number.isFinite(segment.end)?Math.max(end,segment.end):end,0));
+ const speakerPercent=job.stage==='speakers'?Math.max(0,Math.min(job.percent??0,100)):job.speakerSegments?100:0;
+ const speakerTime=(progress?.totalSeconds??0)*speakerPercent/100;
+ const speakerStatus=!job.params.diarize?'Отключено':streamed?'Недоступно в потоковом режиме':
+  (job.stage==='speakers'&&speakerPercent>0&&speakerPercent<100?'≈ ':'')+timeline(speakerTime);
+ const detail=job.stage==='recognizing'?(job.error?'Восстановление Worker · повтор окна':null):
+  queued&&job.status==='В очереди'?null:job.status;
+ const trashLabel=(checking?'Остановить проверку':queuePosition!==undefined||active?'Убрать из очереди':'Удалить запись')+' · '+job.name;
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
-  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ</small></div></div>
-  <div className="file-state"><span role="status" aria-live="polite">{job.status}</span>{(running||queued||(!job.asrComplete&&job.nextWindow>0))&&<progress max={100} value={job.stage==='recognizing'||!running?progress?.percent??undefined:job.percent??undefined} aria-label={`Обработка ${job.name}`}/>}<small>{job.params.model.replace('whisper-','Whisper ')} · {job.params.language}{job.asrComplete?' · текст готов':hasText?' · промежуточный текст':''}</small></div>
+  <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={onPreview} title="Показать текст">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ{streamed?' · потоковый режим':''}</small></div></div>
+  <div className="file-state">
+   <div className="file-queue-status">
+    {queuePosition!==undefined&&<span className="file-queue-number" aria-label={'Место в очереди: '+queuePosition}>{queuePosition}</span>}
+    <strong>{status}</strong>
+    <span className="file-model">{job.params.model.replace('whisper-','Whisper ')}</span>
+   </div>
+   {detail&&status!==detail&&<span className="file-state-detail" role="status" aria-live="polite">{detail}</span>}
+   {hasMeter&&<>
+    <dl className="file-progress-metrics">
+     <dt>Whisper</dt><dd title="Текущее окно и сохранённое время">{progress?`${currentWindow}/${progress.totalWindows} (${timeline(progress.seconds)})`:'—'}</dd>
+     <dt>Time codes</dt><dd title="Позиция последнего сохранённого таймкода">{timeline(timeCodeEnd)}</dd>
+     <dt>Speakers</dt><dd title={job.stage==='speakers'?'Оценка по прогрессу разделения говорящих':undefined}>{speakerStatus}</dd>
+    </dl>
+    <div className="file-progress-track" data-processing={active&&(running||checking)}>
+     <progress max={100} value={checking?undefined:job.stage==='speakers'?job.percent??undefined:progress?.percent} aria-label={`Обработка ${job.name}`}/>
+    </div>
+   </>}
+   <small>{job.params.language}{job.backend?' · '+job.backend:''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
+  </div>
   <div className="file-actions">
-   {(!running&&!queued&&!checking&&(job.stage==='waiting'||retry))&&<button className="start" onClick={onStart}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
-   {queued&&<span className="queued">В очереди{queuePosition?` · №${queuePosition}`:''}</span>}
+   {(!active&&!running&&(!queued||job.stage==='interrupted')&&!checking&&(job.stage==='waiting'||retry))&&<button className="start" onClick={onStart}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
    <button disabled={!hasText} onClick={()=>onExport('plain')}>Скачать TXT</button>
    <button disabled={!hasText} onClick={()=>onExport('time')}>TXT + time</button>
    <button disabled={!job.speakerSegments?.some(s=>s.text.trim())} onClick={()=>onExport('speakers')}>TXT + time + speaker{job.speakerSegments&&job.stage!=='done'?' *':''}</button>
-   {(onInspectAudio||job.trace?.length||job.failure||job.benchmark?.runs)&&<details className="file-tools">
-    <summary aria-label={`Дополнительно — ${job.name}`}>Дополнительно</summary>
-    <div className="file-tools-menu" role="group" aria-label="Служебные действия">
-     {onInspectAudio&&!running&&!queued&&<button type="button" className="secondary" onClick={onInspectAudio} disabled={inspectDisabled||checking} title="Проверить декодирование, PCM и 30-секундные окна без Whisper">{checking?'Проверка аудио…':'Проверить аудио'}</button>}
-     {(job.trace?.length||job.failure)&&<button type="button" className="secondary" onClick={onDiagnostics} disabled={!onDiagnostics} title="Скачать журнал без аудио, текста и имени записи">Диагностика JSON</button>}
-     {!!job.benchmark?.runs&&<button type="button" className="secondary" onClick={onBenchmark} disabled={!onBenchmark} title="Скачать измерения времени обработки без текста и имени записи">Бенчмарк JSON</button>}
-    </div>
-   </details>}
-   {active?<button className="cancel" onClick={onCancel}>Отменить</button>:!queued&&<button className="remove" onClick={onRemove} aria-label={`Удалить ${job.name}`} title="Удалить запись и сохранённые результаты">×</button>}
+   <button type="button" className="trash-button" onClick={onTrash} aria-label={trashLabel} title={trashLabel}><span className="trash-icon" aria-hidden="true"/></button>
   </div>
   {job.volatileSegments&&<small className="diagnostics" role="alert">Текст последнего окна не сохранён в браузере. Скачайте TXT до закрытия вкладки.</small>}
   {job.error&&<p className="row-error" role="alert">{job.error}</p>}
-  {job.audioCheck?.status==='failed'&&<small className="diagnostics" role="alert">Проверка аудио: {job.audioCheck.problem}</small>}
-  {detailsAvailable&&<details className="row-details">
-   <summary>Подробности обработки{job.nextWindow>0&&!job.asrComplete?' · сохранено окон: '+job.nextWindow:''}{job.diagnostics?.unlabeled?' · без спикера: '+job.diagnostics.unlabeled:''}</summary>
-   <div className="row-detail-content">
-    {!job.asrComplete&&job.nextWindow>0&&progress&&<small className="diagnostics">{checkpointLabel(progress)}</small>}
-    {job.audioCheck?.status==='passed'&&<small className="diagnostics">PCM проверен: {job.audioCheck.report.windowCount} окон · {job.audioCheck.report.quietWindows} тихих · {job.audioCheck.report.nearClippedWindows} с пиковыми уровнями · пик {job.audioCheck.report.peakAbsolute.toFixed(3)}</small>}
-    {benchmark&&<small className="diagnostics" aria-label="Измерения производительности">Бенчмарк: {benchmark.measuredCommittedWindows} окон · RTF ASR: {benchmark.asrRtf??'—'} · p95 окна: {benchmark.asrWindowMs.p95??'—'} мс · запись контрольных точек: {benchmark.timingsMs.checkpointPersistence??'—'} мс · возобновлений: {benchmark.resumedRuns}{benchmark.mainThreadHeap.observedPeakBytes!==null?' · оценка JS heap: '+(benchmark.mainThreadHeap.observedPeakBytes/1e6).toFixed(1)+' МБ':''}</small>}
-    {job.failure&&<small className="diagnostics" aria-label="Диагностика прерывания">Последнее прерывание: {job.failure.reason==='session-ended'?'завершение предыдущей сессии':job.failure.reason==='cancelled'?'отмена пользователем':'ошибка выполнения'} · этап: {job.failure.stage} · сохранено окон: {job.failure.completedWindows}{job.failure.totalWindows!==null?` / ${job.failure.totalWindows}`:''} · до {Math.round(job.failure.checkpointSeconds)} с{job.failure.durationSeconds!==null?` из ${Math.round(job.failure.durationSeconds)} с`:''} · backend: {job.failure.backend??'неизвестен'} · {job.failure.observedExit==='pagehide'?'зафиксирован выход со страницы (не обязательно перезагрузка)':'событие выхода не зафиксировано'} · {job.failure.message}</small>}
-    {job.diagnostics&&<small className="diagnostics">Интервалов: {job.diagnostics.turns} · сегментов: {job.diagnostics.segments} · без спикера: {job.diagnostics.unlabeled} · точечных сегментов: {job.diagnostics.zeroDuration}{job.stage==='partial'?' · * частичный результат':''}{job.diagnostics.overlapMatches!==undefined&&<> · пустых ASR: {job.diagnostics.emptyText??0} · по перекрытию: {job.diagnostics.overlapMatches} · границы: {job.diagnostics.boundaryMatches} · неоднозначные: {job.diagnostics.ambiguous} · вне интервалов: {job.diagnostics.uncovered} · слабое перекрытие: {job.diagnostics.weakEvidence}{job.diagnostics.invalidTurns?` · неверные интервалы: ${job.diagnostics.invalidTurns}`:''}</>}</small>}
-   </div>
-  </details>}
  </article>;
 }

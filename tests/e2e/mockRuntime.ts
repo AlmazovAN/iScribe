@@ -28,8 +28,14 @@ export class FixtureManager{
  onSpeakerProgress:(_id:'segmentation'|'embedding',_p:string)=>void=()=>{};
  onProgress:(_text:string,_percent:number|null)=>void=()=>{};
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
- async speakersCached(){return {segmentation:true,embedding:true}}
- async preloadSpeakers(){return this.speakersCached()}
+ async speakersCached(){
+  const cached=!enabled('speakerModelsMissing');
+  return {segmentation:cached,embedding:cached};
+ }
+ async preloadSpeakers(){
+  localStorage.removeItem(key('speakerModelsMissing'));
+  return this.speakersCached();
+ }
  async prepare(id:WhisperId){
   if(this.active===id)return {cached:await this.cached(id),backend:'wasm'};
   this.onWhisperProgress(id,{phase:'loading'});
@@ -45,7 +51,9 @@ export class FixtureManager{
   const count=Number(localStorage.getItem(key('transcribeCount'))??0);
   localStorage.setItem(key('transcribeCount'),String(count+1));
   this.onProgress('Распознано 2 / 30 с',7);
-  if(Number(localStorage.getItem(key('pauseAt'))??0)===windowNumber)
+  const pauseAt=localStorage.getItem(key('pauseAt'));
+  const pauseAfterCalls=localStorage.getItem(key('pauseAfterCalls'));
+  if((pauseAt!==null&&Number(pauseAt)===windowNumber)||Number(pauseAfterCalls)===count+1)
    return new Promise<TranscriptSegment[]>(()=>{});
   await new Promise<void>(resolve=>setTimeout(resolve,70));
   return [{start:6,end:8,text:`Окно ${windowNumber}`}];

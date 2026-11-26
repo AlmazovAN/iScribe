@@ -1,5 +1,21 @@
 # iScribe — project status (2026-11-25)
 
+## Local build
+
+- `npm run build` produces the single application file `dist/iScribe.html` with the browser runtime and licenses embedded. Model weights are retrieved separately on first use.
+- The standalone HTML passes the embedded WASM bytes to each engine worker so ONNX can initialize when opened from disk.
+- `npm run build:web` produces the GitHub Pages package in `dist-web/`, including the Service Worker.
+
+- Source files up to 500 MiB are accepted. Recordings above 128 MiB use windowed decoding and retain ASR checkpoints. Streamed recordings can exceed one hour and produce TXT with optional timestamps.
+
+- The Google Drive / Colab tab is a browser-only UI prototype with a simulated queue, checkpoints, recovery, TXT downloads and idle shutdown.
+
+- The local Diagnostics section under the ML status bar groups hardware acceptance, offline readiness, PCM checks, the per-record event log and JSON reports.
+
+- The recognition list follows FIFO, with completed recordings at the bottom. Removing a queue slot preserves source audio and checkpoints. Speaker-model preload can be requested during processing and runs between jobs.
+
+- Audio rows show model and queue status together. The progress meter displays the active Whisper window, saved timecodes and speaker progress.
+
 ## Integration status
 
 - The deployed `main` contains merged PR-13–18 and PR-20; PR-19 was closed as a duplicate.

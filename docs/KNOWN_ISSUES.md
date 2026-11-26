@@ -1,5 +1,15 @@
 # Known issues and risks
 
+Speaker time during an active pass is an estimate derived from the model stages. The recognition meter still advances on durable window commits.
+
+A pending speaker-model download is a request for the current browser session. It is serviced between recordings.
+
+The Diagnostics log retains the latest 256 events per recording. Hardware acceptance still requires manual trials.
+
+The Colab prototype simulates queue activity locally. Authentication, Drive transfers, Python execution and actual Colab disconnect are pending integration.
+
+The standalone HTML contains the browser runtime and supplies the WASM bytes directly to each engine worker to avoid file-origin Blob loading failures. First-use model downloads still require network access, and offline model availability depends on the browser cache for the address used to open the file.
+
 | ID | Priority | Observation | Evidence / next verification |
 | --- | --- | --- | --- |
 | IS-001 | P0 | Real 14:31 MP3 processing was interrupted | PR-22 adds structured trace export; PR-23 adds decoded PCM/window validation; reproduce original MP3 with real Whisper Small; root cause unknown |
@@ -7,7 +17,7 @@
 | IS-003 | P1 | Earlier model card appeared to download 337.5 MB again | Distinguish HTTP transfer, cache hit and ONNX initialization in browser Network tab |
 | IS-004 | P1 | Historical 123 of 300 segments unlabeled by diarization | PR-28 counts gap/ambiguous/weak/boundary matches separately and prevents overlapping same-speaker turns from double-voting. True accuracy/coverage still requires same recording and annotated ground truth |
 | IS-005 | P1 | Offline availability not confirmed | PR-26 adds local shell/runtime precache and model file checks; only real disconnected Whisper Small/speaker inference can confirm full offline execution on production domain |
-| IS-006 | P1 | Resume decodes full source audio again | PR-25 avoids redundant decoded mono copy, enables transfer for speaker PCM, and uses append-only checkpoints; full resumption still decodes entire source file. Profile RAM on real hardware |
+| IS-006 | P1 | Resume decodes the entire source in normal mode | Files above 128 MiB seek to the next uncommitted window. Normal mode still decodes the source again. Profile RAM on real hardware |
 | IS-007 | P1 | ASR watchdog can mistake silent slow inference for a stall | Test real slow WASM and visibility transitions |
 | IS-008 | P1 | Browser storage can be evicted or quota-exhausted | Test storage failures and explicit export recovery |
 
