@@ -22,6 +22,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const state=useSyncExternalStore(runner.subscribe,runner.snapshot,runner.snapshot);
  const [selected,setSelected]=useState<WhisperId>('whisper-small');
  const [language,setLanguage]=useState<'ru'|'en'>('ru');
+ const [performanceMode,setPerformanceMode]=useState<'eco'|'medium'|'max'>('medium');
  const [diarize,setDiarize]=useState(true);
  const [drag,setDrag]=useState(false),[error,setError]=useState('');
  const [previewId,setPreviewId]=useState<string|null>(null);
@@ -73,7 +74,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
   <header><a className="brand" href="./"><span className="mark">iS</span>iScribe</a><div className="local-header-actions"><span className="local"><i/>Обработка на вашем устройстве</span><button ref={colabButton} type="button" onClick={()=>setColab('open')}>Google Drive / Colab</button></div></header>
   <main>
    <section className="intro"><p className="eyebrow">ИЗ ЗАПИСИ — В ТЕКСТ</p><h1>Лишнее уходит.<span> Нужное остаётся</span></h1><p>Добавьте записи. Получайте текст, время и спикеров — по мере готовности.</p></section>
-   <section className="panel model-panel" aria-label="Модели и настройки"><div className="panel-heading"><h2>Модель распознавания</h2><label className="language">Язык <select value={language} onChange={e=>setLanguage(e.target.value as 'ru'|'en')}><option value="ru">Русский</option><option value="en">English</option></select></label></div>
+   <section className="panel model-panel" aria-label="Модели и настройки"><div className="panel-heading"><h2>Модель распознавания</h2><div className="model-settings"><div className="setting-group"><span>Производительность:</span><div className="segmented-setting" role="group" aria-label="Производительность">{([{id:'eco',label:'Экономичная'},{id:'medium',label:'Средняя'},{id:'max',label:'Максимальная'}] as const).map(mode=><button type="button" key={mode.id} aria-pressed={performanceMode===mode.id} onClick={()=>setPerformanceMode(mode.id)}>{mode.label}</button>)}</div></div><div className="setting-group"><span>Язык:</span><div className="segmented-setting" role="group" aria-label="Язык"><button type="button" aria-pressed={language==='ru'} onClick={()=>setLanguage('ru')}>RUS</button><button type="button" aria-pressed={language==='en'} onClick={()=>setLanguage('en')}>ENG</button></div></div></div></div>
     <div className="models">{models.map(m=><article className={'model '+(selected===m.id?'selected':'')} key={m.id}>
      <label className="model-name"><input type="radio" name="model" checked={selected===m.id} onChange={()=>setSelected(m.id)}/><strong>{m.name}</strong></label><span className="tag">{m.tag}</span><p>{m.description}</p>
      <WhisperDownloadStatus name={m.name} cached={modelState.cached[m.id]} active={runner.manager.active===m.id} download={modelState.downloads[m.id]}/>
