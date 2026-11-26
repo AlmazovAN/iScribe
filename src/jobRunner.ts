@@ -412,11 +412,13 @@ export class JobRunner{
     signal:parent,onTimeout:abort,timeoutError:()=>new StreamDecodeStalledError('open')
    });
    if(parent.aborted){audio.close();parent.throwIfAborted()}
-   let closed=false;
+   let closed=false,closeFailed=false,closeError:unknown;
    return {...audio,close:()=>{
-    if(closed)return;closed=true;
+    // The watchdog may swallow a disposal exception to reject its pending
+    // read. A subsequent recovery must still see that exception and stop.
+    if(closed){if(closeFailed)throw closeError;return}closed=true;
     parent.removeEventListener('abort',abort);
-    try{audio.close()}finally{controller.abort()}
+    try{audio.close()}catch(error){closeFailed=true;closeError=error;throw error}finally{controller.abort()}
    }};
   }catch(error){parent.removeEventListener('abort',abort);controller.abort();throw error}
  }
