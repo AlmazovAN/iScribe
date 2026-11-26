@@ -29,7 +29,7 @@ export function JobRow({job,active,onStart,onExport,onTrash,onPreview,checking=f
  const speakerTime=(progress?.totalSeconds??0)*speakerPercent/100;
  const speakerStatus=!job.params.diarize?'Отключено':streamed?'Недоступно в потоковом режиме':
   (job.stage==='speakers'&&speakerPercent>0&&speakerPercent<100?'≈ ':'')+timeline(speakerTime);
- const detail=job.stage==='recognizing'?(job.error?'Восстановление Worker · повтор окна':null):
+ const detail=job.stage==='recognizing'?(job.status.startsWith('Декодирование')||job.status.startsWith('Восстановление декодера')?job.status:job.error?'Восстановление Worker · повтор окна':null):
   queued&&job.status==='В очереди'?null:job.status;
  const trashLabel=(checking?'Остановить проверку':queuePosition!==undefined||active?'Убрать из очереди':'Удалить запись')+' · '+job.name;
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
