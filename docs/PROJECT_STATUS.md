@@ -88,3 +88,6 @@ Coalesced intermediate trace writes, immediate atomic checkpoints, stable memoiz
 
 ## PERF-08 (candidate; depends on corrected PERF-07)
 Speaker WASM thread policy, indexed alignment and progress-milestone diagnostics. WASM/q8 retained. See [PERF-08](performance/PERF-08.md). GPU/batching and real-device performance not confirmed.
+
+## PERF-09 (candidate; depends on PERF-08)
+Local comparative benchmark imports, run provenance, combined evidence export and T01–T10 protocol. See [PERF-09](performance/PERF-09.md). Actual hardware results NOT TESTED.

@@ -20,6 +20,7 @@ import {observeWasmThreads} from './performance/wasmThreads';
 import {AsrPayloadPool,emptyMemoryObservations,observePayload,shouldReleaseAfterQueue} from './performance/memoryPolicy';
 import {emptyStorageUi,ProgressGate,shouldPersistStreamEvent,type StorageUiObservations} from './performance/storageUiPolicy';
 import {emptySpeakerPerformance} from './performance/speakerPerformance';
+import {captureRunContext} from './performance/runContext';
 import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
@@ -423,15 +424,15 @@ export class JobRunner{
       this.queue.shift();this.set({queueCount:this.queue.length});continue;
      }
      this.cancelled=false;this.abort=new AbortController();this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();this.set({activeId:id,activeResourcePolicy:null});
-     const runStarted=benchmarkNow();
+     const runStarted=benchmarkNow();let runTimeRecorded=false;
      try{
       await this.execute(id);
       if(this.queue.length<=1&&shouldReleaseAfterQueue(this.resources.selected,collectDeviceHints().deviceMemoryGiB,this.manager.active))this.releaseIdleModel(id);
-      this.bench(id,b=>addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted));
+      this.bench(id,b=>addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted));runTimeRecorded=true;
       await this.persist(id);
      }catch(error){
       this.releaseIdleModel(id);
-      this.bench(id,b=>({...addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted),failedRuns:b.failedRuns+1}));
+      this.bench(id,b=>({...addBenchmarkTiming(b,'runMs',runTimeRecorded?0:benchmarkNow()-runStarted),failedRuns:b.failedRuns+1}));
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
       this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
@@ -489,7 +490,9 @@ export class JobRunner{
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
-  this.bench(id,b=>({...b,profiler:b.profiler??emptyPerformanceProfile(),runs:b.runs+1,resumedRuns:b.resumedRuns+(resumed?1:0)}));
+  const jobAtStart=this.job(id);
+  const context=captureRunContext(this.resources.selected,this.manager.active===jobAtStart.params.model,this.state.calibrateNext,jobAtStart.nextWindow);
+  this.bench(id,b=>({...b,profiler:b.profiler??emptyPerformanceProfile(),runs:b.runs+1,resumedRuns:b.resumedRuns+(resumed?1:0),...(b.runs===0?{firstRunContext:context}:{})}));
   this.traceEvent(id,'job-start','job',{committedWindows:this.job(id).nextWindow});
   this.traceEvent(id,'audio-start','audio');
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();

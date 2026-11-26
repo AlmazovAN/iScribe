@@ -123,3 +123,11 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 | --- | --- | --- |
 | PERF-08-U | Index candidates, preserved labels/thresholds, milestone reporting and configuration ordering | NOT TESTED |
 | PERF-08-H | Real Pyannote/WeSpeaker output, thread comparison, memory and speaker accuracy | NOT TESTED |
+
+## PERF-09
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| PERF-09-U | Validate input, reject incomparable/resumed runs, median and privacy | NOT TESTED |
+| PERF-09-R | Combined hardware/benchmark export with first run context | NOT TESTED |
+| PERF-09-H | T01–T10 real device and external quality/resource observations | NOT TESTED |

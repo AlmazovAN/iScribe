@@ -1,0 +1,11 @@
+case,build_sha,group,condition,launch,repeat,model,backend_observed,threads_configured,wall_seconds,asr_rtf,run_rtf,window_p50_ms,window_p95_ms,peak_ram_mb,peak_vram_mb,cpu_mean_percent,gpu_mean_percent,wer_percent,der_percent,failed_attempts,decoder_recoveries,checkpoint_expected,checkpoint_saved,status,operator_notes
+T01,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T02,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T03,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T04,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T05,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T06,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T07,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T08,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T09,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,
+T10,,,,,,,,,,,,,,,,,,,,,,,,NOT TESTED,

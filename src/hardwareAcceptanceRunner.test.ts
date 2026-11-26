@@ -38,6 +38,8 @@ it('reads original local file and durable text before exporting a redacted hardw
   job:{persistedJobFound:true,savedAudioPresent:true,persistedCheckpointMatches:true,
    persistedTranscriptMatches:true,committedWindows:3,completedASR:true}
  });
+ expect(report.performanceBenchmark?.firstRunContext).toMatchObject({startCheckpoint:0,modelResidentAtStart:false,calibrationRequested:false});
+ expect(report.performanceBenchmark?.runs).toBe(1);
  expect(filename).not.toContain('SENSITIVE');
  const text=JSON.stringify(report);
  expect(text).not.toContain('SENSITIVE-CALL');
