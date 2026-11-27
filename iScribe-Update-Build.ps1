@@ -1,4 +1,4 @@
-﻿# iScribe Update & Build v6.1 — Windows PowerShell 5.1 / PowerShell 7
+﻿# iScribe Update & Build v6.2 — Windows PowerShell 5.1 / PowerShell 7
 # Auto: offer local CI by default; cloud CI only after explicit selection.
 # Local: test exact merge commit, then normal push; no Actions dispatch.
 # Online: dispatch CI once for the pinned candidate, wait, then ordinary PR merge.
@@ -46,7 +46,7 @@ $FullLog = Join-Path $env:TEMP ('iscribe-build-' + [guid]::NewGuid().ToString('N
 
 # CI-03: create a structured, allowlisted diagnostic journal. Never serialize
 # raw stdout/stderr, exception messages, paths, environment or command arguments.
-# CI-04 will extend safe technical detail; unknown messages remain local.
+# CI-04 adds reconstructed technical excerpts; unknown messages remain local.
 function Add-DiagnosticEvent([string]$Kind,[string]$Code,[int]$Exit=-1) {
     if ($script:DiagnosticEvents.Count -ge 2000) { $script:DiagnosticOmitted++; return }
     $script:DiagnosticEvents.Add([ordered]@{
@@ -64,7 +64,7 @@ function Get-DiagnosticCode([string]$Message) {
         'HTTP 403|403 Forbidden|Permission denied|Access is denied' { return 'ACCESS_DENIED' }
         'HTTP 401|authentication failed|не авторизован' { return 'AUTH_FAILED' }
         'ETIMEDOUT|ECONNRESET|ENOTFOUND|Could not resolve host|connection timed out' { return 'NETWORK_ERROR' }
-        'TS[0-9]{4,5}\s*:' { return ('TYPESCRIPT_'+$Matches[0].TrimEnd(':').Trim()) }
+        '(?i)\bTS([0-9]{4,5})\s*:' { return ('TYPESCRIPT_TS'+$Matches[1]) }
         'npm (ERR!|error)' { return 'NPM_ERROR' }
         'AssertionError|expect\(.*\)' { return 'ASSERTION_ERROR' }
         'merge conflict|CONFLICT \(' { return 'MERGE_CONFLICT' }
@@ -391,11 +391,87 @@ function Get-SafeSha([string]$Value) {
     if ($Value -cmatch '^[0-9a-f]{40}$') { return $Value }
     return $null
 }
+# Reconstruct known technical messages; never return the input line or
+# arbitrary captures. Only fixed templates and constrained numeric/enum
+# captures are allowed. Unknown text is omitted, not merely masked.
+$script:SafeDiagnosticRules = @(
+        @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
+        @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
+        @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+(passed|failed|skipped)\s*(?:\([0-9.]+(?:ms|s|m)\))?\s*$'; template='Tests: $1 $2' }
+        @{ pattern='(?i)\bHTTP\s+(400|401|403|404|408|409|422|429|500|502|503|504)\b'; template='HTTP $1' }
+        @{ pattern='(?i)^\s*Node:\s*v([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+\(CI использует Node 22\)\s*$'; template='Node v$1' }
+        @{ pattern='(?i)^\s*\+\s*(npm\.cmd|git\.exe|npx\.cmd|gh\.exe)\s+'; template='Command: $1 (arguments omitted)' }
+        @{ pattern='(?i)\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENOSPC|ENOMEM|EACCES|EPERM|ENOENT|ERESOLVE|EINTEGRITY)\b'; template='System error: $1' }
+        @{ pattern='(?i)Cannot bind argument to parameter .LiteralPath. because it is an empty string'; template='PowerShell: LiteralPath is empty' }
+        @{ pattern='(?i)Cannot find path|PathNotFound|ItemNotFound'; template='PowerShell: path not found' }
+        @{ pattern='(?i)JavaScript heap out of memory|out of memory|heap limit'; template='Memory exhausted' }
+        @{ pattern='(?i)Permission denied|Access is denied'; template='Access denied' }
+        @{ pattern='(?i)authentication failed|не авторизован'; template='Authentication failed' }
+        @{ pattern='(?i)Could not resolve host|connection timed out'; template='Network resolution or timeout failure' }
+        @{ pattern='(?i)non-fast-forward|fetch first'; template='Git: non-fast-forward' }
+        @{ pattern='(?i)protected branch|GH006|GH013'; template='Git: branch protection rejected operation' }
+        @{ pattern='(?i)merge conflict|CONFLICT \('; template='Git: merge conflict' }
+        @{ pattern='(?i)AssertionError|expect\(.*\)'; template='Test assertion failed' }
+        @{ pattern='(?i)CI не пройден'; template='Cloud CI failed' }
+        @{ pattern='(?i)Время ожидания CI истекло'; template='Cloud CI timed out' }
+        @{ pattern='(?i)Конфигурация CI кандидата отличается'; template='CI workflow differs from base' }
+        @{ pattern='(?i)Кандидат не содержит актуальный main|origin/main изменился|PR или main изменился'; template='Candidate or main changed' }
+        @{ pattern='(?i)Не найдена встроенная точка входа|Повреждён встроенный блок|не обнаружена ревизия сборки'; template='HTML validation failed' }
+        @{ pattern='(?i)Не установлена программа'; template='Required tool not installed' }
+        @{ pattern='(?i)Не найден локальный репозиторий'; template='Local project not found' }
+        @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
+)
+function ConvertTo-SafeLogLine([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
+    if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
+    foreach ($rule in $script:SafeDiagnosticRules) {
+        $m=[regex]::Match($Line,$rule.pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromMilliseconds(100))
+        if ($m.Success) {
+            $safe=$m.Result($rule.template)
+            if ($safe -match '^TypeScript TS[0-9]{4,5}$') {
+                $location=[regex]::Match($Line,'\(([0-9]{1,6}),([0-9]{1,6})\)\s*:\s*(?:error\s+)?TS[0-9]{4,5}\s*:',[Text.RegularExpressions.RegexOptions]::IgnoreCase,[TimeSpan]::FromMilliseconds(100))
+                if ($location.Success) { $safe += ('; line '+$location.Groups[1].Value+', column '+$location.Groups[2].Value) }
+            }
+            return $safe
+        }
+    }
+    return $null
+}
+function Get-SafeLogExcerpt([string]$LocalLog) {
+    $items=[System.Collections.Generic.Queue[object]]::new()
+    $read=0
+    $matched=0
+    $privateBlock=$false
+    if (-not (Test-Path -LiteralPath $LocalLog -PathType Leaf)) { return @{status='unavailable';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    if ((Get-Item -LiteralPath $LocalLog).Length -gt 16777216) { return @{status='size-limit';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $reader=[IO.StreamReader]::new($LocalLog,[Text.Encoding]::UTF8,$true)
+    try {
+        while ($null -ne ($line=$reader.ReadLine())) {
+            $read++
+            if ($line -match '(?i)-----\s*BEGIN\s+[^-]*PRIVATE KEY') { $privateBlock=$true }
+            if ($privateBlock) {
+                if ($line -match '(?i)-----\s*END\s+[^-]*PRIVATE KEY') { $privateBlock=$false }
+                continue
+            }
+            $safe=ConvertTo-SafeLogLine $line
+            if ($null -ne $safe) {
+                $matched++
+                if ($items.Count -ge 500) { $null=$items.Dequeue() }
+                $items.Enqueue([ordered]@{log_line=$read;message=$safe})
+            }
+        }
+    } finally { $reader.Dispose() }
+    return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
+}
+
 function Save-DiagnosticJournal([string]$LocalLog) {
     $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
+    try { $excerpt=Get-SafeLogExcerpt $LocalLog }
+    catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
     $report=[ordered]@{
-        schema='iscribe-build-diagnostics/v1'
-        script_version='6.1'
+        schema='iscribe-build-diagnostics/v2'
+        script_version='6.2'
         utc=[DateTime]::UtcNow.ToString('o')
         route=$script:DiagnosticRoute
         revision=(Get-SafeSha $script:Revision)
@@ -406,7 +482,8 @@ function Save-DiagnosticJournal([string]$LocalLog) {
         ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
         ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
         outcome='failed'
-        detail='allowlisted events only; full original retained locally'
+        detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
+        text_excerpt=$excerpt
         events=$script:DiagnosticEvents.ToArray()
         omitted_events=$script:DiagnosticOmitted
     }
