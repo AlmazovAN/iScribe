@@ -123,10 +123,10 @@ button.trash-button:hover:not(:disabled) { color: #843f32; border-color: #c2988c
 .model-panel .panel-heading{flex-wrap:wrap}
 .model-settings{display:flex;align-items:center;justify-content:flex-end;gap:14px;flex-wrap:wrap;margin-left:auto}
 .setting-group{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:#68776c;font-size:12px}
-.segmented-setting{display:inline-flex;align-items:center;gap:2px;background:#edf2ea;border:1px solid #dfe6dc;border-radius:8px;padding:3px;max-width:100%;flex-wrap:wrap}
-.segmented-setting button{border:1px solid transparent;background:transparent;color:#405a49;border-radius:5px;padding:5px 8px;font-size:11px;line-height:1.4}
+.segmented-setting{display:inline-flex;align-items:center;gap:2px;background:#edf2ea;border:1px solid #dfe6dc;border-radius:8px;padding:1px 3px;max-width:100%;flex-wrap:wrap}
+.segmented-setting button{border:1px solid transparent;background:transparent;color:#405a49;border-radius:5px;padding:2px 8px;min-height:24px;font-size:11px;line-height:1.4}
 .segmented-setting button[aria-pressed="true"],.segmented-setting button[aria-pressed="true"]:hover{background:#315841;border-color:#315841;color:#fff}
-@media(max-width:720px){.model-settings{margin-left:0;justify-content:flex-start;gap:8px}.setting-group{gap:5px}.segmented-setting button{padding:5px 6px}}
+@media(max-width:720px){.model-settings{margin-left:0;justify-content:flex-start;gap:8px}.setting-group{gap:5px}.segmented-setting button{padding:2px 6px}}
 
 
 
