@@ -38,3 +38,17 @@ export function median(values){
  const s=[...values].sort((a,b)=>a-b),mid=Math.floor(s.length/2);
  return s.length%2?s[mid]:(s[mid-1]+s[mid])/2;
 }
+
+export function parityPassed(parity){
+ return Array.isArray(parity)&&parity.length===RUNS&&parity.every(x=>x&&Number.isFinite(x.minCosine)&&Number.isFinite(x.maxPairDrift)&&x.minCosine>=0.999&&x.maxPairDrift<=0.01);
+}
+export function selectCandidate(baseline,variants){
+ const valid=v=>v?.status==='completed'&&Number.isFinite(v.medianMs)&&v.medianMs>0;
+ if(!valid(baseline)||baseline.requestedBackend!=='wasm'||baseline.batch!==1||!parityPassed(baseline.repeatability))return {status:'no-reference',wasm:null,webgpu:null,speedup:null};
+ const best=values=>values.reduce((winner,v)=>!winner||v.medianMs<winner.medianMs?v:winner,null);
+ const comparable=variants.filter(v=>valid(v)&&parityPassed(v.parity));
+ const wasm=best([baseline,...comparable.filter(v=>v.requestedBackend==='wasm')]);
+ const webgpu=best(comparable.filter(v=>v.requestedBackend==='webgpu'));
+ const speedup=webgpu?wasm.medianMs/webgpu.medianMs:null;
+ return {status:speedup!==null&&speedup>=1.1?'gpu-candidate':webgpu?'no-material-gpu-gain':'no-valid-gpu',wasm:{batch:wasm.batch,medianMs:wasm.medianMs},webgpu:webgpu?{batch:webgpu.batch,medianMs:webgpu.medianMs}:null,speedup};
+}
