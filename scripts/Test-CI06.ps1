@@ -22,7 +22,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tok
 if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS PowerShell parser'
 $script:Pass++
-$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
+$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
 # Load only named top-level function definitions, never the main script.
 foreach ($name in $wanted) {
     $nodes=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name })
@@ -128,8 +128,9 @@ try {
         Equal $result.lines[1].message 'TypeScript TS2322; line 12, column 3'
         Equal (Get-FileHash -LiteralPath $raw -Algorithm SHA256).Hash $before
     }
-    $journal=Save-DiagnosticJournal $raw -SelfTest
+    $journal=[IO.Path]::ChangeExtension($raw,'.diagnostic.json')
     Check 'synthetic journal contains no arbitrary source text' {
+        $null=Save-DiagnosticJournal $raw -SelfTest
         $text=[IO.File]::ReadAllText($journal)
         $report=$text | ConvertFrom-Json
         Equal $report.outcome 'self-test'
