@@ -69,3 +69,5 @@ PERF-08: streamed diarization remains unavailable. Engine exposes coarse speaker
 PERF-09: legacy baseline exports lack first-run build context; require manual verification. Comparator uses same size/duration and operator confirmation, not audio hash/device attestation. Real hardware and quality tests remain NOT TESTED. Comparison state is tab-local.
 
 PERF-10: real hardware gates T01–T10/HW-1–7 remain NOT TESTED; no production deployment authorized by automatic CI. Independent isolated origin, mandatory old model cache verification, no automatic migration/transfer between origins. Browser/protocol observations are not proof of actual model execution. Integrated source merge is not a hardware-accepted release.
+
+GPU-08: early lookahead can overlap metadata persistence but still competes for host resources. Scheduling lead is not actual GPU/CPU overlap or saved time. Existing two-window cap, one producer, rotation boundary and conservative retirement after decoder failure remain. No production GPU tensor transfer changes or full-audio pipeline changes. Full regression and hardware performance NOT TESTED.
