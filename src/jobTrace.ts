@@ -1,5 +1,6 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
+import {benchmarkReport} from './benchmark';
 
 // Structured diagnostic events deliberately omit filenames, transcript text,
 // raw exception messages, audio buffers and browser/device identifiers.
@@ -77,6 +78,13 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
  return 'other';
 }
 export function diagnosticReport(job:Job){
+ const now=Date.now();
+ const events=[...(job.trace??[])].reverse();
+ const last=events.find(e=>e.phase==='asr'&&(e.code==='window-attempt'||e.code==='window-result'||e.code==='window-error'));
+ const activeAttempt=job.stage==='recognizing'&&last?.code==='window-attempt'?{
+  window:last.window??null,attempt:last.attempt??null,backend:last.backend??null,
+  startedAt:last.at,elapsedSinceAttemptEventMs:Math.max(0,now-last.at)
+ }:null;
  const failure=job.failure?{
   reason:job.failure.reason,
   stage:job.failure.stage,
@@ -88,7 +96,9 @@ export function diagnosticReport(job:Job){
  }:null;
  return {
   schema:'iscribe.diagnostics.v1',
-  generatedAt:new Date().toISOString(),
+  generatedAt:new Date(now).toISOString(),
+  activeAsrAttempt:activeAttempt,
+  benchmark:job.benchmark?.runs?benchmarkReport(job):null,
   job:{
    model:job.params.model,
    language:job.params.language,

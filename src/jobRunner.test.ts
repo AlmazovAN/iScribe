@@ -225,25 +225,11 @@ it('commits trace of each ASR window and exposes a redacted downloadable diagnos
  const [report,filename]=diagnosticDownload.mock.calls[0];
  expect(filename).toMatch(/^iscribe_diagnostics_[0-9a-f]{8}\.json$/);
  expect(report.job).toMatchObject({asrComplete:true,committedWindows:3});
+ expect(report.benchmark).toMatchObject({schema:'iscribe.benchmark.v1',committedCheckpointWindows:3});
+ expect(report.activeAsrAttempt).toBeNull();
  expect(JSON.stringify(report)).not.toContain('SECRET');
 });
 
-
-it('checks audio independently without starting Whisper and persists the PCM report',async()=>{
- const {runner,fake,store,diagnosticDownload}=setup();await runner.init();
- await runner.add([new File(['audio'],'inspect.wav')],{model:'whisper-small',language:'ru',diarize:false});
- const id=runner.snapshot().jobs.at(-1)!.id;
- await runner.inspectAudio(id);
- expect(fake.prepare).not.toHaveBeenCalled();
- expect(fake.transcribe).not.toHaveBeenCalled();
- expect(fake.diarize).not.toHaveBeenCalled();
- const saved=(await store.list(false)).find(j=>j.id===id)!;
- expect(saved).toMatchObject({stage:'waiting',nextWindow:0,asrComplete:false,audioCheck:{status:'passed',report:{pcmSamples:960000,windowCount:3,quietWindows:3}}});
- expect(saved.trace?.some(e=>e.code==='audio-check-pass')).toBe(true);
- runner.exportDiagnostics(id);
- const report=diagnosticDownload.mock.calls.at(-1)?.[0];
- expect(report?.audioCheck?.status).toBe('passed');
-});
 
 it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints remain intact',async()=>{
  const {runner,fake,store,decode}=setup();
@@ -261,21 +247,6 @@ it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints re
  expect(saved.audioCheck).toMatchObject({status:'failed'});
  expect(saved.trace?.some(e=>e.code==='audio-check-error')).toBe(true);
 });
-
-it('standalone PCM inspection does not modify a saved transcript or its checkpoint',async()=>{
- const {runner,fake,store}=setup();
- const file=new File(['source'],'checkpoint-inspection.wav');
- const job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
- const savedJob={...job,stage:'interrupted' as const,nextWindow:1,segments:[{start:3,end:4,text:'already saved'}]};
- await store.save(savedJob,file);await runner.init();
- await runner.inspectAudio(job.id);
- const after=(await store.list(false)).find(j=>j.id===job.id)!;
- expect(after.nextWindow).toBe(1);
- expect(after.stage).toBe('interrupted');
- expect(after.segments).toEqual(savedJob.segments);
- expect(fake.transcribe).not.toHaveBeenCalled();
-});
-
 
 it('remembers WebGPU for safe WASM fallback even when watchdog cancellation clears the active backend',async()=>{
  const {fake,store,download}=setup();
@@ -570,85 +541,6 @@ it('stops a failed planned rotation with durable text and no extra recovery atte
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-rotation-error',window:41})]));
  await store.remove(job.id);
 });
-
-it('rotates standalone audio inspection without invoking Whisper or advancing the transcript',async()=>{
- const {fake,store}=setup();
- const file=new File(['audio'],'inspection-rotation.mp3');
- const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
- await store.save({...job,stage:'interrupted',nextWindow:1,segments:[{start:3,end:4,text:'saved'}]},file);
- Object.defineProperty(file,'size',{value:146_500_000});vi.spyOn(store,'audio').mockResolvedValue(file);
- const read=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
- const closes=[vi.fn(),vi.fn(),vi.fn()];let index=0;
- const openStream=vi.fn<typeof openStreamedAudio>(async()=>({length:60*16000,decoderId:index+1,read,close:closes[index++]}));
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamRotateWindows:1});
- await runner.init();await runner.inspectAudio(job.id);
- const saved=(await store.get(job.id,false))!;
- expect(saved).toMatchObject({stage:'interrupted',nextWindow:1,audioCheck:{status:'passed'}});
- expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
- expect(openStream).toHaveBeenCalledTimes(3);expect(read).toHaveBeenCalledTimes(3);
- for(const close of closes)expect(close).toHaveBeenCalledOnce();
- expect(fake.prepare).not.toHaveBeenCalled();expect(fake.transcribe).not.toHaveBeenCalled();
- await store.remove(job.id);
-});
-
-
-it('probes only window 41 with both strategies without touching ASR or retry budget',async()=>{
- const {fake,store}=setup();
- const file=new File(['audio'],'window-inspection.mp3');
- const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
- const budget={window:41,windowRecoveries:2,totalRecoveries:3};
- await store.save({...job,stage:'interrupted',nextWindow:40,segments:[{start:3,end:4,text:'saved'}],streamRecovery:budget},file);
- const whole=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
- const split=vi.fn<StreamedAudio['read']>(async(w,_observe,_beat,strict)=>{
-  expect(strict).toBe(true);return new Float32Array(w.end-w.start);
- });
- const close1=vi.fn(),close2=vi.fn(),length=3834*16000;
- const openStream=vi.fn<typeof openStreamedAudio>()
-  .mockResolvedValueOnce({length,decoderId:1,read:whole,close:close1})
-  .mockResolvedValueOnce({length,decoderId:2,read:split,close:close2});
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream});
- await runner.init();await runner.inspectWindow(job.id,41,'whole');await runner.inspectWindow(job.id,41,'split');
- const saved=(await store.get(job.id,false))!;
- expect(saved).toMatchObject({stage:'interrupted',nextWindow:40,streamRecovery:budget});
- expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
- expect(saved.audioCheck).toBeUndefined();expect(saved.benchmark).toBeUndefined();
- expect(whole.mock.calls.map(c=>c[0].start)).toEqual([1000*16000]);
- expect(split.mock.calls.map(c=>c[0].start)).toEqual([1000,1005,1010,1015,1020,1025].map(x=>x*16000));
- expect(saved.windowInspections).toEqual([
-  expect.objectContaining({window:41,strategy:'whole',status:'passed',startSample:16000000,endSample:16480000,completedParts:1}),
-  expect.objectContaining({window:41,strategy:'split',status:'passed',completedParts:6,report:expect.objectContaining({pcmSamples:480000})})
- ]);
- expect(fake.prepare).not.toHaveBeenCalled();expect(fake.transcribe).not.toHaveBeenCalled();
- expect(close1).toHaveBeenCalledOnce();expect(close2).toHaveBeenCalledOnce();
- await store.remove(job.id);
-});
-
-it('records a failed split probe and rejects invalid window numbers without advancing ASR',async()=>{
- const {fake,store}=setup();
- const file=new File(['audio'],'window-probe-failure.mp3');
- const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
- await store.save({...job,stage:'interrupted',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
- let calls=0;
- const read=vi.fn<StreamedAudio['read']>(async w=>{
-  if(++calls===3)return new Promise(()=>{});
-  return new Float32Array(w.end-w.start);
- });
- const openStream=vi.fn<typeof openStreamedAudio>(async()=>({length:3834*16000,decoderId:1,read,close:vi.fn()}));
- const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
- await runner.init();
- await expect(runner.inspectWindow(job.id,0,'whole')).rejects.toThrow();
- expect(openStream).not.toHaveBeenCalled();
- await runner.inspectWindow(job.id,41,'split');
- const saved=(await store.get(job.id,false))!;
- expect(saved).toMatchObject({stage:'interrupted',nextWindow:40});
- expect(saved.windowInspections).toEqual([expect.objectContaining({window:41,status:'failed',strategy:'split',completedParts:2,errorKind:'timeout',failureStage:'decode'})]);
- expect(saved.streamRecovery).toBeUndefined();expect(fake.transcribe).not.toHaveBeenCalled();
- await runner.inspectWindow(job.id,155,'whole');
- expect(read).toHaveBeenCalledTimes(3);
- expect((await store.get(job.id,false))?.windowInspections).toEqual([expect.objectContaining({window:155,status:'failed',errorKind:'invalid-audio',totalWindows:154})]);
- await store.remove(job.id);
-});
-
 
 it('does not open another decoder if watchdog disposal failed',async()=>{
  const {fake,store}=setup();

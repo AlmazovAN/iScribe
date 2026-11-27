@@ -102,3 +102,7 @@ Existing PERF-05 bounded streamed-audio lookahead is scheduled before in-flight 
 A bounded per-run prefetch-depth trial is wired into ResourceManager and successful streamed-audio consumption. It changes neither selected/effective mode nor WASM thread target; it never exceeds profile, memory or recovery ceilings. See [GPU-09](performance/GPU-09.md). Full CI and hardware acceptance pending.
 
 - Local pipeline v7 candidate: manifest-based selection and stage ancestry checks, one candidate per invocation. Windows regression and end-to-end acceptance pending; not a claim of release readiness.
+
+
+## DIAG-01 — компактная диагностика
+Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.

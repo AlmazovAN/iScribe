@@ -1,10 +1,5 @@
 import {test,expect} from '@playwright/test';
 
-const openCache=async page=>{
- await page.locator('.diagnostics-panel > summary').click();
- await page.locator('.diagnostics-cache > summary').click();
-};
-
 test('production application shell reloads offline with local job metadata',async({page,context})=>{
  await page.goto('/');
  await expect(page.getByRole('button',{name:'Выбрать файлы'})).toBeEnabled();
@@ -14,9 +9,11 @@ test('production application shell reloads offline with local job metadata',asyn
   return !!reg.active;
  });
  expect(installed).toBe(true);
- await openCache(page);
- await expect(page.locator('.offline-strip')).toContainText('Приложение: сохранено');
- await expect(page.locator('.offline-strip')).toContainText('ONNX/WASM: сохранён');
+ const shell=await page.evaluate(async()=>{
+  const worker=(await navigator.serviceWorker.ready).active;
+  return await new Promise(resolve=>{const channel=new MessageChannel();channel.port1.onmessage=e=>{channel.port1.close();resolve(e.data)};worker.postMessage({type:'iscribe:offline-probe'},[channel.port2]);});
+ });
+ expect(shell).toMatchObject({shellComplete:true,wasmCached:true});
  // The source is local and has no model inference or private transcript.
  await page.getByLabel('Выбрать аудиозаписи',{exact:true}).setInputFiles({
   name:'test-offline.wav',mimeType:'audio/wav',buffer:Buffer.from([0x52,0x49,0x46,0x46])
@@ -27,14 +24,12 @@ test('production application shell reloads offline with local job metadata',asyn
  await page.reload();
  await expect(page.getByRole('button',{name:'Выбрать файлы'})).toBeEnabled();
  await expect(page.locator('.file-row')).toContainText('test-offline.wav');
- await openCache(page);
- await expect(page.locator('.offline-strip')).toContainText('Сеть: отключена');
- await expect(page.locator('.offline-strip')).toContainText('Приложение: сохранено');
- await expect(page.locator('.offline-strip')).toContainText('Профиль WASM q8: не найден');
+ expect(await page.evaluate(()=>navigator.onLine)).toBe(false);
+ await expect(page.locator('.diagnostics-panel details')).toHaveCount(0);
  await context.setOffline(false);
 });
 
-test('GPU-only cache does not falsely confirm offline WASM fallback readiness',async({page})=>{
+test('GPU-only cache does not reintroduce removed cache controls',async({page})=>{
  await page.goto('/');
  await page.evaluate(async()=>{
   const repo='onnx-community/whisper-small',prefix=`https://huggingface.co/${repo}/resolve/main/`;
@@ -42,9 +37,7 @@ test('GPU-only cache does not falsely confirm offline WASM fallback readiness',a
   const files=['config.json','tokenizer_config.json','tokenizer.json','preprocessor_config.json','onnx/encoder_model_fp16.onnx','onnx/decoder_model_merged_q4.onnx'];
   for(const file of files)await cache.put(prefix+file,new Response('fixture'));
  });
- await openCache(page);
- await page.getByRole('button',{name:'Проверить кэш'}).click();
- await expect(page.locator('.offline-strip')).toContainText('Модель: в кэше');
- await expect(page.locator('.offline-strip')).toContainText('Профиль WASM q8: не найден');
- await expect(page.locator('.offline-strip')).toContainText('Не все файлы доступны');
+ await page.reload();
+ await expect(page.locator('.model-panel')).toContainText('Whisper Small');
+ await expect(page.getByRole('button',{name:'Подготовить WASM'})).toHaveCount(0);
 });

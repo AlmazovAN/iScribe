@@ -1,10 +1,10 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
-import {inspectStreamedAudio,openStreamedAudio,type StreamedAudio} from './streamedAudio';
+import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
-import {createJob,isRunning,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams,type WindowInspection,type WindowInspectionStrategy} from './jobs';
+import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow} from './recognitionProgress';
@@ -13,9 +13,9 @@ import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_ID
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
-import {addBenchmarkTiming,benchmarkNow,benchmarkReport,downloadBenchmarkJson,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
+import {addBenchmarkTiming,benchmarkNow,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
-import {BackendPolicy,BACKEND_CALIBRATION_SAMPLE_LIMIT,BACKEND_CALIBRATION_STAGE_MS,candidates,chooseBackend,isBackend,normalizedText,resourceFailure,type BackendCalibration,type CalibrationSample} from './performance/backendPolicy';
+import {BackendPolicy,resourceFailure} from './performance/backendPolicy';
 import {observeWasmThreads} from './performance/wasmThreads';
 import {AsrPayloadPool,emptyMemoryObservations,observePayload,shouldReleaseAfterQueue} from './performance/memoryPolicy';
 import {emptyStorageUi,ProgressGate,shouldPersistStreamEvent,type StorageUiObservations} from './performance/storageUiPolicy';
@@ -26,8 +26,7 @@ import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefe
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
-import {browserEvidenceHints,createHardwareEvidence,downloadHardwareEvidence} from './hardwareAcceptance';
-export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null;calibrateNext:boolean};
+export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
 type StreamSession={audio:StreamedAudio;windows:number;rotations:number;closed:boolean};
 type SplitPart={part:number;totalParts:number};
 export class JobRunner{
@@ -36,7 +35,7 @@ export class JobRunner{
  private readonly backendPolicy:BackendPolicy;
  private readonly boundaryWait:typeof waitAtBoundary;
  private store:JobStore;
- private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0,speakerDownload:'idle',performanceMode:'medium',activeResourcePolicy:null,calibrateNext:false};
+ private state:RunnerSnapshot={jobs:[],busy:false,ready:false,activeId:null,notice:'',backend:'Не инициализировано',enginePhase:'idle',operation:'',queueCount:0,speakerDownload:'idle',performanceMode:'medium',activeResourcePolicy:null};
  private listeners=new Set<()=>void>();
  private queue:string[]=[];
  private nextQueueOrder=0;
@@ -47,8 +46,6 @@ export class JobRunner{
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
- private benchmarkDownload:typeof downloadBenchmarkJson;
- private hardwareDownload:typeof downloadHardwareEvidence;
  private decode:typeof decodeAudio;
  private openStream:typeof openStreamedAudio;
  private initialization:Promise<void>|undefined;
@@ -65,11 +62,11 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
@@ -98,7 +95,6 @@ export class JobRunner{
  }
  subscribe=(listener:()=>void)=>{this.listeners.add(listener);return()=>{this.listeners.delete(listener)}};
  snapshot=()=>this.state;
- setBackendCalibration(enabled:boolean){if(!this.state.busy)this.set({calibrateNext:enabled})}
  setPerformanceMode(mode:PerformanceMode){this.resources.select(mode);this.set({performanceMode:this.resources.selected})}
  private set(patch:Partial<RunnerSnapshot>){
   if((Object.keys(patch) as (keyof RunnerSnapshot)[]).every(key=>Object.is(this.state[key],patch[key])))return;
@@ -126,39 +122,13 @@ export class JobRunner{
   const started=benchmarkNow();
   try{await this.persist(id)}finally{this.perf(id,'metadataPersistence',benchmarkNow()-started)}
  }
- exportBenchmark(id:string){
-  const job=this.job(id);
-  if(!job.benchmark?.runs)throw new Error('Измерения производительности ещё не выполнены.');
-  const name='iscribe_benchmark_'+id.slice(0,8).replace(/[^a-z0-9]/gi,'')+'.json';
-  this.benchmarkDownload(benchmarkReport(job),name);
- }
- async exportHardwareEvidence(id:string){
-  await this.init();
-  const job=this.job(id);
-  if(this.state.activeId===id||isRunning(job.stage)||job.stage==='queued')
-   throw new Error('Завершите текущий этап задания перед выгрузкой контрольного протокола.');
-  // Read the durable checkpoint and source from IndexedDB rather than
-  // trusting the live React snapshot. No source bytes or transcript leave.
-  const [stored,source,hints]=await Promise.all([
-   this.store.get(id,false),this.store.audio(id),browserEvidenceHints()
-  ]);
-  const report=createHardwareEvidence(job,stored,source,hints);
-  this.hardwareDownload(report,'iscribe_hardware_evidence_'+id.slice(0,8)+'.json');
- }
- private async inspectPcm(id:string,pcm:Float32Array|StreamedAudio,signal?:AbortSignal,file?:File,session?:StreamSession):Promise<AudioInspectionReport>{
+ private async inspectPcm(id:string,pcm:Float32Array,signal?:AbortSignal):Promise<AudioInspectionReport>{
   this.traceEvent(id,'audio-check-start','audio',{pcmSamples:pcm.length});
   await this.persist(id);
   try{
    const started=benchmarkNow();
    const onProgress=(done:number,total:number)=>this.set({operation:`Проверка аудио: окно ${done}/${total}`});
-   const report=pcm instanceof Float32Array
-    ?await inspectDecodedPcm(pcm,{signal,onProgress})
-    :await inspectStreamedAudio(pcm,signal,onProgress,async(window,index,total)=>{
-      if(!session||!file)throw new Error('Отсутствует сессия проверки потокового аудио.');
-      await this.rotateStreamIfNeeded(id,session,file,index,total,true);
-      const {report}=await this.readCheckedStreamWindow(id,session.audio,window,index,total,true);
-      session.windows++;return report;
-     });
+   const report=await inspectDecodedPcm(pcm,{signal,onProgress});
    this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
    this.patch(id,{audioCheck:{status:'passed',checkedAt:Date.now(),report}});
    this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount});
@@ -173,100 +143,6 @@ export class JobRunner{
    }
    throw error;
   }
- }
- async inspectAudio(id:string):Promise<void>{
-  if(this.state.busy||this.queue.length)throw new Error('Дождитесь завершения текущей операции перед проверкой аудио.');
-  this.job(id);
-  this.cancelled=false;this.abort=new AbortController();
-  this.set({busy:true,activeId:id,operation:'Проверка аудио'});
-  try{
-   await this.exclusive(async()=>{
-    const file=await this.store.audio(id);
-    if(!file)throw new Error('Исходное аудио недоступно в браузере.');
-    this.traceEvent(id,'audio-start','audio');await this.persist(id);
-    const started=Date.now();
-    const pcm=await this.readAudio(file);
-    const session=pcm instanceof Float32Array?undefined:this.newStreamSession(pcm);
-    let completed=false;
-    try{
-     this.check();this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-started,pcmSamples:pcm.length,decoderId:session?.audio.decoderId});
-     await this.inspectPcm(id,pcm,this.abort!.signal,file,session);completed=true;
-    }finally{if(session){this.closeStreamSession(id,session,completed?'finish':this.cancelled?'cancel':'error');await this.persist(id)}}
-   });
-   this.set({notice:'Аудио проверено без запуска Whisper. Результат отображён в строке файла.'});
-  }catch(error){
-   if(!this.cancelled&&this.job(id).audioCheck?.status!=='failed'){
-    const problem=error instanceof AudioValidationError?error.message:'Не удалось декодировать или проверить аудиофайл.';
-    this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
-    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error)});
-    try{await this.persist(id)}catch{/* Browser storage may be unavailable. */}
-   }
-   this.set({notice:this.cancelled?'Проверка аудио отменена.':error instanceof AudioValidationError?error.message:'Проверка аудио не завершена. См. диагностику JSON.'});
-  }finally{
-   this.abort=null;this.set({busy:false,activeId:null,operation:''});
-   this.continuePending();
-  }
- }
- // Standalone targeted probe: open a fresh streaming decoder, seek directly
- // to the chosen ASR window, and never call the model or reserve retries.
- async inspectWindow(id:string,windowNumber:number,strategy:WindowInspectionStrategy):Promise<void>{
-  await this.init();
-  if(!Number.isSafeInteger(windowNumber)||windowNumber<1)throw new Error('Укажите целый номер окна от 1.');
-  if(strategy!=='whole'&&strategy!=='split')throw new Error('Неизвестный способ проверки.');
-  const initial=this.job(id);
-  if(this.state.busy||this.queue.length||this.removing.has(id)||isRunning(initial.stage)||initial.stage==='queued')
-   throw new Error('Дождитесь завершения текущей операции перед проверкой окна.');
-  this.cancelled=false;this.abort=new AbortController();
-  this.set({busy:true,activeId:id,operation:'Проверка аудио · окно '+windowNumber});
-  const started=benchmarkNow();
-  const base={window:windowNumber,strategy,committedWindows:initial.nextWindow};
-  let result:WindowInspection|undefined;
-  try{
-   await this.exclusive(async()=>{
-    const file=await this.store.audio(id);
-    this.check();
-    if(!file)throw new Error('Исходное аудио недоступно в браузере.');
-    // Preserve the exact original source, even for small files; this probe
-    // intentionally exercises the streaming decoder rather than full decode.
-    this.traceEvent(id,'window-inspection-start','audio',base);
-    await this.persist(id);this.check();
-    let session:StreamSession|undefined;
-    let range:Pick<WindowInspection,'startSample'|'endSample'|'totalWindows'>={};
-    let failureStage:StreamStage='open';
-    const traceStart=this.job(id).trace?.at(-1);
-    try{
-     session=this.newStreamSession(await this.openGuardedStream(file,this.abort!.signal));
-     this.check();
-     const windows=audioWindows(session.audio.length,true),window=windows[windowNumber-1];
-     range={totalWindows:windows.length};
-     if(!window)throw new AudioValidationError(windowNumber,null,'invalid-window');
-     range={...range,startSample:window.start,endSample:window.end};failureStage='decode';
-     const checked=strategy==='split'
-      ?await this.readSplitStreamWindow(id,session.audio,window,windowNumber-1,windows.length,true)
-      :await this.readCheckedStreamWindow(id,session.audio,window,windowNumber-1,windows.length,true);
-     this.check();
-     result={...range,window:windowNumber,strategy,status:'passed',checkedAt:Date.now(),elapsedMs:benchmarkNow()-started,report:checked.report,completedParts:strategy==='split'?Math.ceil((window.end-window.start)/STREAM_SUBWINDOW_SAMPLES):1};
-    }catch(error){
-     const events=this.job(id).trace??[];
-     const startIndex=traceStart?events.lastIndexOf(traceStart):-1;
-     const current=events.slice(startIndex+1).filter(e=>e.window===windowNumber);
-     const failed=current.filter(e=>e.code==='window-error').at(-1);
-     result={...range,window:windowNumber,strategy,status:this.cancelled?'cancelled':'failed',checkedAt:Date.now(),elapsedMs:benchmarkNow()-started,
-      completedParts:current.filter(e=>e.code==='stream-split-part-ready').length,errorKind:this.cancelled?'cancelled':traceErrorKind(error),
-      failureStage:error instanceof StreamDecodeStalledError?error.stage:failed?.streamStage??failureStage};
-    }finally{
-     if(session)this.closeStreamSession(id,session,result?.status==='passed'?'finish':this.cancelled?'cancel':'error');
-    }
-    if(!result)throw new Error('Проверка окна не завершена.');
-    // Store at most the two latest strategies for the same window. Never
-    // overwrite whole-file PCM check, checkpoint, ASR text or recovery budget.
-    const final=result;
-    this.patch(id,{windowInspections:[...(this.job(id).windowInspections??[]).filter(r=>r.window===windowNumber&&r.strategy!==strategy),final]});
-    this.traceEvent(id,final.status==='passed'?'window-inspection-pass':final.status==='cancelled'?'window-inspection-cancelled':'window-inspection-error','audio',{...base,...range,elapsedMs:final.elapsedMs,streamStage:final.failureStage,errorKind:final.errorKind,pcmSamples:final.report?.pcmSamples});
-    await this.persist(id);
-   });
-   this.set({notice:result?.status==='passed'?'Проверка окна завершена. Whisper не запускался.':result?.status==='cancelled'?'Проверка окна отменена.':'Проверка окна не пройдена. См. диагностику JSON.'});
-  }finally{this.abort=null;this.set({busy:false,activeId:null,operation:''});this.continuePending()}
  }
  private traceEvent(id:string,code:TraceCode,phase:TracePhase,fields:Omit<TraceEvent,'at'|'phase'|'code'>={}){
   const job=this.job(id);
@@ -491,7 +367,7 @@ export class JobRunner{
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
   const jobAtStart=this.job(id);
-  const context=captureRunContext(this.resources.selected,this.manager.active===jobAtStart.params.model,this.state.calibrateNext,jobAtStart.nextWindow);
+  const context=captureRunContext(this.resources.selected,this.manager.active===jobAtStart.params.model,false,jobAtStart.nextWindow);
   this.bench(id,b=>({...b,profiler:b.profiler??emptyPerformanceProfile(),runs:b.runs+1,resumedRuns:b.resumedRuns+(resumed?1:0),...(b.runs===0?{firstRunContext:context}:{})}));
   this.traceEvent(id,'job-start','job',{committedWindows:this.job(id).nextWindow});
   this.traceEvent(id,'audio-start','audio');
@@ -692,51 +568,6 @@ export class JobRunner{
    }
   }
  }
- private async calibrateBackend(id:string,pcm:Float32Array,params:JobParams):Promise<void>{
-  const baseline=this.manager.capabilities?.active??this.state.backend;
-  if(!isBackend(baseline)||pcm.length<16000)return;
-  const signal=this.abort!.signal,started=benchmarkNow();
-  // Keep the authoritative PCM; each calibration request still receives a private copy.
-  const sample=pcm.subarray(0,Math.min(pcm.length,BACKEND_CALIBRATION_SAMPLE_LIMIT));
-  const samples:CalibrationSample[]=[];let reference='',chosen=baseline;
-  this.set({operation:'Сравнение вычислительных бэкендов'});
-  // Each stage has a foreground budget independent of inference heartbeats.
-  const bounded=<T>(work:()=>Promise<T>)=>withActivityWatchdog(()=>work(),{timeoutMs:BACKEND_CALIBRATION_STAGE_MS,pollMs:1000,signal,onTimeout:()=>this.manager.cancel()});
-  for(const backend of candidates(baseline,collectDeviceHints())){
-   this.check();let initializationMs:number|null=null;
-   try{
-    const init=benchmarkNow();
-    const prepared=await bounded(()=>this.manager.prepare(params.model,{backend}));
-    this.check();initializationMs=benchmarkNow()-init;
-    if(prepared.backend!==backend)throw new Error('Requested backend unavailable');
-    const recognize=()=>bounded(()=>this.manager.transcribe(sample.slice(),false,()=>{},params.language));
-    await recognize();this.check(); // Warm-up, no checkpoint and no transcript output.
-    const firstStarted=benchmarkNow();const first=normalizedText(await recognize());const firstMs=benchmarkNow()-firstStarted;
-    this.check();const secondStarted=benchmarkNow();const second=normalizedText(await recognize());const secondMs=benchmarkNow()-secondStarted;
-    this.check();
-    const status=!first||!second?'empty':first!==second?'mismatch':backend===baseline||first===reference?'passed':'mismatch';
-    if(backend===baseline&&status==='passed')reference=first;
-    samples.push({backend,status,inferenceMs:(firstMs+secondMs)/2,initializationMs});
-    if(backend===baseline&&!reference)break;
-   }catch(error){
-    this.check();if(signal.aborted||resourceFailure(error))throw error;
-    samples.push({backend,status:'failed',inferenceMs:null,initializationMs});
-    this.manager.cancel();
-    if(backend===baseline)break;
-   }
-  }
-  chosen=chooseBackend(baseline,samples);
-  // Restore exactly one session, including after a failed candidate. A failed
-  // restore is terminal; never loop over alternate backends or lose checkpoints.
-  const prepared=await bounded(()=>this.manager.prepare(params.model,{backend:chosen}));this.check();
-  if(prepared.backend!==chosen)throw new Error('Не удалось восстановить проверенный backend.');
-  this.set({backend:prepared.backend});this.patch(id,{backend:prepared.backend});
-  const report:BackendCalibration={version:1,sampleSeconds:sample.length/16000,baseline,chosen,samples,elapsedMs:benchmarkNow()-started,
-   selection:!reference?'no-reference':samples.filter(s=>s.status==='passed').length>1?'compared':'baseline-only'};
-  if(report.selection==='compared')this.backendPolicy.remember(params.model,params.language,chosen,this.manager.targetWasmThreads??1);
-  this.bench(id,b=>({...b,backendCalibration:report}));
-  await this.persist(id);this.check();
- }
  private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,session?:StreamSession){
   const streamed=!(audio instanceof Float32Array);
   this.check();this.patch(id,{duration:audio.length/16000});
@@ -749,10 +580,8 @@ export class JobRunner{
    const windows=audioWindows(audio.length,streamed);
    // A corrupted checkpoint must never masquerade as a completed transcript.
    const initial=checkpointProgress(windows,this.job(id).nextWindow);
-   const calibrate=this.state.calibrateNext;
-   if(calibrate)this.set({calibrateNext:false});
    this.manager.resourcePolicy=this.resources.policy();
-   const preferred=calibrate?undefined:this.backendPolicy.preferred(params.model,params.language,this.resources.selected,collectDeviceHints(),this.manager.targetWasmThreads??1);
+   const preferred=this.backendPolicy.preferred(params.model,params.language,this.resources.selected,collectDeviceHints(),this.manager.targetWasmThreads??1);
    if(this.manager.active!==params.model||(preferred!==undefined&&this.manager.capabilities?.active!==preferred)||this.manager.needsWasmThreadRefresh?.()){
     this.traceEvent(id,'model-start','model');await this.persist(id);
     const modelStarted=Date.now(),modelMeasured=benchmarkNow();
@@ -840,7 +669,6 @@ export class JobRunner{
      }else pcm=(await this.readRecoverableStreamWindow(id,session,file,window,index,windows.length)).pcm;
     }else if(audio instanceof Float32Array)pcm=audio.subarray(window.start,window.end);
     else throw new Error('Потоковый декодер недоступен.');
-    if(calibrate&&index===initial.completedWindows)await this.calibrateBackend(id,pcm,params);
     this.set({operation:'Распознавание'});
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
     let result:TranscriptSegment[]|undefined,successfulAttemptMs=0;

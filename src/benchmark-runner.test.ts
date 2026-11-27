@@ -5,7 +5,7 @@ import {JobRunner} from './jobRunner';
 import {JobStore} from './jobStore';
 import {createJob} from './jobs';
 import type {ModelManager} from './ml/manager';
-import type {benchmarkReport} from './benchmark';
+import type {diagnosticReport} from './jobTrace';
 import {ResourceManager} from './performance/resourceManager';
 
 function setup(){
@@ -19,20 +19,20 @@ function setup(){
   diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),
   cancel:vi.fn(()=>{})
  };
- const downloadBenchmark=vi.fn((_report:ReturnType<typeof benchmarkReport>,_name:string)=>{
+ const downloadDiagnostic=vi.fn((_report:ReturnType<typeof diagnosticReport>,_name:string)=>{
   void _report;void _name;
  });
  const resources=new ResourceManager(null);
  const boundaryWait=vi.fn(async(_ms:number,_signal:AbortSignal)=>{void _ms;void _signal});
  const runner=new JobRunner({store,resources,boundaryWait,manager:fake as unknown as ModelManager,
-  decode:async()=>new Float32Array(60*16000),download:()=>{},downloadBenchmark});
- return {store,fake,runner,downloadBenchmark,boundaryWait};
+  decode:async()=>new Float32Array(60*16000),download:()=>{},downloadDiagnostic});
+ return {store,fake,runner,downloadDiagnostic,boundaryWait};
 }
 async function finished(runner:JobRunner){
  await vi.waitFor(()=>expect(runner.snapshot().busy).toBe(false));
 }
 it('persists observed run, 3 checkpoint timings, inferred RTF and redacted JSON across reload',async()=>{
- const {store,fake,runner,downloadBenchmark}=setup();
+ const {store,fake,runner,downloadDiagnostic}=setup();
  await runner.init();
  await runner.add([new File(['SECRET BINARY'],'PRIVATE-MEETING.mp3')],
   {model:'whisper-small',language:'ru',diarize:true});
@@ -51,21 +51,22 @@ it('persists observed run, 3 checkpoint timings, inferred RTF and redacted JSON 
  expect(saved.benchmark?.profiler?.timings.betweenAsrAttempts?.count).toBe(2);
  expect(saved.benchmark?.profiler?.timings.fullAudioPreparation?.count).toBe(1);
  expect(saved.benchmark?.profiler?.backendAttempts.wasm).toBe(3);
- runner.exportBenchmark(id);
- const report=downloadBenchmark.mock.calls[0][0];
+ runner.exportDiagnostics(id);
+ const combined=downloadDiagnostic.mock.calls[0][0];
+ const report=combined.benchmark!;
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',measuredCommittedWindows:3,measuredUniqueAudioSeconds:60,asrWindowMs:{count:3}});
  expect(report.performanceProfiler?.device.cpuUtilizationPercent).toBeNull();
  expect(report.performanceProfiler?.workerTransferMs).toBeNull();
- expect(JSON.stringify(report)).not.toContain('PRIVATE-MEETING');
- expect(JSON.stringify(report)).not.toContain('confidential source text');
+ expect(JSON.stringify(combined)).not.toContain('PRIVATE-MEETING');
+ expect(JSON.stringify(combined)).not.toContain('confidential source text');
  const restarted=new JobRunner({store,manager:fake as unknown as ModelManager,
-  decode:async()=>new Float32Array(60*16000),download:()=>{},downloadBenchmark});
+  decode:async()=>new Float32Array(60*16000),download:()=>{},downloadDiagnostic});
  await restarted.init();
  expect(restarted.snapshot().jobs.find(j=>j.id===id)?.benchmark?.committedWindows).toBe(3);
 });
 
 it('after refresh measures only newly committed 30 seconds and preserves prior checkpoint',async()=>{
- const {store,fake,runner,downloadBenchmark}=setup();
+ const {store,fake,runner,downloadDiagnostic}=setup();
  const file=new File(['source'],'partial.wav');
  const original=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
  await store.save({...original,stage:'interrupted',nextWindow:1,
@@ -78,8 +79,8 @@ it('after refresh measures only newly committed 30 seconds and preserves prior c
  });
  expect(fake.transcribe).toHaveBeenCalledTimes(2);
  expect(saved.segments[0].text).toBe('already committed');
- runner.exportBenchmark(original.id);
- expect(downloadBenchmark.mock.calls.at(-1)?.[0].measuredUniqueAudioSeconds).toBe(30);
+ runner.exportDiagnostics(original.id);
+ expect(downloadDiagnostic.mock.calls.at(-1)?.[0].benchmark?.measuredUniqueAudioSeconds).toBe(30);
 });
 
 it('speaker-only retry increases run counter but does not add ASR timings or processed audio',async()=>{

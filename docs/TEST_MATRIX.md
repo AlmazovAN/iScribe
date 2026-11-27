@@ -152,3 +152,7 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | GPU-09-H | Compare real long recordings, wait time, RTF, memory pressure and quality across profiles; verify no material regression | NOT TESTED |
 
 - Local CI v7: Windows Vitest invokes the offline PowerShell suite for manifest binding, stale/duplicate manifests, excluded draft/experimental PRs, stage ancestry and changed manifest rejection. Linux skips this Windows-specific test. Actual Windows run pending.
+
+
+## DIAG-01 — компактная диагностика
+Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
