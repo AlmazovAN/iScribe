@@ -1,7 +1,8 @@
-﻿# iScribe Update & Build v5 — Windows PowerShell 5.1 / PowerShell 7
-# Auto: find an explicitly named codex/*-release-candidate PR, inspect exact CI,
-# and ask for integration. Local: test exact merge commit, then normal push.
-# Online: use GitHub Actions + ordinary PR merge. MainOnly: sync and build only.
+﻿# iScribe Update & Build v6 — Windows PowerShell 5.1 / PowerShell 7
+# Auto: offer local CI by default; cloud CI only after explicit selection.
+# Local: test exact merge commit, then normal push; no Actions dispatch.
+# Online: dispatch CI once for the pinned candidate, wait, then ordinary PR merge.
+# MainOnly: sync and build only.
 # No force-push, hard reset, arbitrary PR merge, or publishing to Pages.
 [CmdletBinding()]
 param(
@@ -23,6 +24,9 @@ $Revision = 'unknown'
 $PinnedSha = $null
 $BaseSha = $null
 $SelectedPR = 0
+$CiRequestId = $null
+$CiRunId = $null
+$CiBranch = $null
 $Worktree = $null
 $WorktreeRegistered = $false
 $TempHtml = $null
@@ -150,20 +154,50 @@ function Assert-CurrentCandidate([bool]$RequireReady=$false) {
     if ($remote -ne $script:BaseSha) { throw 'origin/main изменился. Проверка устарела; повторите запуск.' }
     return $p
 }
+function Start-CloudCI($Pr) {
+    if ($script:CiRequestId) { throw 'CI уже запрошен в этом запуске скрипта. Повторный запуск запрещён.' }
+    # The candidate must contain the same CI definition as the current main.
+    # An intentional workflow change must be reviewed/integrated separately.
+    $baseWorkflow=Git-Text @('rev-parse',($script:BaseSha+':.github/workflows/ci.yml'))
+    $headWorkflow=Git-Text @('rev-parse',($script:PinnedSha+':.github/workflows/ci.yml'))
+    if ($baseWorkflow -ne $headWorkflow) { throw 'Конфигурация CI кандидата отличается от main. Сначала согласуйте конфигурацию CI.' }
+    $script:CiBranch=[string]$Pr.head.ref
+    $script:CiRequestId=[guid]::NewGuid().ToString('N')
+    Log "Запуск GitHub Actions по запросу: CI / $script:CiRequestId; head=$script:PinnedSha; base=$script:BaseSha"
+    # Dispatch exactly once. A network failure can be ambiguous: do not retry
+    # automatically, as GitHub might already have accepted the request.
+    Run 'gh.exe' @('workflow','run','ci.yml','--repo',$Repository,'--ref',$script:CiBranch,'-f',('request_id='+$script:CiRequestId))
+}
 function Get-CIState {
-    # Only the named CI workflow for this exact PR head AND base is evidence.
-    $path='repos/'+$Repository+'/actions/workflows/ci.yml/runs?event=pull_request&head_sha='+$script:PinnedSha+'&per_page=100'
-    $data=Gh-Json @('api',$path)
-    $matches=@($data.workflow_runs | Where-Object {
-        $_.name -eq 'CI' -and $_.head_sha -eq $script:PinnedSha -and @($_.pull_requests | Where-Object { $_.number -eq $script:SelectedPR -and $_.head.sha -eq $script:PinnedSha -and $_.base.sha -eq $script:BaseSha }).Count -gt 0
-    } | Sort-Object created_at -Descending | Select-Object -First 1)
-    if ($matches.Count -eq 0) { return @{Status='missing';Url=''} }
-    $r=$matches[0]
+    if (-not $script:CiRequestId) { throw 'Облачный CI не был запрошен этим запуском скрипта.' }
+    $runTitle='CI / '+$script:CiRequestId
+    if (-not $script:CiRunId) {
+        $branch=[uri]::EscapeDataString($script:CiBranch)
+        $path='repos/'+$Repository+'/actions/workflows/ci.yml/runs?event=workflow_dispatch&branch='+$branch+'&per_page=100'
+        $data=Gh-Json @('api',$path)
+        $matches=@($data.workflow_runs | Where-Object { $_.display_title -ceq $runTitle })
+        if ($matches.Count -eq 0) { return @{Status='missing';Url=''} }
+        if ($matches.Count -ne 1) { throw 'Найдено несколько CI с одним request_id. Интеграция запрещена.' }
+        $r=$matches[0]
+        if ([string]$r.id -notmatch '^[0-9]+$') { throw 'Некорректный ID запуска CI.' }
+        $script:CiRunId=[string]$r.id
+    } else {
+        $r=Gh-Json @('api',('repos/'+$Repository+'/actions/runs/'+$script:CiRunId))
+    }
+    # A manual dispatch does not populate PR metadata reliably. Instead bind
+    # to the unique request ID, exact pinned branch and SHA; base is checked
+    # independently by Assert-CurrentCandidate before dispatch and merge.
+    if ($r.name -cne 'CI' -or $r.event -cne 'workflow_dispatch' -or
+        $r.display_title -cne $runTitle -or $r.head_branch -cne $script:CiBranch -or
+        $r.head_sha -ne $script:PinnedSha -or [string]$r.id -ne $script:CiRunId) {
+        throw 'Запуск CI не соответствует точному кандидату. Интеграция запрещена.'
+    }
+    if ([int]$r.run_attempt -ne 1) { throw 'Обнаружен повторный запуск CI. Требуется новый явный запрос скрипта.' }
     if ($r.status -ne 'completed') { return @{Status='pending';Url=$r.html_url} }
     if ($r.conclusion -ne 'success') { return @{Status='failed';Url=$r.html_url} }
-    $jobs=Gh-Json @('api',('repos/'+$Repository+'/actions/runs/'+$r.id+'/jobs?per_page=100'))
+    $jobs=Gh-Json @('api',('repos/'+$Repository+'/actions/runs/'+$script:CiRunId+'/attempts/1/jobs?per_page=100'))
     foreach ($name in @('verify','browser-acceptance','build')) {
-        if (@($jobs.jobs | Where-Object { $_.name -eq $name -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' }).Count -ne 1) { return @{Status='failed';Url=$r.html_url} }
+        if (@($jobs.jobs | Where-Object { $_.name -ceq $name -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' }).Count -ne 1) { return @{Status='failed';Url=$r.html_url} }
     }
     return @{Status='passed';Url=$r.html_url}
 }
@@ -177,7 +211,7 @@ function Wait-CI {
         if ($c.Status -eq 'failed') { throw ('GitHub CI не пройден: '+$c.Url+'. Исправьте ошибки; автоматическое слияние запрещено.') }
         Start-Sleep -Seconds 10
     } while ((Get-Date) -lt $deadline)
-    throw 'CI не завершён или не запущен для точных head/base. Запустите/повторите CI в GitHub, либо выберите -Mode Local. main не изменён этим скриптом.'
+    throw 'Время ожидания CI истекло. Проверьте Actions по request_id из журнала. Скрипт не запускает повторные испытания и не объединяет PR при неизвестном результате.'
 }
 function New-Worktree([string]$Commit) {
     Set-Location -LiteralPath $script:Root
@@ -325,18 +359,16 @@ try {
             if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
             else {
                 Log "PR #${SelectedPR}: $($pr.html_url)"
-                if ($Mode -eq 'Local') { $ci=@{Status='not-required';Url=''} }
-                else { $ci=Get-CIState }
-                Log "GitHub CI: $($ci.Status) $($ci.Url)"
                 $route=$Mode
                 if ($route -eq 'Auto') {
-                    if ($ci.Status -eq 'passed') { $route='Online'; Log 'Точный облачный CI уже пройден: повторное полное тестирование не требуется.' }
-                    else {
-                        Log '1 — локальный конвейер; 2 — GitHub Actions; 0 — отмена.'
-                        $answer=Read-Host 'Выберите маршрут'
-                        if ($answer -eq '1') { $route='Local' } elseif ($answer -eq '2') { $route='Online' } else { $ExitCode=2; throw 'Операция отменена.' }
-                    }
+                    Log '1 — локальный конвейер (по умолчанию); 2 — GitHub Actions (новый запуск); 0 — отмена.'
+                    $answer=Read-Host 'Выберите маршрут [1]'
+                    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq '1') { $route='Local' }
+                    elseif ($answer -eq '2') { $route='Online' }
+                    else { $ExitCode=2; throw 'Операция отменена.' }
                 }
+                if ($route -eq 'Local') { Log 'Выбран локальный CI. GitHub Actions не запускается и не проверяется.' }
+                else { Log 'Выбран облачный CI. После подтверждения будет запрошен один новый запуск.' }
                 Confirm-Integration $route
             }
         }
@@ -363,6 +395,8 @@ try {
         Step '3. GitHub Actions и слияние PR'
         $fresh=Assert-CurrentCandidate
         if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $fresh=Assert-CurrentCandidate $true
+        Start-CloudCI $fresh
         $null=Wait-CI
         $null=Assert-CurrentCandidate $true
         Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
