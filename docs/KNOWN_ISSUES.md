@@ -79,3 +79,6 @@ GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilizatio
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+DEC-01: full-file FFmpeg can use substantial memory; streamed route unchanged; GPL/source distribution review and real MP3/AAC and file:// tests required before release. Whisper stall root cause remains unconfirmed.

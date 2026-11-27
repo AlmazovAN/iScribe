@@ -1,5 +1,6 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
+import {decodeSelectedAudio} from './audioDecoderProvider';
 import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
@@ -66,7 +67,7 @@ export class JobRunner{
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeSelectedAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
