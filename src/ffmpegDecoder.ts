@@ -9,7 +9,7 @@ const DEADLINE_MS=10*60*1000;
 type Reply={kind:'pcm';buffer:ArrayBuffer}|{kind:'error';code:'decode'|'length'|'runtime';status?:number};
 function assetURL(name:string):string{
  const embedded=(globalThis as typeof globalThis&{__iscribeAssets?:Record<string,string>}).__iscribeAssets?.[name];
- return embedded??new URL(name,document.baseURI).href;
+ return embedded??new URL(import.meta.env.DEV?'/'+name:name,document.baseURI).href;
 }
 export function readFfmpegPcm(buffer:ArrayBuffer):Float32Array{
  if(buffer.byteLength===0||buffer.byteLength%4!==0||buffer.byteLength/4>MAX_SAMPLES)
