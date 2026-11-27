@@ -25,7 +25,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tok
 if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS PowerShell parser'
 $script:Pass++
-$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
+$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity','Get-ReleaseManifest','Test-ReadyRelease','Assert-ManifestStages')
 # Load only named top-level function definitions, never the main script.
 foreach ($name in $wanted) {
     $nodes=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name })
@@ -284,6 +284,42 @@ Check 'draft rejected when readiness required' {
     $script:FakePR.draft=$true
     try { Throws { Assert-CurrentCandidate $true } } finally { $script:FakePR.draft=$false }
 }
+
+$script:SelectedManifest=$null
+$manifestBody='<!-- iscribe-release: {"schema":1,"release_id":"TEST-001","base_sha":"'+$script:BaseSha+'","head_sha":"'+$script:PinnedSha+'","stages":[{"id":"TEST-01","pr":99,"sha":"'+$script:PinnedSha+'"}]} -->'
+$script:FakePR.body=$manifestBody
+$script:FakePR.labels=@()
+Check 'manifest parses and binds exact base and head' {
+    Equal (Get-ReleaseManifest $script:FakePR).Data.release_id 'TEST-001'
+    Equal (Get-ReleaseManifest $script:FakePR).Data.stages[0].pr 99
+}
+Check 'stale manifest and duplicate manifest rejected' {
+    $script:FakePR.body=$manifestBody.Replace($script:PinnedSha,('f'*40))
+    try { Throws { Get-ReleaseManifest $script:FakePR } } finally { $script:FakePR.body=$manifestBody }
+    $script:FakePR.body=$manifestBody+[char]10+$manifestBody
+    try { Throws { Get-ReleaseManifest $script:FakePR } } finally { $script:FakePR.body=$manifestBody }
+}
+Check 'experimental and draft candidates excluded' {
+    Equal (Test-ReadyRelease $script:FakePR) $true
+    $script:FakePR.labels=@(@{name='experimental'})
+    try { Equal (Test-ReadyRelease $script:FakePR) $false } finally { $script:FakePR.labels=@() }
+    $script:FakePR.draft=$true
+    try { Equal (Test-ReadyRelease $script:FakePR) $false } finally { $script:FakePR.draft=$false }
+}
+function Test-Ancestor([string]$Ancestor,[string]$Descendant) { return $script:FakeAncestor }
+$script:FakeAncestor=$true
+Check 'stage history must be included' {
+    $m=Get-ReleaseManifest $script:FakePR
+    Assert-ManifestStages $m
+    $script:FakeAncestor=$false
+    try { Throws { Assert-ManifestStages $m } 'Manifest stage not in candidate history' } finally { $script:FakeAncestor=$true }
+}
+Check 'changed manifest blocks publish' {
+    $script:SelectedManifest=Get-ReleaseManifest $script:FakePR
+    $script:FakePR.body=$manifestBody.Replace('TEST-001','TEST-002')
+    try { Throws { Assert-CurrentCandidate $true } 'Release manifest changed' } finally { $script:FakePR.body=$manifestBody; $script:SelectedManifest=$null }
+}
+
 Write-Host "CI-06 OFFLINE: $script:Pass passed, $script:Fail failed"
 if ($script:Fail -ne 0) { exit 1 }
 exit 0
