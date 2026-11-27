@@ -746,3 +746,36 @@ it('coalesces streamed completion metadata but commits every window and preserve
  expect(writes.mock.calls.some(([j])=>j.nextWindow===3&&j.segments.length===3)).toBe(true);
  await store.remove(job.id);
 });
+
+it('starts read-only lookahead before attempt metadata settles but never dispatches ASR before durable write',async()=>{
+ const {fake,store}=setup();
+ const file=new File(['audio'],'early-prefetch.mp3'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(job,file);Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const resources=new ResourceManager(null);
+ vi.spyOn(resources,'policy').mockReturnValue({...resources.policy(),targetPrefetchWindows:1,pauseRatio:0,maxPauseMs:0});
+ const read=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
+ const runner=new JobRunner({store,resources,manager:fake as unknown as ModelManager,openStream:async()=>({length:60*16000,decoderId:1,read,close:()=>{}})});
+ await runner.init();
+ const save=store.save.bind(store);
+ let entered=false,release:()=>void=()=>{};
+ vi.spyOn(store,'save').mockImplementation(async(j,file)=>{
+  if(!entered&&j.id===job.id&&j.nextWindow===0&&j.trace?.some(e=>e.code==='window-attempt')){
+   entered=true;await new Promise<void>(resolve=>{release=resolve});
+  }
+  return save(j,file);
+ });
+ runner.enqueue(job.id);
+ try{
+  await vi.waitFor(()=>expect(entered).toBe(true));
+  await vi.waitFor(()=>expect(read.mock.calls.map(c=>c[0].start)).toContain(25*16000));
+  expect(fake.transcribe).not.toHaveBeenCalled();
+  expect((await store.get(job.id,false))?.nextWindow).toBe(0);
+ }finally{release()}
+ await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{audioPipeline:{scheduled:2,consumed:2,earlyDispatches:2,failed:0,peakQueued:1}}});
+ expect(saved.benchmark?.audioPipeline?.preDispatchLeadMs).toBeGreaterThanOrEqual(0);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ await store.remove(job.id);
+});
