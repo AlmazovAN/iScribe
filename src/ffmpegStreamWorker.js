@@ -26,7 +26,7 @@ function decode(start,count,id,allowShort=false){
  try{
   const args=['-hide_banner','-loglevel','error','-xerror','-threads','1'];
   if(warm>0)args.push('-ss',(warm/RATE).toFixed(7));
-  args.push('-i',INPUT,'-map','0:a:0','-vn','-sn','-dn',
+  args.push('-protocol_whitelist','file','-i',INPUT,'-map','0:a:0','-vn','-sn','-dn',
    '-af','aresample=16000,atrim=start_sample='+skip+':end_sample='+(skip+count)+',asetpts=PTS-STARTPTS',
    '-t',(count/RATE).toFixed(7),'-ac','1','-ar','16000','-c:a','pcm_f32le','-f','f32le',OUTPUT);
   const status=execute(()=>core.exec(...args));
@@ -59,7 +59,7 @@ async function open({file,coreURL,wasmURL},id){
  });
  let status;
  try{
-  status=execute(()=>core.ffprobe('-v','error','-select_streams','a:0',
+  status=execute(()=>core.ffprobe('-v','error','-protocol_whitelist','file','-select_streams','a:0',
    '-show_entries','stream=duration,start_time,sample_rate:format=duration,start_time','-of','json',INPUT));
  }finally{core.setLogger(()=>{})}
  if(status!==0)throw Object.assign(new Error('probe'),{exitCode:status});

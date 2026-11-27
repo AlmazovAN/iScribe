@@ -4,9 +4,10 @@ import {decodeFfmpegAudio,readFfmpegPcm} from './ffmpegDecoder';
 import {MAX_PCM_SAMPLES} from './audioValidation';
 import {STREAM_AUDIO_BYTES} from './audio';
 describe('DEC-01: FFmpeg decoder contract',()=>{
- it('preserves legacy by default and requires explicit opt-in',()=>{
-  expect(chooseAudioDecoder('')).toBe(legacyAudioDecoder);
-  expect(chooseAudioDecoder('?decoder=other')).toBe(legacyAudioDecoder);
+ it('defaults to FFmpeg and preserves an explicit legacy comparison path',()=>{
+  expect(chooseAudioDecoder('')).toBe(ffmpegAudioDecoder);
+  expect(chooseAudioDecoder('?decoder=other')).toBe(ffmpegAudioDecoder);
+  expect(chooseAudioDecoder('?decoder=legacy')).toBe(legacyAudioDecoder);
   expect(chooseAudioDecoder('?decoder=ffmpeg')).toBe(ffmpegAudioDecoder);
  });
  it('keeps PCM samples unchanged',()=>{

@@ -5,7 +5,8 @@ import {openStreamedAudio} from './streamedAudio';
 
 describe('DEC-02: FFmpeg bounded windows',()=>{
  it('selects both legacy and FFmpeg routes explicitly',()=>{
-  expect(chooseAudioDecoder('').openStream).toBe(openStreamedAudio);
+  expect(chooseAudioDecoder('').openStream).toBe(openFfmpegStreamedAudio);
+  expect(chooseAudioDecoder('?decoder=legacy').openStream).toBe(openStreamedAudio);
   expect(chooseAudioDecoder('?decoder=ffmpeg').openStream).toBe(openFfmpegStreamedAudio);
  });
  it('accepts 30-second and short recovery windows beyond one hour',()=>{
