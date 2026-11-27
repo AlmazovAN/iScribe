@@ -39,8 +39,8 @@ export function resourceReport(value:ResourceObservations|undefined,wasmThreadPo
  return {version:1,windowCounts:{eco:value.windowCounts.eco,medium:value.windowCounts.medium,max:value.windowCounts.max},
  requestedWindowCounts:{eco:value.requestedWindowCounts.eco,medium:value.requestedWindowCounts.medium,max:value.requestedWindowCounts.max},
  lastPolicy:{requested:p.requested,effective:p.effective,targetWasmThreads:p.targetWasmThreads,targetPrefetchWindows:p.targetPrefetchWindows,
- pauseRatio:p.pauseRatio,maxPauseMs:p.maxPauseMs,reasons:p.reasons},
+ pauseRatio:p.pauseRatio,maxPauseMs:p.maxPauseMs,reasons:p.reasons,prefetchAdaptation:p.prefetchAdaptation??null},
  pauseCount:value.pauseCount,pauseMs:Math.round(value.pauseMs*100)/100,
  applied:{boundaryPacing:true,wasmThreadPolicy,prefetchPolicy,backendSelectionPolicy:true},
- limitation:'WASM thread policy is confirmed only for observed WASM attempts with a Worker configuration message; prefetch is confirmed when at least one streamed window was scheduled. Counts refer to windows admitted to processing, including interrupted windows. Pause time is observed wall time; not measured CPU/GPU utilization.'};
+ limitation:'WASM thread policy is confirmed only for observed WASM attempts with a Worker configuration message; prefetch is confirmed when at least one streamed window was scheduled. Counts refer to windows admitted to processing, including interrupted windows. Pause time is observed wall time; not measured CPU/GPU utilization. Adaptive prefetch trials use successful host readiness observations; not measured memory pressure or speedup.'};
 }
