@@ -2,7 +2,7 @@ import {useCallback,useEffect,useMemo,useRef,useState,useSyncExternalStore} from
 import './style.css';
 import {ColabWorkspace} from './ColabWorkspace';
 import {WhisperDownloadStatus} from './WhisperDownloadStatus';
-import {OfflineReadinessPanel} from './OfflineReadinessPanel';
+import {registerOfflineShell} from './offline';
 import {DiagnosticsPanel} from './DiagnosticsPanel';
 import {JobRunner} from './jobRunner';
 import {performanceLabels} from './performance/profiles';
@@ -10,7 +10,7 @@ import {JobRow} from './JobRow';
 import {useModels} from './useModels';
 import {useProtection} from './useProtection';
 import type {WhisperId} from './ml/manager';
-import type {JobParams,WindowInspectionStrategy} from './jobs';
+import type {JobParams} from './jobs';
 declare const __ISCRIBE_BUILD_SHA__:string;
 const buildRevision=typeof __ISCRIBE_BUILD_SHA__==='string'&&__ISCRIBE_BUILD_SHA__!=='unavailable'?__ISCRIBE_BUILD_SHA__.slice(0,7):'недоступен';
 const engineLabels={idle:'Не инициализировано',initializing:'Инициализация',ready:'Готова',transcribing:'Распознавание',recovering:'Восстановление Worker','preloading-speakers':'Загрузка спикеров',diarizing:'Диаризация',cancelled:'Отменено',error:'Ошибка'} as const;
@@ -35,7 +35,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const modelState=useModels(runner.manager,state.busy,state.speakerDownload);
  const modelBusy=state.busy;
  useProtection(state.busy,state.activeId);
- useEffect(()=>{void runner.init()},[runner]);
+ useEffect(()=>{void runner.init();void registerOfflineShell()},[runner]);
  useEffect(()=>{if(colab==='closed')colabButton.current?.focus()},[colab]);
  useEffect(()=>{if(cancelOpen)cancelDialog.current?.showModal();else cancelDialog.current?.close()},[cancelOpen]);
  useEffect(()=>{if(removeId)removeDialog.current?.showModal();else removeDialog.current?.close()},[removeId]);
@@ -49,10 +49,6 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
  const add=(files:FileList|File[])=>{setError('');void runner.add(Array.from(files),params).catch(e=>setError(e instanceof Error?e.message:'Не удалось сохранить аудиозапись.'));if(navigator.storage?.persist)void navigator.storage.persist().catch(()=>false)};
  const download=useCallback((id:string,variant:'plain'|'time'|'speakers')=>{try{runner.export(id,variant)}catch(e){setError(e instanceof Error?e.message:String(e))}},[runner]);
  const downloadDiagnostics=(id:string)=>{try{runner.exportDiagnostics(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
- const downloadBenchmark=(id:string)=>{try{runner.exportBenchmark(id)}catch(e){setError(e instanceof Error?e.message:String(e))}};
- const downloadHardware=(id:string)=>runner.exportHardwareEvidence(id);
- const inspectAudio=(id:string)=>{setError('');void runner.inspectAudio(id).catch(e=>setError(e instanceof Error?e.message:String(e)))};
- const inspectWindow=(id:string,window:number,strategy:WindowInspectionStrategy)=>{setError('');void runner.inspectWindow(id,window,strategy).catch(e=>setError(e instanceof Error?e.message:String(e)))};
  const chosen=state.jobs.find(j=>j.id===previewId)??state.jobs.find(j=>j.id===state.activeId)??state.jobs.at(-1);
  const queue=state.jobs.filter(job=>job.queueOrder!==undefined&&job.stage!=='done')
   .sort((a,b)=>a.queueOrder!-b.queueOrder!||a.id.localeCompare(b.id));
@@ -93,11 +89,7 @@ export function App({createRunner}:{createRunner?:()=>JobRunner}={}){
    </section>
    {(error||state.notice)&&<p className="notice" role="alert">{error||state.notice}</p>}
    <div className="runtime-bar" role="status"><span className={'activity '+(state.busy?'working':'')}/><strong>{state.busy?(state.operation||'Обработка записи'):'Готов к работе'}</strong><span className="backend">ML: {engineLabels[state.enginePhase]} · ASR: {state.backend} · спикеры: WASM</span></div>
-   <DiagnosticsPanel job={chosen} jobs={state.jobs} busy={state.busy} checking={chosen?.id===state.activeId&&state.operation.startsWith('Проверка аудио')}
-    onSelect={setPreviewId} onInspect={inspectAudio} onInspectWindow={inspectWindow} onLog={downloadDiagnostics} onBenchmark={downloadBenchmark} onHardware={downloadHardware}>
-    <section className="diagnostics-record" aria-label="Сравнение бэкендов"><label><input type="checkbox" disabled={state.busy} checked={state.calibrateNext} onChange={e=>runner.setBackendCalibration(e.target.checked)}/> Сравнить бэкенды при следующем распознавании</label><p>Один локальный фрагмент до 15 с, прогрев и два замера на каждом доступном бэкенде. Возможна дополнительная загрузка файлов той же модели. Результаты теста не добавляются в текст. В средней и максимальной производительности проверенный выбор используется повторно.</p></section>
-    <OfflineReadinessPanel model={selected} diarize={diarize} busy={state.busy} onPrepareWasm={()=>void runner.prepare(selected,true)}/>
-   </DiagnosticsPanel>
+   <DiagnosticsPanel job={chosen} jobs={state.jobs} onSelect={setPreviewId} onLog={downloadDiagnostics}/>
    <p className="privacy">Аудио и результаты сохраняются в этом браузере на вашем устройстве. Перезагрузка остановит вычисления; сохранённую работу можно продолжить. Не очищайте данные сайта до скачивания результатов.</p>
   </main>
   <footer><strong>iScribe</strong><span>Локально. Под вашим контролем.</span><span className="release-id" title="Сборка не прошла аппаратную приёмку">Тестовая сборка · {buildRevision}</span><a href={__ISCRIBE_NOTICES_URL__} target="_blank" rel="noreferrer">Модели и лицензии</a></footer>
