@@ -664,3 +664,11 @@ Exhibit B - "Incompatible With Secondary Licenses" Notice
 
   This Source Code Form is "Incompatible With Secondary Licenses", as
   defined by the Mozilla Public License, v. 2.0.
+
+
+Experimental FFmpeg core 0.12.10 (@ffmpeg/core)
+License: GPL-2.0-or-later. https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+Upstream: https://github.com/ffmpegwasm/ffmpeg.wasm
+Source release: https://github.com/ffmpegwasm/ffmpeg.wasm/releases
+Package: https://registry.npmjs.org/@ffmpeg/core/-/core-0.12.10.tgz
+Binary publication is blocked pending verification of corresponding source and redistribution obligations.

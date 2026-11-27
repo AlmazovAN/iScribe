@@ -10,11 +10,12 @@ export type StreamReadEvent=Pick<TraceEvent,'elapsedMs'|'packets'|'decodedFrames
 };
 export type StreamReadObserver=(event:StreamReadEvent)=>void|Promise<void>;
 let nextDecoderId=0;
+export const allocateStreamDecoderId=()=>++nextDecoderId;
 const formats=[MP3,WAVE,MP4,QTFF,OGG,WEBM,ADTS,FLAC];
 
 export async function openStreamedAudio(file:File,signal?:AbortSignal){
  signal?.throwIfAborted();
- const decoderId=++nextDecoderId;
+ const decoderId=allocateStreamDecoderId();
  let input:Input|null=new Input({source:new BlobSource(file),formats});
  let sink:AudioSampleSink|null=null;
  let closed=false,reading=false;

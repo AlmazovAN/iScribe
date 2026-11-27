@@ -79,3 +79,21 @@ GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilizatio
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+DEC-01: full-file FFmpeg can use substantial memory; streamed route unchanged; GPL/source distribution review and real MP3/AAC and file:// tests required before release. Whisper stall root cause remains unconfirmed.
+
+
+DEC-02: FFmpeg random-seek overlap, VBR duration/tail probe, repeated CLI memory behavior, WORKERFS availability and decoder-switch checkpoint compatibility require local validation. No silent source copy, padding or fallback is allowed.
+
+
+DEC-03: untagged historical checkpoints are assumed legacy; experimental runs from DEC-01/02 must be recreated as new jobs. Real seek fidelity and full/stream recovery remain unverified.
+
+
+DEC-04: FFmpeg full route still limited to one hour, streamed mode still excludes speakers; legacy removal deferred until migration/hardware acceptance. Native CLI reference PASS is not browser/WASM acceptance. Public distribution requires corresponding-source/license review.
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.
+
+
+DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web builds and web preflight PASS; offline 5/6 (file:// FFmpeg only). Standalone worker transport changed to inline core and cloned compressed Blob; revised candidate pending local CI.

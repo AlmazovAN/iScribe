@@ -106,3 +106,29 @@ A bounded per-run prefetch-depth trial is wired into ResourceManager and success
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+## DEC-01 experimental candidate
+
+Alternate FFmpeg.wasm full-file decoding is opt-in; legacy remains default, large files still use MediaBunny. See docs/DEC-01_FFMPEG_CORE.md. Local CI and actual browser/hardware acceptance NOT TESTED; no release or deployment.
+
+
+## DEC-02 experimental candidate
+
+FFmpeg opt-in now covers the windowed route through WORKERFS and exact-length PCM gates. Legacy remains default. See docs/DEC-02_STREAMING_QUALITY.md. Local and hardware acceptance NOT TESTED.
+
+
+## DEC-03 experimental candidate
+
+Persisted decoder identity, typed FFmpeg diagnostics and bounded automatic recovery. See docs/DEC-03_RECOVERY_DIAGNOSTICS.md. Local tests NOT TESTED.
+
+
+## DEC-04 release candidate
+
+New jobs default to FFmpeg in the candidate; legacy retained for pinned checkpoints and explicit comparison. Native CLI synthetic reference experiment observed PASS; local CI, real browser FFmpeg and hardware acceptance NOT TESTED. See docs/DEC-04_ACCEPTANCE_RELEASE.md. Public binary distribution pending GPL review.
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.
+
+
+DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web builds and web preflight PASS; offline 5/6 (file:// FFmpeg only). Standalone worker transport changed to inline core and cloned compressed Blob; revised candidate pending local CI.

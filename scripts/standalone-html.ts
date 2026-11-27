@@ -18,9 +18,13 @@ export function standaloneHtml():Plugin{
     const urls:Record<string,string>={};
     let worker:string|undefined;
     let wasm:string|undefined;
+    const ffmpegCore='assets/ffmpeg-core-0.12.10.js';
+    const ffmpegWasm='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
     for(const [name,file] of Object.entries(bundle)){
      if(name==='index.html'||name===entryName||name.endsWith('.css'))continue;
-     if(name.endsWith('.wasm')&&file.type==='asset'){
+     if((name===ffmpegCore||name===ffmpegWasm)&&file.type==='asset'){
+      urls[name]=Buffer.from(file.source).toString('base64');
+     }else if(name.endsWith('.wasm')&&file.type==='asset'){
       if(wasm)this.error('Unexpected additional WASM asset');
       wasm=name;
       urls[name]=gzipSync(file.source,{level:9}).toString('base64');
@@ -33,6 +37,7 @@ export function standaloneHtml():Plugin{
       this.error('Unsupported standalone asset: '+name);
      }
     }
+    if(!urls[ffmpegCore]||!urls[ffmpegWasm])this.error('Missing embedded FFmpeg core');
     if(!worker||!wasm)
      this.error('Missing embedded Worker or ONNX Runtime');
     const notices=readFileSync(new URL('../public/THIRD_PARTY_NOTICES.txt',import.meta.url)).toString('base64');
@@ -47,6 +52,11 @@ try {
  const compressed=new Blob([decode(embedded[wasm])]);
  const binary=await new Response(compressed.stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
  assets[wasm]=blobUrl([binary],"application/wasm");
+ // file:// uses opaque origins. Do not fetch page-owned FFmpeg Blob URLs inside a Worker.
+ globalThis.__iscribeFfmpegEmbedded={
+  core:new Blob([decode(embedded[${JSON.stringify(ffmpegCore)}])],{type:"text/javascript"}),
+  wasm:new Blob([decode(embedded[${JSON.stringify(ffmpegWasm)}])],{type:"application/octet-stream"})
+ };
  assets[worker]=blobUrl(["globalThis.__iscribeAssets="+JSON.stringify(assets)+";\\n",decode(embedded[worker])],"text/javascript");
  globalThis.__iscribeAssets=assets;
  globalThis.__iscribeWasmBinary=binary;

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import {expect,it} from 'vitest';
 import {JobStore} from './jobStore';
 import {createJob} from './jobs';
+import {decoderIdentity} from './decoderDiagnostics';
 
 function name(){return 'iscribe-pr25-'+crypto.randomUUID()}
 function file(){return new File(['stored audio'],'reference.wav')}
@@ -136,4 +137,19 @@ it('never persists uncommitted ASR text without advancing nextWindow',async()=>{
  expect(saved.segments).toEqual([]);
  const raw=await inspectDb(dbName);
  expect(raw.chunks).toHaveLength(0);
+});
+
+it('persists decoder identity and rejects stale full-recovery reservations',async()=>{
+ const dbName=name(),store=new JobStore(dbName),f=file(),j=job(f);
+ const fixed={...j,decoderIdentity:decoderIdentity('ffmpeg','full'),fullDecodeRecoveries:1};
+ await store.save(fixed,f);
+ const reloaded=(await new JobStore(dbName).get(j.id,false))!;
+ expect(reloaded.decoderIdentity).toEqual(fixed.decoderIdentity);
+ expect(reloaded.fullDecodeRecoveries).toBe(1);
+ await expect(store.save({...reloaded,decoderIdentity:decoderIdentity('legacy','full')})).rejects.toThrow();
+ await expect(store.save({...reloaded,decoderIdentity:undefined})).rejects.toThrow();
+ await expect(store.save({...reloaded,fullDecodeRecoveries:0})).rejects.toThrow();
+ const after=(await store.get(j.id,false))!;
+ expect(after.decoderIdentity).toEqual(fixed.decoderIdentity);
+ expect(after.fullDecodeRecoveries).toBe(1);
 });

@@ -5,13 +5,14 @@ import type {TraceEvent,TraceErrorKind,StreamStage} from './jobTrace';
 import type {AudioInspectionReport} from './audioValidation';
 import type {JobBenchmark} from './benchmark';
 import type {StreamRecoveryState} from './ml/recoveryPolicy';
+import type {DecoderIdentity} from './decoderDiagnostics';
 export type JobParams={model:WhisperId;language:'ru'|'en';diarize:boolean};
 export type AudioCheck={status:'passed';checkedAt:number;report:AudioInspectionReport}|{status:'failed';checkedAt:number;problem:string};
 export type SpeakerDiagnostics={turns:number;unlabeled:number;segments:number;zeroDuration:number;emptyText?:number;validTurns?:number;invalidTurns?:number;mergedTurns?:number;speakerCount?:number;turnCoverageSeconds?:number;labeled?:number;overlapMatches?:number;boundaryMatches?:number;ambiguous?:number;uncovered?:number;weakEvidence?:number;invalidSegments?:number};
 export type WindowInspectionStrategy='whole'|'split';
 export type WindowInspection={window:number;strategy:WindowInspectionStrategy;status:'passed'|'failed'|'cancelled';checkedAt:number;elapsedMs:number;startSample?:number;endSample?:number;totalWindows?:number;report?:AudioInspectionReport;errorKind?:TraceErrorKind;failureStage?:StreamStage;completedParts:number};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];streamRecovery?:StreamRecoveryState;audioCheck?:AudioCheck;windowInspections?:WindowInspection[];benchmark?:JobBenchmark;diagnostics?:SpeakerDiagnostics;};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];streamRecovery?:StreamRecoveryState;decoderIdentity?:DecoderIdentity;fullDecodeRecoveries?:number;audioCheck?:AudioCheck;windowInspections?:WindowInspection[];benchmark?:JobBenchmark;diagnostics?:SpeakerDiagnostics;};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  // Queued work is durable intent, not an interrupted inference. A legacy

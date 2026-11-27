@@ -156,3 +156,51 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+## DEC-01
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-CORE-1 | Real WASM synthetic WAV -> mono 16 kHz; invalid compressed input rejected | Tests added; NOT TESTED |
+| DEC-CORE-2 | MP3/AAC/FLAC/Ogg/WebM; PCM compared with native FFmpeg | NOT TESTED |
+| DEC-CORE-3 | Standalone file:// and web offline, cancellation, no network audio | NOT TESTED |
+| DEC-CORE-4 | npm ci, typecheck, lint, Vitest, builds and preflights | NOT TESTED |
+
+
+## DEC-02
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-STREAM-1 | Real FFmpeg WORKERFS, synthetic WAV overlap, repeat seek, tail and close | Tests added; NOT TESTED |
+| DEC-STREAM-2 | >128 MiB real MP3/VBR/AAC; bounded memory, correct tail/overlap | NOT TESTED |
+| DEC-STREAM-3 | Reject short/non-finite PCM and invalid source; cancellation | Tests added; NOT TESTED |
+| DEC-STREAM-4 | Offline/file://, full CI, checkpoint recovery and real Whisper | NOT TESTED |
+
+
+## DEC-03
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-REC-1 | Typed transient errors consume durable recovery budget; deterministic failures stop | Tests added; NOT TESTED |
+| DEC-REC-2 | Resume pins provider/route/revision and retains saved text | Tests added; NOT TESTED |
+| DEC-REC-3 | JSON omits raw errors/audio/transcripts and labels decoder/phase | Tests added; NOT TESTED |
+| DEC-REC-4 | Real worker timeout, reopen/split, cancel and retry, checkpoint reload | NOT TESTED |
+
+
+## DEC-04
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-REF | Native FFmpeg 7.1.5 synthetic five-format full/seek/tail comparison | PASS for generated samples only |
+| DEC-DIST | Actual production FFmpeg decode via file:// and cached offline web | Tests added; NOT TESTED |
+| DEC-41 | Actual browser FFmpeg distant seek and six subwindows | Test added; NOT TESTED |
+| DEC-RETRY | Runner typed failure recovery and durable reservation | Tests added; NOT TESTED |
+| DEC-CI | npm ci, typecheck, lint, Vitest, both builds and browser suites | NOT TESTED |
+| DEC-HW | Real recordings, WebGPU/WASM and memory | NOT TESTED |
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.
+
+
+DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web builds and web preflight PASS; offline 5/6 (file:// FFmpeg only). Standalone worker transport changed to inline core and cloned compressed Blob; revised candidate pending local CI.

@@ -1,6 +1,8 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
-import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
+import {chooseAudioDecoder,providerForDecoder,openSelectedStream} from './audioDecoderProvider';
+import {resolveJobDecoder,canRetryFfmpeg,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
+import type {StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
@@ -46,8 +48,10 @@ export class JobRunner{
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
- private decode:typeof decodeAudio;
- private openStream:typeof openStreamedAudio;
+ private decode?:typeof decodeAudio;
+ private openStream?:typeof openSelectedStream;
+ private activeDecoder?:DecoderIdentity;
+ private readonly requestedDecoder:AudioDecoderKind;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -62,12 +66,14 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
-  this.openStream=options.openStream??openStreamedAudio;
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
+  this.openStream=options.openStream;
+   // Injected test/alternate runtimes do not claim to be real FFmpeg.
+   this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
   this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;
@@ -138,7 +144,7 @@ export class JobRunner{
    if(!this.cancelled){
     const problem=error instanceof AudioValidationError?error.message:'Проверка PCM не завершена. Повторите проверку или проверьте декодирование.';
     this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
-    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error)});
+    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
     try{await this.persist(id)}catch{/* Preserve the original failure and existing checkpoint. */}
    }
    throw error;
@@ -146,7 +152,8 @@ export class JobRunner{
  }
  private traceEvent(id:string,code:TraceCode,phase:TracePhase,fields:Omit<TraceEvent,'at'|'phase'|'code'>={}){
   const job=this.job(id);
-  this.patch(id,{trace:appendTrace(job.trace,{at:Date.now(),phase,code,...fields})});
+  const decoder=this.activeDecoder??job.decoderIdentity;
+   this.patch(id,{trace:appendTrace(job.trace,{at:Date.now(),phase,code,...(decoder?{decoderKind:decoder.kind,decoderRoute:decoder.route}:{}),...fields})});
  }
  init(){return this.initialization??=(async()=>{
   try{
@@ -316,7 +323,7 @@ export class JobRunner{
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
      }finally{
-      this.suppressedProgress.delete(id);this.progressGate.reset();
+      this.suppressedProgress.delete(id);this.progressGate.reset();this.activeDecoder=undefined;
       this.manager.resourcePolicy=null;this.queue.shift();this.set({activeId:null,activeResourcePolicy:null,queueCount:this.queue.length});
      }
     }
@@ -328,9 +335,26 @@ export class JobRunner{
    this.set({notice:'Запуск очереди отложен. Если причина в хранилище, очередь могла не сохраниться — не закрывайте страницу до устранения ошибки. '+message(error)});
   }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
  }
- private readAudio(file:File){
+ private async readAudio(id:string,file:File){
   const signal=this.abort!.signal;
-  return usesStreamedAudio(file.size)?this.openGuardedStream(file,signal):this.decode(file,signal);
+  const identity=this.activeDecoder!;
+  const provider=providerForDecoder(identity.kind);
+  if(identity.route==='windowed'){
+   try{return await this.openGuardedStream(file,signal)}catch(error){
+    this.traceEvent(id,'decoder-open-error','audio',{streamStage:'open',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});throw error;
+   }
+  }
+  const decode=this.decode??provider.decode;
+  for(;;){
+   try{return await decode(file,signal)}catch(error){
+    this.traceEvent(id,'decoder-full-error','audio',{streamStage:'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+    this.check();signal.throwIfAborted();
+    if(!canRetryFfmpeg(error,'full')||(this.job(id).fullDecodeRecoveries??0)>=1)throw error;
+    this.patch(id,{fullDecodeRecoveries:1,status:'Повторное декодирование FFmpeg · попытка 2/2'});
+    this.traceEvent(id,'decoder-full-retry','audio',{attempt:2,streamStage:'decode',...ffmpegFailureFields(error)});
+    await this.persist(id);this.check();
+   }
+  }
  }
  // Every decoder opening owns a separate abort signal. A late resolution
  // after timeout/cancellation is disposed and cannot become the active decoder.
@@ -341,7 +365,8 @@ export class JobRunner{
   parent.addEventListener('abort',abort,{once:true});
   try{
    const audio=await withActivityWatchdog(async()=>{
-    const opened=await this.openStream(file,controller.signal);
+    const open=this.openStream??providerForDecoder(this.activeDecoder?.kind??'legacy').openStream;
+     const opened=await open(file,controller.signal);
     if(controller.signal.aborted){opened.close();controller.signal.throwIfAborted()}
     return opened;
    },{
@@ -362,7 +387,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -373,8 +398,14 @@ export class JobRunner{
   this.traceEvent(id,'audio-start','audio');
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
-  const audioStarted=Date.now(),decodeStarted=benchmarkNow();
-  const audio=await this.readAudio(file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted));
+  const requested=this.requestedDecoder;
+   const identity=resolveJobDecoder(this.job(id).decoderIdentity,resumed,requested,usesStreamedAudio(file.size)?'windowed':'full');
+   this.activeDecoder=identity;
+   this.patch(id,{decoderIdentity:identity});
+   this.traceEvent(id,'decoder-selected','audio',{decoderKind:identity.kind,decoderRoute:identity.route});
+   await this.persist(id);this.check();
+   const audioStarted=Date.now(),decodeStarted=benchmarkNow();
+  const audio=await this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted));
   const session=audio instanceof Float32Array?undefined:this.newStreamSession(audio);
   let completed=false;
   try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,session);completed=true}
@@ -387,7 +418,7 @@ export class JobRunner{
   const fields={decoderId:session.audio.decoderId,decoderWindows:session.windows,rotationCount:session.rotations,closeReason:reason,committedWindows:this.job(id).nextWindow,jsHeapBytes:traceHeapBytes()};
   try{session.audio.close()}
   catch(error){
-   this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error)});
+   this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
    // Do not open another decoder after a disposal failure. On terminal
    // cleanup retain the original job error or successfully committed text.
    if(reason==='rotation'||reason==='recovery')throw error;
@@ -464,7 +495,7 @@ export class JobRunner{
    // An already-started metadata transaction must settle before another
    // attempt can write a newer snapshot. Storage failure is not retryable.
    if(pendingTrace)await pendingTrace;
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),jsHeapBytes:traceHeapBytes()});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:error instanceof AudioValidationError?'pcm-check':streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),jsHeapBytes:traceHeapBytes()});
    throw error;
   }finally{accepting=false}
   if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
@@ -483,7 +514,7 @@ export class JobRunner{
     signal,onTimeout:()=>audio.close(),timeoutError:()=>new StreamDecodeStalledError('pcm-check')
    });
   }catch(error){
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,errorKind:traceErrorKind(error)});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
    throw error;
   }
   if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-validationStarted));
@@ -519,7 +550,7 @@ export class JobRunner{
     onTimeout:()=>audio.close(),timeoutError:()=>new StreamDecodeStalledError('pcm-check')
    });
   }catch(error){
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',errorKind:traceErrorKind(error)});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
    throw error;
   }
   this.check();if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
@@ -530,12 +561,13 @@ export class JobRunner{
  }
  private async readRecoverableStreamWindow(id:string,session:StreamSession,file:File,window:AudioWindow,index:number,total:number,priorFailure?:{error:unknown}){
   const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow};
-  let attempt=1;
+  const previous=this.job(id).streamRecovery;
+   let attempt=previous?.window===index+1?Math.min(3,previous.windowRecoveries+1):1;
   for(;;){
    this.check();
    try{
     if(priorFailure){const error=priorFailure.error;priorFailure=undefined;
-     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error)});
+     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:error instanceof AudioValidationError?'pcm-check':'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
      throw error;
     }
     const result=attempt===3?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
@@ -545,8 +577,8 @@ export class JobRunner{
     this.check();
     const budget=attempt===3?null:reserveStreamRecovery(error,index+1,this.job(id).streamRecovery);
     if(!budget){
-     if(error instanceof StreamDecodeStalledError||attempt===3){
-      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
+     if(error instanceof StreamDecodeStalledError||canRetryFfmpeg(error,'windowed')||attempt===3){
+      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
      }
      throw error;
     }
@@ -554,7 +586,7 @@ export class JobRunner{
     // Reserve durably before opening another decoder, even after a reload.
     this.patch(id,{streamRecovery:budget,status:'Восстановление декодера · окно '+(index+1)+'/'+total+' · попытка '+nextAttempt+'/3'});
     this.set({operation:nextAttempt===3?'Резервное декодирование частями':'Восстановление потокового декодера'});
-    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:nextAttempt,decoderId:session.audio.decoderId,strategy:nextAttempt===3?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error)});
+    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:nextAttempt,decoderId:session.audio.decoderId,strategy:nextAttempt===3?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
     await this.persist(id);this.check();
     try{
      await this.replaceStream(id,session,file,'recovery');
@@ -562,7 +594,7 @@ export class JobRunner{
      this.traceEvent(id,'stream-reopen-ready','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',recoveryCount:budget.totalRecoveries});
      await this.persist(id);this.check();
     }catch(openError){
-     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt:nextAttempt,streamStage:'open',errorKind:traceErrorKind(openError),recoveryCount:budget.totalRecoveries});
+     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt:nextAttempt,streamStage:'open',errorKind:traceErrorKind(openError),...ffmpegFailureFields(openError),recoveryCount:budget.totalRecoveries});
      throw openError;
     }
    }
@@ -570,7 +602,10 @@ export class JobRunner{
  }
  private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,session?:StreamSession){
   const streamed=!(audio instanceof Float32Array);
-  this.check();this.patch(id,{duration:audio.length/16000});
+  this.check();
+   if(this.job(id).decoderIdentity?.kind==='ffmpeg'&&this.job(id).nextWindow>0&&this.job(id).duration!==undefined&&Math.round(this.job(id).duration!*16000)!==audio.length)
+    throw new Error('Длительность PCM не совпадает с сохранённой контрольной точкой. Добавьте аудио как новое задание.');
+   this.patch(id,{duration:audio.length/16000});
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
   this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length,decoderId:streamed?audio.decoderId:undefined});
   if(!streamed)await this.inspectPcm(id,audio,this.abort!.signal);this.check();
@@ -780,7 +815,7 @@ export class JobRunner{
    this.manager.resourcePolicy=this.resources.policy();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
    const speakerMeasured=benchmarkNow();
-   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error)});throw error}
+   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});throw error}
    finally{
     this.perf(id,'speakerPass',benchmarkNow()-speakerMeasured);
     const pass=this.manager.lastSpeakerPass;

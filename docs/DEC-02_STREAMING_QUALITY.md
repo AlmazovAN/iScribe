@@ -1,0 +1,14 @@
+# DEC-02 — Streaming & Quality (stage 2/4)
+
+## Implementation
+
+- Retain the single-thread FFmpeg.wasm core from DEC-01; implement windowed seek/decode with the upstream Emscripten WORKERFS backend. Source File is mounted as a Blob; no full source arrayBuffer, no full PCM file, no fallback to MEMFS. Fail explicitly if WORKERFS is absent.
+- FFprobe selects first audio stream and estimates duration. A bounded tail decode (15 s before estimated EOF, max 45 s PCM) measures the end; a full tail budget, zero samples or ambiguous track/container start time is rejected. This is not a guarantee of exact duration for every VBR/container combination. Non-seekable or inaccurate metadata/seek formats may fail and require separate work in DEC-03/04.
+- Each read uses accurate input seek with up to 1 s warm-up, resampling, sample-index trim and output timestamp reset. Existing 30 s windows, 25 s step and 5 s recovery subwindows are unchanged. Expected sample count is exact; NaN/Inf, missing samples and malformed windows are rejected. Silence and finite out-of-range amplitudes are not repaired. Existing inspectDecodedPcm supplies RMS/peak checks and remains the final gate.
+- Existing AudioPipeline bounds lookahead to at most 2 queued windows, with one active producer. One output window is at most 1.92 MB, tail probe at most 2.88 MB (decimal); excludes WASM heap, source Blob/browser cache, temporary buffers, Whisper and speakers. No measured memory claim. FFmpeg CLI restarts commands, so random seek equivalence and repeated-command resource behavior require testing; not a continuous libav stream.
+- Reuse existing runner watchdogs, cancellation, prefetch, rotation and checkpoint logic. Progress only on advancing output timestamp; combined decode/resample time is recorded as decode, never fabricated separate timing. DEC-03 extends recovery classification and diagnostics. Worker termination closes mounted input and pending requests.
+- Experimental opt-in remains ?decoder=ffmpeg. Both normal and >128 MiB routes now choose FFmpeg with that flag. Legacy default unchanged. Use new jobs for A/B tests; do not switch decoder on an existing checkpoint until decoder provenance and compatibility are addressed. Existing streamed speaker limitations are unchanged.
+
+## Acceptance (NOT TESTED)
+
+Unit contract tests and real WASM Playwright tests added, not run. Synthetic 41 s WAV exercises repeated commands, EOF, exact seek/overlap, reference PCM and close. Invalid file must fail without fallback. Mandatory local checks: npm ci, typecheck, lint, Vitest, both builds, preflights, Playwright. Also verify real >128 MiB MP3 including 63:54 recording, VBR, AAC/M4A, FLAC, OGG/WebM, tail count against native FFmpeg, overlap/sample alignment, memory plateau and cancellation. Check file:// and offline. No hardware acceptance, performance claim or public deployment. GPL review remains required.
