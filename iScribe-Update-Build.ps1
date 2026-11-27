@@ -1,13 +1,15 @@
-﻿# iScribe Update & Build v6.3 — Windows PowerShell 5.1 / PowerShell 7
+﻿# iScribe Update & Build v6.4 — Windows PowerShell 5.1 / PowerShell 7
 # Auto: offer local CI by default; cloud CI only after explicit selection.
 # Local: test exact merge commit, then normal push; no Actions dispatch.
 # Online: dispatch CI once for the pinned candidate, wait, then ordinary PR merge.
 # MainOnly: sync and build only.
+# DiagnosticsSetup: explicitly provision the private diagnostics repo and run a smoke check.
+# DiagnosticsCheck: run the smoke check only; no build, PR, push or Actions.
 # No force-push, hard reset, arbitrary PR merge, or publishing to Pages.
 [CmdletBinding()]
 param(
     [string]$ProjectDirectory = '',
-    [ValidateSet('Auto','Local','Online','MainOnly')][string]$Mode = 'Auto',
+    [ValidateSet('Auto','Local','Online','MainOnly','DiagnosticsSetup','DiagnosticsCheck')][string]$Mode = 'Auto',
     [ValidateRange(0,2147483647)][int]$PullRequest = 0,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')][string]$IntegrationBranch,
     [ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ExpectedHeadSha,
@@ -512,13 +514,13 @@ function Get-SafeLogExcerpt([string]$LocalLog) {
     return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
 }
 
-function Save-DiagnosticJournal([string]$LocalLog) {
+function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
     $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
     try { $excerpt=Get-SafeLogExcerpt $LocalLog }
     catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
     $report=[ordered]@{
         schema='iscribe-build-diagnostics/v2'
-        script_version='6.3'
+        script_version='6.4'
         utc=[DateTime]::UtcNow.ToString('o')
         route=$script:DiagnosticRoute
         revision=(Get-SafeSha $script:Revision)
@@ -528,7 +530,7 @@ function Save-DiagnosticJournal([string]$LocalLog) {
         remote_changed=$script:RemoteChanged
         ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
         ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
-        outcome='failed'
+        outcome=$(if ($SelfTest) { 'self-test' } else { 'failed' })
         detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
         text_excerpt=$excerpt
         events=$script:DiagnosticEvents.ToArray()
@@ -573,20 +575,24 @@ function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$Expect
     } catch { return 'unknown' }
 }
 function Upload-DiagnosticJournal([string]$JournalPath) {
-    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return }
-    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return }
-    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return }
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return $false }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return $false }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return $false }
     $info=Get-VerifiedDiagnosticRepo
-    if (-not $info) { return }
+    if (-not $info) { return $false }
     $bytes=[IO.File]::ReadAllBytes($JournalPath)
-    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return }
+    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return $false }
     $expected=Get-GitBlobSha $bytes
     $branch=[string]$info.default_branch
     # Stable filename for these exact bytes: all retries use the same path.
     $report=$null
     try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
     $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
-    $remotePath='failures/'+$utc.ToString('yyyy-MM')+'/failure-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $prefix='failures'
+    $label='failure'
+    if ($report.outcome -ceq 'self-test') { $prefix='checks'; $label='check' }
+    elseif ($report.outcome -cne 'failed') { throw 'Неизвестный тип диагностического отчёта.' }
+    $remotePath=$prefix+'/'+$utc.ToString('yyyy-MM')+'/'+$label+'-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
     $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
     $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
     $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
@@ -596,33 +602,86 @@ function Upload-DiagnosticJournal([string]$JournalPath) {
         for ($attempt=1; $attempt -le 3; $attempt++) {
             # Recheck the privacy and access gate before every write.
             $current=Get-VerifiedDiagnosticRepo
-            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return }
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return $false }
             $before=Get-DiagnosticRemoteState $path $branch $expected
-            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return }
-            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return }
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return $true }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return $false }
             # Create only: no sha field, no overwriting an existing file.
             $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
-            if ($result.ExitCode -eq 0) {
-                try {
-                    $receipt=$result.Text | ConvertFrom-Json
-                    if ($receipt.content.path -ceq $remotePath -and $receipt.content.sha -ceq $expected) {
-                        Write-Host "Диагностический журнал GitHub: $url"
-                        return
-                    }
-                } catch { }
-            }
+            # Always confirm read-back of exact contents, even if PUT reported success.
             # A timeout can mean the server already committed the file.
             # Reconcile by exact path and blob hash before allowing retry.
             $after=Get-DiagnosticRemoteState $path $branch $expected
-            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return }
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return $true }
             if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
                 Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
-                return
+                return $false
             }
             Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
             Wait-ApiRetry $attempt
         }
     } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+    return $false
+}
+
+function Invoke-DiagnosticsCheck([bool]$Provision) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { throw 'Для проверки отправки диагностика должна быть включена.' }
+    if ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate) { throw 'Режим диагностики не принимает параметры интеграции.' }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { throw 'Требуется отдельный приватный репозиторий.' }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { throw 'Не установлен GitHub CLI (gh.exe).' }
+    if ((Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) { throw 'GitHub CLI не авторизован. Выполните gh auth login.' }
+    if ($Provision) {
+        if ($DiagnosticsRepo -cne 'AlmazovAN/iScribe-diagnostics') { throw 'DiagnosticsSetup разрешён только для штатного диагностического репозитория.' }
+        $probe=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+        if ($probe.Kind -eq 'not-found') {
+            # 404 may mean missing repository or insufficient access. The create
+            # request is explicit, private, and never modifies an existing repo.
+            Write-Host "Создание приватного репозитория $DiagnosticsRepo (одна попытка)"
+            $creation=Capture 'gh.exe' @('repo','create',$DiagnosticsRepo,'--private','--add-readme')
+            if ($creation.ExitCode -ne 0) { Write-Warning 'Создание не подтверждено; проверяем фактическое состояние без повторного создания.' }
+        } elseif ($probe.ExitCode -ne 0) {
+            throw ('Не удалось проверить существование репозитория: '+$probe.Kind)
+        }
+    }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { throw 'Приватный диагностический репозиторий с правами записи не подтверждён.' }
+    $script:DiagnosticRoute='diagnostics-check'
+    $script:DiagnosticStage='self-test'
+    Add-DiagnosticEvent 'self-test' 'synthetic-only'
+    $sample=Join-Path $env:TEMP ('iscribe-diag-check-'+[guid]::NewGuid().ToString('N')+'.log')
+    $journal=[IO.Path]::ChangeExtension($sample,'.diagnostic.json')
+    try {
+        # Synthetic fixture only, no local source paths, personal data or real credentials.
+        [IO.File]::WriteAllLines($sample,[string[]]@(
+            'HTTP 404',
+            'example.ts(12,3): error TS2322: synthetic message',
+            'Authorization: Bearer synthetic-only-0000',
+            'UNRECOGNIZED_SYNTHETIC_TEXT'
+        ),[Text.UTF8Encoding]::new($false))
+        $journal=Save-DiagnosticJournal $sample -SelfTest
+        $data=[IO.File]::ReadAllText($journal)
+        $report=$data | ConvertFrom-Json
+        $messages=@($report.text_excerpt.lines | ForEach-Object { $_.message })
+        if ($report.outcome -cne 'self-test' -or $report.text_excerpt.status -cne 'reconstructed' -or
+            $messages.Count -ne 2 -or $messages[0] -cne 'HTTP 404' -or
+            $messages[1] -cne 'TypeScript TS2322; line 12, column 3' -or
+            $data.Contains('synthetic-only-0000') -or $data.Contains('UNRECOGNIZED_SYNTHETIC_TEXT') -or $data.Contains('example.ts')) {
+            throw 'Проверка фильтрации не пройдена. Отправка запрещена.'
+        }
+        if (-not (Upload-DiagnosticJournal $journal)) { throw 'Тестовая запись или обратное чтение не подтверждены.' }
+        Write-Host 'DIAGNOSTICS CHECK PASS: приватность, фильтрация, запись и SHA при обратном чтении подтверждены.' -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $sample,$journal -Force -ErrorAction SilentlyContinue
+    }
+}
+if ($Mode -in @('DiagnosticsSetup','DiagnosticsCheck')) {
+    try {
+        Invoke-DiagnosticsCheck ($Mode -eq 'DiagnosticsSetup')
+        exit 0
+    } catch {
+        Write-Warning ('DIAGNOSTICS CHECK FAIL: '+$_.Exception.Message)
+        exit 1
+    }
 }
 
 try {
@@ -746,7 +805,7 @@ try {
             try {
                 $journal=Save-DiagnosticJournal $local
                 Write-Host "Локальная диагностическая копия: $journal"
-                Upload-DiagnosticJournal $journal
+                $null=Upload-DiagnosticJournal $journal
             } catch { Write-Warning 'Не удалось создать или отправить диагностическую копию. Оригинальный журнал сохранён.' }
             Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
         } catch { Write-Warning "Журнал оставлен: $FullLog" }
