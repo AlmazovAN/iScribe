@@ -1,12 +1,13 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
+import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute,type FfmpegFailure,type FfmpegStage} from './decoderDiagnostics';
 
 // Structured diagnostic events deliberately omit filenames, transcript text,
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
  'stream-split-start'|'stream-split-part-ready'|'stream-split-ready'|
@@ -15,7 +16,7 @@ export type TraceCode=
  'window-start'|'window-attempt'|'window-result'|'window-error'|'window-retry'|
  'checkpoint-committed'|'checkpoint-error'|'speaker-start'|'speaker-result'|'speaker-alignment'|'speaker-error'|
  'job-complete'|'job-error'|'job-cancelled';
-export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'other';
+export type TraceErrorKind='worker'|'timeout'|'inference'|'network'|'storage'|'cancelled'|'invalid-audio'|'decoder'|'other';
 export type TraceBackend='webgpu'|'webnn'|'wasm'|'unknown';
 export type StreamStage='open'|'decode'|'resample'|'pcm-check';
 export type TraceEvent={
@@ -31,6 +32,11 @@ export type TraceEvent={
  endSample?:number;
  pcmSamples?:number;
  decoderId?:number;
+ decoderKind?:AudioDecoderKind;
+ decoderRoute?:DecoderRoute;
+ decoderFailure?:FfmpegFailure;
+ decoderFailureStage?:FfmpegStage;
+ decoderExitCode?:number;
  recoveryCount?:number;
  decoderWindows?:number;
  rotationCount?:number;
@@ -63,6 +69,7 @@ export function traceBackend(raw:unknown):TraceBackend{
  return raw==='webgpu'||raw==='webnn'||raw==='wasm'?raw:'unknown';
 }
 export function traceErrorKind(error:unknown):TraceErrorKind{
+ if(error instanceof FfmpegDecoderError)return error.failure==='timeout'?'timeout':error.failure==='worker'?'worker':'decoder';
  if(error&&typeof error==='object'){
   const value=error as {code?:unknown;name?:unknown};
   if(value.name==='WorkerStalledError'||value.name==='StreamDecodeStalledError')return 'timeout';
@@ -111,9 +118,11 @@ export function diagnosticReport(job:Job){
    asrComplete:job.asrComplete,
    backend:traceBackend(job.backend)
   },
+  decoder:decoderReport(job.decoderIdentity),
+  fullDecodeRecoveries:job.fullDecodeRecoveries??0,
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
-  audioCheck:job.audioCheck??null,
+  audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,
   windowInspections:(job.windowInspections??[]).map(r=>({window:r.window,strategy:r.strategy,status:r.status,checkedAt:r.checkedAt,elapsedMs:r.elapsedMs,startSample:r.startSample,endSample:r.endSample,totalWindows:r.totalWindows,completedParts:r.completedParts,errorKind:r.errorKind,failureStage:r.failureStage,report:r.report?{pcmSamples:r.report.pcmSamples,durationSeconds:r.report.durationSeconds,windowCount:r.report.windowCount,quietWindows:r.report.quietWindows,nearClippedWindows:r.report.nearClippedWindows,peakAbsolute:r.report.peakAbsolute}:undefined})),
   speakerAlignment:job.diagnostics?{
    turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,

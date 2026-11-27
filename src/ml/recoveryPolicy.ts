@@ -1,4 +1,5 @@
 import {StreamDecodeStalledError} from './activityWatchdog';
+import {canRetryFfmpeg} from '../decoderDiagnostics';
 // Retry only inference/worker failures, never user cancellation, local storage
 // errors or model/decode/download failures. Three attempts per audio window.
 export const MAX_ASR_WINDOW_ATTEMPTS=3;
@@ -31,7 +32,7 @@ export const DEFAULT_STREAM_ROTATE_WINDOWS=20;
 export const MAX_STREAM_JOB_RECOVERIES=5;
 export type StreamRecoveryState={window:number;windowRecoveries:number;totalRecoveries:number};
 export function reserveStreamRecovery(error:unknown,window:number,previous?:StreamRecoveryState):StreamRecoveryState|null{
- if(!(error instanceof StreamDecodeStalledError)||(error.stage!=='decode'&&error.stage!=='resample'))return null;
+ if(!(error instanceof StreamDecodeStalledError&&(error.stage==='decode'||error.stage==='resample'))&&!canRetryFfmpeg(error,'windowed'))return null;
  if(!Number.isSafeInteger(window)||window<1)return null;
  if(previous&&(!Number.isSafeInteger(previous.window)||previous.window<1||previous.window>window||
   !Number.isSafeInteger(previous.totalRecoveries)||previous.totalRecoveries<0||

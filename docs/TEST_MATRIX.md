@@ -176,3 +176,13 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | DEC-STREAM-2 | >128 MiB real MP3/VBR/AAC; bounded memory, correct tail/overlap | NOT TESTED |
 | DEC-STREAM-3 | Reject short/non-finite PCM and invalid source; cancellation | Tests added; NOT TESTED |
 | DEC-STREAM-4 | Offline/file://, full CI, checkpoint recovery and real Whisper | NOT TESTED |
+
+
+## DEC-03
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-REC-1 | Typed transient errors consume durable recovery budget; deterministic failures stop | Tests added; NOT TESTED |
+| DEC-REC-2 | Resume pins provider/route/revision and retains saved text | Tests added; NOT TESTED |
+| DEC-REC-3 | JSON omits raw errors/audio/transcripts and labels decoder/phase | Tests added; NOT TESTED |
+| DEC-REC-4 | Real worker timeout, reopen/split, cancel and retry, checkpoint reload | NOT TESTED |

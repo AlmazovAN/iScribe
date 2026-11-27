@@ -116,3 +116,8 @@ Alternate FFmpeg.wasm full-file decoding is opt-in; legacy remains default, larg
 ## DEC-02 experimental candidate
 
 FFmpeg opt-in now covers the windowed route through WORKERFS and exact-length PCM gates. Legacy remains default. See docs/DEC-02_STREAMING_QUALITY.md. Local and hardware acceptance NOT TESTED.
+
+
+## DEC-03 experimental candidate
+
+Persisted decoder identity, typed FFmpeg diagnostics and bounded automatic recovery. See docs/DEC-03_RECOVERY_DIAGNOSTICS.md. Local tests NOT TESTED.

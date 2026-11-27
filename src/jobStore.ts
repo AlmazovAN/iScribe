@@ -1,5 +1,6 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {recoverJob,type Job} from './jobs';
+import {sameDecoder} from './decoderDiagnostics';
 
 // Version 2 adds append-only ASR chunks. The legacy jobs/audio stores remain
 // in the same database; a transaction commits text and nextWindow atomically.
@@ -107,6 +108,10 @@ export class JobStore{
       throw new Error('Отказ от записи: сохранённый текст или контрольная точка не могут уменьшиться.');
      // Stale metadata from a second tab must never reset a durable retry
      // reservation, even if its ASR checkpoint is still identical.
+     if(old?.decoderIdentity&&(!job.decoderIdentity||!sameDecoder(old.decoderIdentity,job.decoderIdentity)))
+      throw new Error('Декодер задания изменился. Обновите страницу.');
+     if((old?.fullDecodeRecoveries??0)>(job.fullDecodeRecoveries??0))
+      throw new Error('Лимит полного декодирования изменился. Обновите страницу.');
      const previous=old?.streamRecovery,next=job.streamRecovery;
      if(previous&&(!next||next.totalRecoveries<previous.totalRecoveries||next.window<previous.window||
        (next.window===previous.window&&next.windowRecoveries<previous.windowRecoveries)))

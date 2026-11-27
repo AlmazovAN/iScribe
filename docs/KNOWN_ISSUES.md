@@ -85,3 +85,6 @@ DEC-01: full-file FFmpeg can use substantial memory; streamed route unchanged; G
 
 
 DEC-02: FFmpeg random-seek overlap, VBR duration/tail probe, repeated CLI memory behavior, WORKERFS availability and decoder-switch checkpoint compatibility require local validation. No silent source copy, padding or fallback is allowed.
+
+
+DEC-03: untagged historical checkpoints are assumed legacy; experimental runs from DEC-01/02 must be recreated as new jobs. Real seek fidelity and full/stream recovery remain unverified.
