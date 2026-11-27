@@ -12,9 +12,12 @@ function Check([string]$Name,[scriptblock]$Body) {
 function Equal($Actual,$Expected) {
     if ($Actual -cne $Expected) { throw "Expected [$Expected], got [$Actual]" }
 }
-function Throws([scriptblock]$Body) {
+function Throws([scriptblock]$Body,[string]$ExpectedPrefix='') {
     $caught=$false
-    try { $null=& $Body } catch { $caught=$true }
+    try { $null=& $Body } catch {
+        if ($ExpectedPrefix -and -not $_.Exception.Message.StartsWith($ExpectedPrefix,[StringComparison]::Ordinal)) { throw }
+        $caught=$true
+    }
     if (-not $caught) { throw 'Expected an exception' }
 }
 $tokens=$null; $errors=$null
@@ -22,7 +25,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tok
 if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
 Write-Host 'PASS PowerShell parser'
 $script:Pass++
-$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
+$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
 # Load only named top-level function definitions, never the main script.
 foreach ($name in $wanted) {
     $nodes=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name })
@@ -128,8 +131,9 @@ try {
         Equal $result.lines[1].message 'TypeScript TS2322; line 12, column 3'
         Equal (Get-FileHash -LiteralPath $raw -Algorithm SHA256).Hash $before
     }
-    $journal=Save-DiagnosticJournal $raw -SelfTest
+    $journal=[IO.Path]::ChangeExtension($raw,'.diagnostic.json')
     Check 'synthetic journal contains no arbitrary source text' {
+        $null=Save-DiagnosticJournal $raw -SelfTest
         $text=[IO.File]::ReadAllText($journal)
         $report=$text | ConvertFrom-Json
         Equal $report.outcome 'self-test'
@@ -235,25 +239,37 @@ Check 'cloud dispatch once and duplicate blocked' {
 $script:FakeRun=@{name='CI';event='workflow_dispatch';display_title=('CI / '+$script:CiRequestId);head_branch=$script:CiBranch;head_sha=$script:PinnedSha;id=123;run_attempt=1;status='completed';conclusion='success';html_url='https://example.invalid/run'}
 $script:FakeJobs=@('verify','browser-acceptance','build') | ForEach-Object { @{name=$_;status='completed';conclusion='success'} }
 function Gh-Json([string[]]$CliArgs) {
-    if ($CliArgs[1] -like '*/jobs?*') { return @{jobs=$script:FakeJobs} }
-    if ($CliArgs[1] -like '*/runs?*') { return @{workflow_runs=@($script:FakeRun)} }
-    return $script:FakeRun
+    $endpoint=$CliArgs[1]
+    # Match the literal query separator, not PowerShell's '?' wildcard.
+    if ($endpoint -match '/actions/runs/123/attempts/1/jobs\?per_page=100$') { return @{jobs=$script:FakeJobs} }
+    if ($endpoint -match '/actions/workflows/ci\.yml/runs\?event=workflow_dispatch&branch=') { return @{workflow_runs=@($script:FakeRun)} }
+    if ($endpoint -match '/actions/runs/123$') { return $script:FakeRun }
+    throw "Unexpected mock endpoint: $endpoint"
 }
 Check 'cloud all required jobs pass for exact SHA' {
     $script:CiRunId=$null
     Equal (Get-CIState).Status 'passed'
+    Equal (Get-CIState).Status 'passed'
 }
 Check 'cloud wrong SHA rejected' {
     $script:FakeRun.head_sha='e'*40
-    try { Throws { Get-CIState } } finally { $script:FakeRun.head_sha=$script:PinnedSha }
+    try { Throws { Get-CIState } 'Запуск CI не соответствует точному кандидату.' } finally { $script:FakeRun.head_sha=$script:PinnedSha }
+    Equal (Get-CIState).Status 'passed'
 }
 Check 'cloud failed or missing job blocks success' {
     $script:FakeJobs[0].conclusion='failure'
     try { Equal (Get-CIState).Status 'failed' } finally { $script:FakeJobs[0].conclusion='success' }
+    $savedJobs=$script:FakeJobs
+    try {
+        $script:FakeJobs=@($savedJobs | Where-Object { $_.name -ne 'build' })
+        Equal (Get-CIState).Status 'failed'
+    } finally { $script:FakeJobs=$savedJobs }
+    Equal (Get-CIState).Status 'passed'
 }
 Check 'cloud rerun rejected' {
     $script:FakeRun.run_attempt=2
-    try { Throws { Get-CIState } } finally { $script:FakeRun.run_attempt=1 }
+    try { Throws { Get-CIState } 'Обнаружен повторный запуск CI.' } finally { $script:FakeRun.run_attempt=1 }
+    Equal (Get-CIState).Status 'passed'
 }
 $script:FakePR=@{number=99;state='open';draft=$false;head=@{ref='codex/synthetic-release-candidate';sha=$script:PinnedSha;repo=@{full_name=$Repository}};base=@{ref='main';sha=$script:BaseSha;repo=@{full_name=$Repository}}}
 $script:RemoteMain=$script:BaseSha
