@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><title>iScribe GPU-04 Decoder Lab</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:16px}label,button{display:block;margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 16px}</style>
+<h1>GPU-04: Decoder KV Cache Lab</h1>
+<p>Изолированный эксперимент. Закройте рабочий iScribe. Используются только синтетические данные и локальная модель.</p>
+<label>Самодостаточный decoder_model_merged.onnx (FP32 I/O, до 512 МБ)
+<input id="model" type="file" accept=".onnx"></label>
+<label>Архитектура
+<select id="preset"><option value="tiny">Tiny</option><option value="small" selected>Small</option><option value="large">Large v3</option></select></label>
+<button id="run">Сравнить CPU cache и GPU cache</button>
+<button id="save" disabled>Скачать JSON</button>
+<pre id="report" aria-live="polite">Ожидание.</pre>
+<script type="module" src="./decoder-lab.mjs"></script>
+</html>
