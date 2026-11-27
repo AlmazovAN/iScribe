@@ -69,3 +69,5 @@ PERF-08: streamed diarization remains unavailable. Engine exposes coarse speaker
 PERF-09: legacy baseline exports lack first-run build context; require manual verification. Comparator uses same size/duration and operator confirmation, not audio hash/device attestation. Real hardware and quality tests remain NOT TESTED. Comparison state is tab-local.
 
 PERF-10: real hardware gates T01–T10/HW-1–7 remain NOT TESTED; no production deployment authorized by automatic CI. Independent isolated origin, mandatory old model cache verification, no automatic migration/transfer between origins. Browser/protocol observations are not proof of actual model execution. Integrated source merge is not a hardware-accepted release.
+
+GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilization, energy, free RAM or proven speedup. Two-window eligibility may be unavailable because browsers expose coarse/capped device memory hints. Existing queued windows may drain during a trial. The thresholds are heuristics requiring real-recording acceptance. No automatic provider/model/dtype changes. Full suite and hardware NOT TESTED.
