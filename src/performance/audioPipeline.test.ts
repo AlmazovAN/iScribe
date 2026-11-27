@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {AudioPipeline} from './audioPipeline';
+import {AudioPipeline,emptyPipeline,pipelineReport} from './audioPipeline';
 it('serializes producer, bounds queue and consumes in FIFO order',async()=>{
  const p=new AudioPipeline<number>(new AbortController().signal);
  let release:(value:number)=>void=()=>{};
@@ -27,4 +27,9 @@ it('cancellation discards queued work and prevents additional reads',async()=>{
  p.fill(1,2,load);await vi.waitFor(()=>expect(load).toHaveBeenCalledTimes(1));
  c.abort();await p.dispose();
  expect(load).toHaveBeenCalledTimes(1);expect(p.size).toBe(0);
+});
+
+it('keeps new timing unavailable on legacy reports and rounds observations',()=>{
+ expect(pipelineReport(emptyPipeline())).toMatchObject({earlyDispatches:null,preDispatchLeadMs:null});
+ expect(pipelineReport({...emptyPipeline(),earlyDispatches:2,preDispatchLeadMs:12.3456})).toMatchObject({earlyDispatches:2,preDispatchLeadMs:12.35});
 });
