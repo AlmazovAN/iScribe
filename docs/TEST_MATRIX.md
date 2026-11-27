@@ -166,3 +166,13 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | DEC-CORE-2 | MP3/AAC/FLAC/Ogg/WebM; PCM compared with native FFmpeg | NOT TESTED |
 | DEC-CORE-3 | Standalone file:// and web offline, cancellation, no network audio | NOT TESTED |
 | DEC-CORE-4 | npm ci, typecheck, lint, Vitest, builds and preflights | NOT TESTED |
+
+
+## DEC-02
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-STREAM-1 | Real FFmpeg WORKERFS, synthetic WAV overlap, repeat seek, tail and close | Tests added; NOT TESTED |
+| DEC-STREAM-2 | >128 MiB real MP3/VBR/AAC; bounded memory, correct tail/overlap | NOT TESTED |
+| DEC-STREAM-3 | Reject short/non-finite PCM and invalid source; cancellation | Tests added; NOT TESTED |
+| DEC-STREAM-4 | Offline/file://, full CI, checkpoint recovery and real Whisper | NOT TESTED |

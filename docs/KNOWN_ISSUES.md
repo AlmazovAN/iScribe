@@ -82,3 +82,6 @@ GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilizatio
 
 
 DEC-01: full-file FFmpeg can use substantial memory; streamed route unchanged; GPL/source distribution review and real MP3/AAC and file:// tests required before release. Whisper stall root cause remains unconfirmed.
+
+
+DEC-02: FFmpeg random-seek overlap, VBR duration/tail probe, repeated CLI memory behavior, WORKERFS availability and decoder-switch checkpoint compatibility require local validation. No silent source copy, padding or fallback is allowed.

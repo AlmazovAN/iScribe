@@ -111,3 +111,8 @@ A bounded per-run prefetch-depth trial is wired into ResourceManager and success
 ## DEC-01 experimental candidate
 
 Alternate FFmpeg.wasm full-file decoding is opt-in; legacy remains default, large files still use MediaBunny. See docs/DEC-01_FFMPEG_CORE.md. Local CI and actual browser/hardware acceptance NOT TESTED; no release or deployment.
+
+
+## DEC-02 experimental candidate
+
+FFmpeg opt-in now covers the windowed route through WORKERFS and exact-length PCM gates. Legacy remains default. See docs/DEC-02_STREAMING_QUALITY.md. Local and hardware acceptance NOT TESTED.
