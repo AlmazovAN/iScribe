@@ -30,3 +30,14 @@ it('device hints are safe to collect without probing models or GPU adapters',()=
  expect(d.deviceMemoryGiB===null||d.deviceMemoryGiB>0).toBe(true);
  expect(d.wasmSimd===null||typeof d.wasmSimd==='boolean').toBe(true);
 });
+
+it('does not infer actual operator placement from initialized WebGPU',()=>{
+ const p=observeBackend(emptyPerformanceProfile(),'webgpu','webgpu');
+ const r=performanceReport(p)!;
+ expect(r.backendAttempts.webgpu).toBe(1);
+ expect(r.executionEvidence.status).toBe('unverified');
+ expect(r.executionEvidence.operatorAssignment).toBeNull();
+ expect(r.executionEvidence.gpuKernelEvents).toBeNull();
+ expect(r.executionEvidence.cpuFallbackOperators).toBeNull();
+ expect(r.executionEvidence.actualAdapter).toBeNull();
+});
