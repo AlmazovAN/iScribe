@@ -8,6 +8,7 @@ import type {diagnosticReport} from './jobTrace';
 import type {ModelManager} from './ml/manager';
 import type {StreamedAudio,openStreamedAudio} from './streamedAudio';
 import {ResourceManager} from './performance/resourceManager';
+import {FfmpegDecoderError,decoderIdentity} from './decoderDiagnostics';
 function setup(){
  const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),diagnosticDownload=vi.fn((_report:ReturnType<typeof diagnosticReport>,_filename:string)=>{void _report;void _filename}),decode=vi.fn(async()=>new Float32Array(60*16000));
@@ -669,5 +670,51 @@ it('starts read-only lookahead before attempt metadata settles but never dispatc
  expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{audioPipeline:{scheduled:2,consumed:2,earlyDispatches:2,failed:0,peakQueued:1}}});
  expect(saved.benchmark?.audioPipeline?.preDispatchLeadMs).toBeGreaterThanOrEqual(0);
  expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ await store.remove(job.id);
+});
+
+it('DEC-04 retries a full FFmpeg worker failure once, reserving the retry before invoking decode',async()=>{
+ const {fake,store,decode}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',download:vi.fn()});
+ await runner.init();await runner.add([new File(['fixture'],'dec04-retry.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ decode.mockRejectedValueOnce(new FfmpegDecoderError('worker','decode'))
+  .mockImplementationOnce(async()=>{
+   expect((await store.get(id,false))?.fullDecodeRecoveries).toBe(1);
+   return new Float32Array(60*16000);
+  });
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,fullDecodeRecoveries:1,decoderIdentity:decoderIdentity('ffmpeg','full')});
+ expect(decode).toHaveBeenCalledTimes(2);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'decoder-full-retry',decoderKind:'ffmpeg',decoderFailure:'worker'})]));
+ await store.remove(id);
+});
+
+it('DEC-04 reopens a FFmpeg window on coverage failure and retains prior ASR checkpoint',async()=>{
+ const {fake,store}=setup(),file=new File(['fixture'],'dec04-stream.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ const length=1030*16000;
+ await store.save({...job,stage:'recognizing',nextWindow:40,duration:1030,
+  decoderIdentity:decoderIdentity('ffmpeg','windowed'),segments:[{start:3,end:4,text:'saved'}]},file);
+ Object.defineProperty(file,'size',{value:146_500_000});
+ vi.spyOn(store,'audio').mockResolvedValue(file);
+ const read=vi.fn<StreamedAudio['read']>().mockRejectedValue(new FfmpegDecoderError('coverage','decode'));
+ const close=vi.fn();
+ const nextRead=vi.fn<StreamedAudio['read']>(async w=>new Float32Array(w.end-w.start));
+ const openStream=vi.fn<typeof openStreamedAudio>()
+  .mockResolvedValueOnce({length,decoderId:1,read,close})
+  .mockImplementationOnce(async()=>{
+   expect((await store.get(job.id,false))?.streamRecovery?.totalRecoveries).toBe(1);
+   expect(close).toHaveBeenCalledOnce();
+   return {length,decoderId:2,read:nextRead,close:vi.fn()};
+  });
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,decoderPreference:'legacy',download:vi.fn()});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:41,decoderIdentity:decoderIdentity('ffmpeg','windowed')});
+ expect(saved.segments[0].text).toBe('saved');
+ expect(openStream).toHaveBeenCalledTimes(2);expect(fake.transcribe).toHaveBeenCalledTimes(1);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovery-start',window:41,decoderKind:'ffmpeg',decoderFailure:'coverage'})]));
  await store.remove(job.id);
 });

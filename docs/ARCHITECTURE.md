@@ -7,3 +7,8 @@ Runtime dependencies are pinned in `package.json`, notably `@yourdevice/engine@0
 Audio and transcripts are stored locally; model assets use browser caching. Cached assets do not by themselves establish offline readiness. Closing the tab stops computation; reopening resumes from confirmed checkpoints, not from in-memory inference state.
 
 Known trade-offs to profile rather than blindly rewrite: full audio decode on resume and speaker retry, whole-job checkpoint serialization, in-memory queue state, full-audio speaker pass and browser storage quota/eviction.
+
+
+## DEC-04 candidate decoder architecture
+
+AudioDecoderProvider selects full/windowed FFmpeg.wasm for new jobs, with Blob-backed WORKERFS, strict PCM gates, existing bounded prefetch and durable recovery. Legacy provider remains for historical checkpoints and explicit comparison. Decoder identity is persisted before decode; no silent switching. The native CLI experiment is separate from pending WASM and hardware acceptance.

@@ -53,3 +53,38 @@ test('DEC-02 FFmpeg rejects invalid source without legacy fallback',async({page}
  expect(report).toContain('FFmpeg:');
  expect(report).not.toContain('unexpected success');
 });
+
+test('DEC-04 FFmpeg seeks directly to window 41 and reads recovery subwindows',async({page})=>{
+ await page.goto('/tests/e2e/harness.html');
+ const report=await page.evaluate(async()=>{
+  const {openFfmpegStreamedAudio}=await import('/src/ffmpegStreamedAudio.ts');
+  const rate=16000,seconds=1030,frames=seconds*rate;
+  const header=new ArrayBuffer(44),v=new DataView(header);
+  const tag=(at,value)=>{for(let i=0;i<value.length;i++)v.setUint8(at+i,value.charCodeAt(i));};
+  tag(0,'RIFF');v.setUint32(4,36+frames*2,true);tag(8,'WAVE');tag(12,'fmt ');
+  v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,rate,true);v.setUint32(28,rate*2,true);v.setUint16(32,2,true);
+  v.setUint16(34,16,true);tag(36,'data');v.setUint32(40,frames*2,true);
+  const blocks=Array.from({length:seconds},(_,s)=>{
+   const block=new Int16Array(rate);
+   block.fill(s-515);return block;
+  });
+  const source=await openFfmpegStreamedAudio(new File([header,...blocks],'long-synthetic.wav'));
+  const start=1000*rate,end=1030*rate;
+  try{
+   const pcm=await source.read({start,end,first:false,last:true});
+   const joined=new Float32Array(pcm.length);
+   for(let part=0;part<6;part++){
+    const a=start+part*5*rate;
+    const sub=await source.read({start:a,end:a+5*rate,first:false,last:part===5});
+    joined.set(sub,part*5*rate);
+   }
+   let maxDifference=0;
+   for(let i=0;i<pcm.length;i++)maxDifference=Math.max(maxDifference,Math.abs(pcm[i]-joined[i]));
+   return {length:source.length,window:pcm.length,first:pcm[0],last:pcm.at(-1),maxDifference};
+  }finally{source.close()}
+ });
+ expect(report.length).toBe(16480000);expect(report.window).toBe(480000);
+ expect(report.first).toBeCloseTo(485/32768,6);expect(report.last).toBeCloseTo(514/32768,6);
+ expect(report.maxDifference).toBeLessThan(0.00001);
+});
