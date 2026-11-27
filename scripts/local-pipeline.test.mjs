@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 test.skipIf(process.platform !== 'win32')('PowerShell local pipeline regression suite', () => {
   const script = fileURLToPath(new URL('./Test-CI06.ps1', import.meta.url));
-  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script], {
+  const source = fileURLToPath(new URL('../iScribe-Update-Build.ps1', import.meta.url));
+  const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', script, '-Source', source], {
     encoding: 'utf8', timeout: 120000, windowsHide: true
   });
   expect(result.error, String(result.error)).toBeUndefined();
