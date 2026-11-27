@@ -1,8 +1,12 @@
 name: CI
+run-name: CI / ${{ inputs.request_id || 'manual' }}
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 'Optional unique request ID for PowerShell V6'
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
