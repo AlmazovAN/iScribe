@@ -28,7 +28,13 @@ function Throws([scriptblock]$Body,[string]$ExpectedPrefix='') {
 }
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
-if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+if ($errors.Count -ne 0) {
+    Write-Host ("PowerShell parser failed: "+$errors.Count+" errors")
+    $errors | Select-Object -First 10 | ForEach-Object {
+        Write-Host ("Parser error "+$_.ErrorId+" at iScribe-Update-Build.ps1:"+$_.Extent.StartLineNumber+":"+$_.Extent.StartColumnNumber)
+    }
+    exit 1
+}
 Write-Host 'PASS PowerShell parser'
 $script:Pass++
 $wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity','Get-ReleaseManifest','Test-ReadyRelease','Assert-ManifestStages')
