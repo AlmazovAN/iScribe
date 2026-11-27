@@ -816,6 +816,7 @@ export class JobRunner{
       if(prefetched.result.ok){
        const prepared=prefetched.result.value;
        if(prepared.decoderId!==session.audio.decoderId)throw new Error('Устаревший буфер декодера.');
+       this.resources.observePrefetch(prefetched.ready,waitMs);
        pcm=prepared.pcm;
        const fields={window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,decoderId:prepared.decoderId,attempt:1,committedWindows:this.job(id).nextWindow,strategy:'whole' as const};
        this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage:'decode'});
@@ -846,9 +847,27 @@ export class JobRunner{
     for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
      this.traceEvent(id,'window-attempt','asr',{window:index+1,totalWindows:windows.length,attempt,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
+     // Start only read-only lookahead; it cannot commit or reserve retries.
+     // Overlap preparation with the mandatory metadata transaction as well as ASR.
+     let prefetchScheduledAt:number|undefined;
+     if(attempt===1&&session&&pipeline&&!this.manager.forceSingleWasmThread){
+      // Never read beyond the next mandatory decoder rotation. At most
+      // two queued windows, one producer, one active inference.
+      const depth=Math.max(0,Math.min(policy.targetPrefetchWindows,windows.length-index-1,this.streamRotateWindows-session.windows-1));
+      const decoder=session.audio;
+      const added=pipeline.fill(index+1,depth,(next,signal)=>prepareStreamWindow(decoder,windows[next],next,signal,{decode:this.streamDecodeIdleMs,resample:this.streamResampleIdleMs,pcm:this.streamPcmIdleMs}));
+      if(added){
+       prefetchScheduledAt=benchmarkNow();
+       this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,scheduled:prev.scheduled+added,peakQueued:Math.max(prev.peakQueued,pipeline.size)}}});
+      }
+     }
      // Save the in-flight window metadata before invoking the Worker.
      // A tab crash can then be diagnosed without claiming a committed result.
-     await this.timedMetadata(id);
+     await this.timedMetadata(id);this.check();
+     if(prefetchScheduledAt!==undefined){
+      const leadMs=Math.max(0,benchmarkNow()-prefetchScheduledAt);
+      this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,earlyDispatches:(prev.earlyDispatches??0)+1,preDispatchLeadMs:(prev.preDispatchLeadMs??0)+leadMs}}});
+     }
      const attemptBackend=this.manager.capabilities?.active??this.state.backend;
      const attemptStarted=Date.now(),attemptMeasured=benchmarkNow();
      if(previousAttemptEnd!==undefined)this.perf(id,'betweenAsrAttempts',attemptMeasured-previousAttemptEnd);
@@ -859,14 +878,6 @@ export class JobRunner{
       try{
        result=await withActivityWatchdog(heartbeat=>{
         this.asrHeartbeat=heartbeat;
-        if(attempt===1&&session&&pipeline&&!this.manager.forceSingleWasmThread){
-         // Never read beyond the next mandatory decoder rotation. At most
-         // two queued windows, one producer, one active inference.
-         const depth=Math.max(0,Math.min(policy.targetPrefetchWindows,windows.length-index-1,this.streamRotateWindows-session.windows-1));
-         const decoder=session.audio;
-         const added=pipeline.fill(index+1,depth,(next,signal)=>prepareStreamWindow(decoder,windows[next],next,signal,{decode:this.streamDecodeIdleMs,resample:this.streamResampleIdleMs,pcm:this.streamPcmIdleMs}));
-         if(added)this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,scheduled:prev.scheduled+added,peakQueued:Math.max(prev.peakQueued,pipeline.size)}}});
-        }
         const copyStarted=benchmarkNow();const {payload,reused}=payloadPool.acquire(pcm);dispatched=payload;
         this.perf(id,'pcmCopy',benchmarkNow()-copyStarted);
         this.bench(id,b=>({...b,memory:observePayload(b.memory,reused,payload.byteLength)}));

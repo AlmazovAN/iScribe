@@ -53,11 +53,12 @@ export class AudioPipeline<T>{
   await this.tail;this.slots.clear();
  }
 }
-export type PipelineObservations={version:1;scheduled:number;consumed:number;readyHits:number;failed:number;peakQueued:number;waitMs:number;preparedMs:number};
+export type PipelineObservations={version:1;scheduled:number;consumed:number;readyHits:number;failed:number;peakQueued:number;waitMs:number;preparedMs:number;earlyDispatches?:number;preDispatchLeadMs?:number};
 export function emptyPipeline():PipelineObservations{return {version:1,scheduled:0,consumed:0,readyHits:0,failed:0,peakQueued:0,waitMs:0,preparedMs:0}}
 export function pipelineReport(value:PipelineObservations|undefined){
  if(!value)return null;
  return {version:1,scheduled:value.scheduled,consumed:value.consumed,readyHits:value.readyHits,failed:value.failed,
   peakQueued:value.peakQueued,waitMs:Math.round(value.waitMs*100)/100,preparedMs:Math.round(value.preparedMs*100)/100,
-  limitation:'Streamed audio only. Scheduled includes queued but discarded work; readyHits counts successfully prepared windows ready at demand. Prepared and wait wall times can overlap ASR, not a measured speedup. Peak queued counts PCM windows (not native decoder or GPU memory).'};
+  earlyDispatches:value.earlyDispatches??null,preDispatchLeadMs:value.preDispatchLeadMs===undefined?null:Math.round(value.preDispatchLeadMs*100)/100,
+  limitation:'Streamed audio only. Scheduled includes queued but discarded work; readyHits counts successfully prepared windows ready at demand. Prepared and wait wall times can overlap ASR, not a measured speedup. Peak queued counts PCM windows (not native decoder or GPU memory). Early dispatch lead is elapsed time from scheduling new lookahead until mandatory metadata persistence finishes; it is not measured simultaneous CPU/GPU work or saved time. Null means no early-dispatch observation.'};
 }

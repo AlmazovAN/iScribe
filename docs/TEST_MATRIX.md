@@ -134,3 +134,19 @@ See [acceptance protocol](STREAM_RECOVERY_ACCEPTANCE.md) for procedures and crit
 
 ## PERF-10 release candidate
 The initial PERF-01–09 NOT TESTED entries above describe status at creation; see exact-head automated run IDs in [PERF-10](performance/PERF-10.md). PERF-01–08 have passed; PERF-09 selectors corrected, rerun required. Final candidate full CI must pass before source integration. Hardware entries remain NOT TESTED. New comparison browser test imports synthetic independent reports, tests median, duplicate protection and redaction. No genuine ML performance claim.
+
+## GPU-08
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| GPU-08-U | Legacy reports omit unavailable early lead; new reports round observations | NOT TESTED (Vitest added) |
+| GPU-08-R | Next PCM read begins while metadata write is pending, no ASR before write, exactly-once FIFO commits | NOT TESTED (Vitest added) |
+| GPU-08-H | Same long recording and mode before/after, RTF, waitMs, resource pressure, unchanged transcript and recovery | NOT TESTED |
+
+## GPU-09
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| GPU-09-U | Three ready observations trigger one-window trial; two meaningful misses restore two; invalid observations rejected; ceiling unchanged | 12 isolated helper assertions PASS; Vitest NOT TESTED |
+| GPU-09-R | Manager preserves selected mode, threads, pacing, recovery cap, and report compatibility | NOT TESTED (Vitest added) |
+| GPU-09-H | Compare real long recordings, wait time, RTF, memory pressure and quality across profiles; verify no material regression | NOT TESTED |

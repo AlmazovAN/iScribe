@@ -1,9 +1,11 @@
+import type {PrefetchPhase} from './adaptivePrefetch';
 export type PerformanceMode='eco'|'medium'|'max';
 export type ResourcePolicy={
  requested:PerformanceMode;effective:PerformanceMode;
  targetWasmThreads:number;targetPrefetchWindows:0|1|2;
  pauseRatio:number;maxPauseMs:number;
- reasons:('recovery-cap'|'thread-prerequisites'|'memory-hint'|'cpu-hint')[];
+ prefetchAdaptation?:{phase:PrefetchPhase;readyStreak:number;missStreak:number};
+ reasons:('prefetch-adaptive'|'recovery-cap'|'thread-prerequisites'|'memory-hint'|'cpu-hint')[];
 };
 export type ResourceObservations={
  version:1;windowCounts:Record<PerformanceMode,number>;

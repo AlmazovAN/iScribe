@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><title>iScribe GPU-06 Pyannote Lab</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:16px}label,button{display:block;margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 16px}</style>
+<h1>GPU-06: Pyannote Lab</h1>
+<p>Изолированный тест сегментации. Закройте рабочий iScribe. Используйте один и тот же локальный q8 ONNX для обеих стратегий. Аудиозаписи не требуются.</p>
+<label>Pyannote segmentation 3.0 — model_quantized.onnx (до 64 МБ)
+<input id="model" type="file" accept=".onnx"></label>
+<button id="run">Сравнить WASM и WebGPU</button>
+<button id="save" disabled>Скачать JSON</button>
+<pre id="report" aria-live="polite">Ожидание.</pre>
+<script type="module" src="./pyannote-lab.mjs"></script>
+</html>

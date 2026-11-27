@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><title>iScribe GPU-03 Encoder Lab</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:16px}label,button{display:block;margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 16px}</style>
+<h1>GPU-03: Whisper Encoder Lab</h1>
+<p>Изолированный эксперимент. Закройте рабочий iScribe перед запуском. Модель и вычисления остаются в браузере.</p>
+<label>Локальный encoder_model.onnx (без внешних файлов, float32 вход и выход)
+<input id="model" type="file" accept=".onnx"></label>
+<label>Архитектура
+<select id="preset"><option value="tiny">Tiny</option><option value="small" selected>Small</option><option value="large">Large v3</option></select></label>
+<button id="run">Сравнить WebGPU и Graph Capture</button>
+<button id="save" disabled>Скачать JSON</button>
+<pre id="report" aria-live="polite">Ожидание.</pre>
+<script type="module" src="./encoder-lab.mjs"></script>
+</html>

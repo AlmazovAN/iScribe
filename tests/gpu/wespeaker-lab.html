@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><title>iScribe GPU-07 WeSpeaker Lab</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:16px}label,button{display:block;margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 16px}</style>
+<h1>GPU-07: WeSpeaker Batch Lab</h1>
+<p>Изолированный тест. Закройте рабочий iScribe. Используются синтетические признаки, не записи голосов.</p>
+<label>WeSpeaker model_quantized.onnx (до 64 МБ)
+<input id="model" type="file" accept=".onnx"></label>
+<label>Имя выхода эмбеддингов (пусто, если выход единственный)
+<input id="output" maxlength="128"></label>
+<label>Потоки WASM (как в рабочей конфигурации)
+<select id="threads"><option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
+<button id="run">Сравнить WASM и WebGPU, пакеты 1 / 2 / 4 / 8</button>
+<button id="cancel" disabled>Остановить</button>
+<button id="save" disabled>Скачать JSON</button>
+<pre id="report" aria-live="polite">Ожидание.</pre>
+<script type="module" src="./wespeaker-lab.mjs"></script>
+</html>
