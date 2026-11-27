@@ -1,0 +1,417 @@
+﻿# iScribe Update & Build v5 — Windows PowerShell 5.1 / PowerShell 7
+# Auto: find an explicitly named codex/*-release-candidate PR, inspect exact CI,
+# and ask for integration. Local: test exact merge commit, then normal push.
+# Online: use GitHub Actions + ordinary PR merge. MainOnly: sync and build only.
+# No force-push, hard reset, arbitrary PR merge, or publishing to Pages.
+[CmdletBinding()]
+param(
+    [string]$ProjectDirectory = '',
+    [ValidateSet('Auto','Local','Online','MainOnly')][string]$Mode = 'Auto',
+    [ValidateRange(0,2147483647)][int]$PullRequest = 0,
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')][string]$IntegrationBranch,
+    [ValidatePattern('^[0-9a-fA-F]{40}$')][string]$ExpectedHeadSha,
+    [switch]$Integrate,
+    [ValidateRange(1,120)][int]$CiTimeoutMinutes = 30,
+    [switch]$UploadDiagnostics,
+    [string]$DiagnosticsRepo = 'AlmazovAN/iScribe-diagnostics'
+)
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Repository = 'AlmazovAN/iScribe'
+$StepName = 'Подготовка'
+$Revision = 'unknown'
+$PinnedSha = $null
+$BaseSha = $null
+$SelectedPR = 0
+$Worktree = $null
+$WorktreeRegistered = $false
+$TempHtml = $null
+$LogWriter = $null
+$ExitCode = 1
+$RemoteChanged = $false
+$InitialLocation = (Get-Location).Path
+$PriorGpuProfile = $env:VITE_GPU_PROFILE
+$Root = $null
+$LogRoot = Join-Path $env:LOCALAPPDATA 'iScribe\BuildDiagnostics'
+$FullLog = Join-Path $env:TEMP ('iscribe-build-' + [guid]::NewGuid().ToString('N') + '.log')
+
+function Log([string]$Message) {
+    Write-Host $Message
+    if ($script:LogWriter) { $script:LogWriter.WriteLine($Message); $script:LogWriter.Flush() }
+}
+function Step([string]$Name) { $script:StepName = $Name; Log ("`n=== " + $Name + ' ===') }
+function Run([string]$Exe,[string[]]$Arguments) {
+    Log ('+ ' + $Exe + ' ' + ($Arguments -join ' '))
+    $prior = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Exe @Arguments 2>&1 | ForEach-Object { Log ([string]$_) }
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $prior }
+    if ($code -ne 0) { throw ('Код ' + $code + ': ' + $Exe + ' ' + ($Arguments -join ' ')) }
+}
+function Capture([string]$Exe,[string[]]$Arguments) {
+    $prior = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $Exe @Arguments 2>$null
+        $code = $LASTEXITCODE
+        return @{ ExitCode=$code; Text=(($output | Out-String).Trim()) }
+    } finally { $ErrorActionPreference = $prior }
+}
+function Git-Text([string[]]$GitArgs) {
+    $r = Capture 'git.exe' $GitArgs
+    if ($r.ExitCode -ne 0) { throw ('git: ' + ($GitArgs -join ' ')) }
+    return $r.Text
+}
+function Gh-Json([string[]]$CliArgs) {
+    $r = Capture 'gh.exe' $CliArgs
+    if ($r.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($r.Text)) {
+        throw ('GitHub CLI: ' + ($CliArgs -join ' ') + '. Проверьте gh auth status и доступ.')
+    }
+    return ($r.Text | ConvertFrom-Json)
+}
+function Assert-Tools([bool]$NeedGh) {
+    $list = @('git.exe','node.exe','npm.cmd','npx.cmd')
+    if ($NeedGh) { $list += 'gh.exe' }
+    foreach ($exe in $list) { if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { throw "Не установлена программа $exe" } }
+    if ($NeedGh -and (Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) {
+        throw 'GitHub CLI не авторизован. Выполните gh auth login или используйте -Mode MainOnly.'
+    }
+}
+function Resolve-Project {
+    $choices = @()
+    if (-not [string]::IsNullOrWhiteSpace($ProjectDirectory)) { $choices += $ProjectDirectory }
+    else {
+        if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $choices += $PSScriptRoot }
+        $choices += $InitialLocation
+    }
+    foreach ($dir in $choices) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        $probe = Capture 'git.exe' @('-C',$dir,'rev-parse','--show-toplevel')
+        if ($probe.ExitCode -eq 0 -and $probe.Text -and (Test-Path -LiteralPath (Join-Path $probe.Text 'package.json') -PathType Leaf)) {
+            $remote = Capture 'git.exe' @('-C',$probe.Text,'remote','get-url','origin')
+            if ($remote.ExitCode -eq 0 -and $remote.Text -match '^(https://github\.com/AlmazovAN/iScribe(?:\.git)?/?|git@github\.com:AlmazovAN/iScribe(?:\.git)?|ssh://git@github\.com/AlmazovAN/iScribe(?:\.git)?)$') { return [IO.Path]::GetFullPath($probe.Text) }
+        }
+    }
+    throw 'Не найден локальный репозиторий AlmazovAN/iScribe. Укажите -ProjectDirectory с путём к корню проекта.'
+}
+function Assert-CleanTracked {
+    if (Git-Text @('status','--porcelain','--untracked-files=no')) { throw 'Есть изменения отслеживаемых файлов. Сначала сохраните их (commit или stash). Скрипт не сбрасывает изменения.' }
+}
+function Test-Ancestor([string]$Ancestor,[string]$Descendant) {
+    $r = Capture 'git.exe' @('merge-base','--is-ancestor',$Ancestor,$Descendant)
+    if ($r.ExitCode -eq 0) { return $true }
+    if ($r.ExitCode -eq 1) { return $false }
+    throw 'Не удалось проверить историю Git.'
+}
+function Fetch-Main {
+    Run 'git.exe' @('fetch','origin','refs/heads/main:refs/remotes/origin/main')
+    return (Git-Text @('rev-parse','refs/remotes/origin/main'))
+}
+function Sync-Main {
+    Set-Location -LiteralPath $script:Root
+    Assert-CleanTracked
+    $remote = Fetch-Main
+    $local = Git-Text @('rev-parse','refs/heads/main')
+    if (-not (Test-Ancestor $local $remote)) { throw 'Локальный main содержит собственные коммиты или расходится с origin/main. Требуется ручная проверка.' }
+    Run 'git.exe' @('switch','main')
+    Run 'git.exe' @('merge','--ff-only','refs/remotes/origin/main')
+    if ((Git-Text @('rev-parse','HEAD')) -ne $remote) { throw 'Локальный main не совпадает с полученным origin/main.' }
+    return $remote
+}
+function Get-PR([int]$Number) { return (Gh-Json @('api',('repos/' + $Repository + '/pulls/' + $Number))) }
+function Assert-PRIdentity($Pr) {
+    if ($Pr.base.ref -ne 'main' -or $Pr.base.repo.full_name -ne $Repository -or $Pr.head.repo.full_name -ne $Repository) { throw 'PR должен быть из того же репозитория в main.' }
+    if ($IntegrationBranch -and $Pr.head.ref -ne $IntegrationBranch) { throw 'PR не соответствует явно указанной ветке.' }
+    if ($ExpectedHeadSha -and $Pr.head.sha -ne $ExpectedHeadSha) { throw 'PR не соответствует явно указанному SHA.' }
+}
+function Find-Candidate {
+    if ($PullRequest -gt 0) { $p=Get-PR $PullRequest; Assert-PRIdentity $p; return $p }
+    $all = @(Gh-Json @('api',('repos/' + $Repository + '/pulls?state=open&base=main&per_page=100')) | Where-Object { $_ -ne $null })
+    if ($all.Count -ge 100) { throw 'Слишком много открытых PR для безопасного автовыбора. Укажите -PullRequest.' }
+    $matches = @($all | Where-Object {
+        $_.head.repo.full_name -eq $Repository -and $(if ($IntegrationBranch) { $_.head.ref -eq $IntegrationBranch } else { $_.head.ref -match '^codex/.+-release-candidate$' })
+    })
+    if ($matches.Count -gt 1) { Log ('Кандидаты: ' + (($matches | ForEach-Object { '#'+$_.number+' '+$_.head.ref }) -join '; ')); throw 'Несколько кандидатов. Укажите -PullRequest.' }
+    if ($matches.Count -eq 0) {
+        if ($IntegrationBranch -or $ExpectedHeadSha -or $Mode -in @('Local','Online')) { throw 'Открытый интеграционный PR не найден. Укажите -PullRequest или используйте -Mode MainOnly.' }
+        if ($all.Count -gt 0) { Log 'Другие открытые PR не являются обозначенными release-candidate и автоматически не объединяются.' }
+        return $null
+    }
+    $p=$matches[0]; Assert-PRIdentity $p; return $p
+}
+function Assert-CurrentCandidate([bool]$RequireReady=$false) {
+    $p=Get-PR $script:SelectedPR
+    Assert-PRIdentity $p
+    if ($p.state -ne 'open' -or $p.head.sha -ne $script:PinnedSha -or $p.base.sha -ne $script:BaseSha) { throw 'PR или main изменился. Повторите запуск с новой ревизией.' }
+    if ($RequireReady -and $p.draft) { throw 'PR всё ещё является Draft.' }
+    $remote=Fetch-Main
+    if ($remote -ne $script:BaseSha) { throw 'origin/main изменился. Проверка устарела; повторите запуск.' }
+    return $p
+}
+function Get-CIState {
+    # Only the named CI workflow for this exact PR head AND base is evidence.
+    $path='repos/'+$Repository+'/actions/workflows/ci.yml/runs?event=pull_request&head_sha='+$script:PinnedSha+'&per_page=100'
+    $data=Gh-Json @('api',$path)
+    $matches=@($data.workflow_runs | Where-Object {
+        $_.name -eq 'CI' -and $_.head_sha -eq $script:PinnedSha -and @($_.pull_requests | Where-Object { $_.number -eq $script:SelectedPR -and $_.head.sha -eq $script:PinnedSha -and $_.base.sha -eq $script:BaseSha }).Count -gt 0
+    } | Sort-Object created_at -Descending | Select-Object -First 1)
+    if ($matches.Count -eq 0) { return @{Status='missing';Url=''} }
+    $r=$matches[0]
+    if ($r.status -ne 'completed') { return @{Status='pending';Url=$r.html_url} }
+    if ($r.conclusion -ne 'success') { return @{Status='failed';Url=$r.html_url} }
+    $jobs=Gh-Json @('api',('repos/'+$Repository+'/actions/runs/'+$r.id+'/jobs?per_page=100'))
+    foreach ($name in @('verify','browser-acceptance','build')) {
+        if (@($jobs.jobs | Where-Object { $_.name -eq $name -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' }).Count -ne 1) { return @{Status='failed';Url=$r.html_url} }
+    }
+    return @{Status='passed';Url=$r.html_url}
+}
+function Wait-CI {
+    $deadline=(Get-Date).AddMinutes($CiTimeoutMinutes)
+    $last=''
+    do {
+        $c=Get-CIState
+        if ($c.Status -ne $last) { Log ('GitHub CI: '+$c.Status+' '+$c.Url); $last=$c.Status }
+        if ($c.Status -eq 'passed') { return $c }
+        if ($c.Status -eq 'failed') { throw ('GitHub CI не пройден: '+$c.Url+'. Исправьте ошибки; автоматическое слияние запрещено.') }
+        Start-Sleep -Seconds 10
+    } while ((Get-Date) -lt $deadline)
+    throw 'CI не завершён или не запущен для точных head/base. Запустите/повторите CI в GitHub, либо выберите -Mode Local. main не изменён этим скриптом.'
+}
+function New-Worktree([string]$Commit) {
+    Set-Location -LiteralPath $script:Root
+    $script:Worktree=Join-Path $env:TEMP ('iscribe-verify-'+[guid]::NewGuid().ToString('N'))
+    Run 'git.exe' @('worktree','add','--detach',$script:Worktree,$Commit)
+    $script:WorktreeRegistered=$true
+    Set-Location -LiteralPath $script:Worktree
+}
+function Run-LocalCI {
+    Step 'Локальный CI: зависимости, типы, линтер, Vitest'
+    Run 'npm.cmd' @('ci')
+    Run 'npm.cmd' @('run','typecheck')
+    Run 'npm.cmd' @('run','lint')
+    Run 'npm.cmd' @('test')
+    Step 'Локальный CI: браузерные испытания Playwright'
+    Run 'npm.cmd' @('install','--no-save','--package-lock=false','@playwright/test@1.56.1')
+    Run 'npx.cmd' @('playwright','install','chromium')
+    $priorCI=$env:CI
+    try {
+        # Do not let Playwright reuse a server from another checkout.
+        $env:CI='true'
+        Run 'npx.cmd' @('playwright','test')
+        Run 'npm.cmd' @('run','build')
+        Run 'npm.cmd' @('run','build:web')
+        Run 'npm.cmd' @('run','release:check:web')
+        Run 'npx.cmd' @('playwright','test','--config','playwright.offline.config.mjs')
+        Run 'npm.cmd' @('run','release:check')
+    } finally { $env:CI=$priorCI }
+    Assert-CleanTracked
+    Log 'LOCAL CI PASS (проверки текущего CI на Windows; не аппаратная приёмка).'
+}
+function Build-Only {
+    Step 'Сборка проверяемой ревизии main'
+    Run 'npm.cmd' @('ci')
+    Run 'npm.cmd' @('run','build')
+    Run 'npm.cmd' @('run','release:check')
+    Assert-CleanTracked
+}
+function Assert-Html([string]$Html,[string]$Revision) {
+    if (-not (Test-Path -LiteralPath $Html -PathType Leaf)) { throw 'Не найден новый dist\iScribe.html' }
+    if ((Get-Item -LiteralPath $Html).Length -le 0) { throw 'Собранный HTML пуст.' }
+    if ((Git-Text @('rev-parse','HEAD')) -ne $Revision) { throw 'HEAD изменился во время сборки.' }
+    $shortRevision = $Revision.Substring(0,7)
+    # Standalone Vite packs the application JS into a Base64 payload.
+    # Search the decoded entry only (not the HTML, Worker or WASM payloads).
+    $htmlText = [IO.File]::ReadAllText($Html, [Text.Encoding]::UTF8)
+    $entryPrefix = 'await import(blobUrl([decode("'
+    $entrySuffix = '")],"text/javascript"));'
+    $entryStart = $htmlText.IndexOf($entryPrefix, [StringComparison]::Ordinal)
+    if ($entryStart -lt 0) { throw 'Не найдена встроенная точка входа JavaScript в standalone HTML.' }
+    $entryStart += $entryPrefix.Length
+    $entryEnd = $htmlText.IndexOf($entrySuffix, $entryStart, [StringComparison]::Ordinal)
+    if ($entryEnd -le $entryStart) { throw 'Повреждён встроенный блок JavaScript в standalone HTML.' }
+    $encodedEntry = $htmlText.Substring($entryStart, $entryEnd - $entryStart)
+    $entryCode = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedEntry))
+    # Vite defines the full SHA; a minifier may fold .slice(0,7) to a short
+    # quoted literal. Prefer exact full SHA, allow the actual UI revision.
+    $fullMatch = $entryCode.Contains(('"' + $Revision + '"')) -or $entryCode.Contains(("'" + $Revision + "'"))
+    $shortMatch = $entryCode.Contains(('"' + $shortRevision + '"')) -or $entryCode.Contains(("'" + $shortRevision + "'"))
+    if (-not ($fullMatch -or $shortMatch)) { throw "Во встроенном JavaScript не обнаружена ревизия сборки $shortRevision." }
+    if ($fullMatch) { Log "Проверена полная ревизия во встроенном JavaScript: $Revision" }
+    else { Log "Проверена короткая ревизия во встроенном JavaScript: $shortRevision" }
+}
+function Confirm-Integration([string]$Route) {
+    Log "PR #$script:SelectedPR; head=$script:PinnedSha; base=$script:BaseSha; маршрут=$Route"
+    if ($Integrate) {
+        if (-not $ExpectedHeadSha -or $PullRequest -le 0) { throw 'Для запуска без подтверждения (-Integrate) укажите -PullRequest и -ExpectedHeadSha.' }
+        return
+    }
+    $answer=Read-Host 'Подтвердите проверку и слияние этого кандидата в main (YES)'
+    if ($answer -ne 'YES') { $script:ExitCode=2; throw 'Интеграция отменена. HTML не заменён.' }
+}
+function Install-Html([string]$Source,[string]$Commit) {
+    Step 'Синхронизация main и замена HTML'
+    Set-Location -LiteralPath $script:Root
+    $actual=Sync-Main
+    if ($actual -ne $Commit) { throw 'main изменился после проверки или сборки. Старый HTML оставлен. Повторите запуск.' }
+    $folder=Join-Path $script:Root 'dist'
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    $destination=Join-Path $folder 'iScribe.html'
+    $script:TempHtml=Join-Path $folder ('.iscribe-new-'+[guid]::NewGuid().ToString('N')+'.html')
+    Copy-Item -LiteralPath $Source -Destination $script:TempHtml
+    $hash=(Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
+    if ((Get-FileHash -LiteralPath $script:TempHtml -Algorithm SHA256).Hash -ne $hash) { throw 'Копия HTML не совпадает с проверенным файлом.' }
+    if ((Fetch-Main) -ne $Commit) { throw 'origin/main изменился перед заменой HTML. Повторите запуск.' }
+    if (Test-Path -LiteralPath $destination -PathType Leaf) {
+        $backup=Join-Path $folder ('.iscribe-previous-'+[guid]::NewGuid().ToString('N')+'.html')
+        # Replace on the same volume; old file remains available on failure.
+        [IO.File]::Replace($script:TempHtml,$destination,$backup)
+        Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    } else { [IO.File]::Move($script:TempHtml,$destination) }
+    $script:TempHtml=$null
+    Log "BUILD OK: $destination"
+    Log "main=$Commit; HTML SHA256=$hash; bytes=$((Get-Item -LiteralPath $destination).Length)"
+    Log 'Аппаратная приёмка Whisper/WebGPU и публикация сайта не выполнялись.'
+}
+function Upload-FailureSummary {
+    if (-not $UploadDiagnostics) { return }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; отчёт остался локально.'; return }
+    $private=Capture 'gh.exe' @('api',('repos/'+$DiagnosticsRepo),'--jq','.private')
+    if ($private.ExitCode -ne 0 -or $private.Text -ne 'true') { Write-Warning 'Диагностический репозиторий не подтверждён как приватный; ничего не отправлено.'; return }
+    $path='repos/'+$DiagnosticsRepo+'/contents/latest/FAILED_BUILD.md'
+    $lookup=Capture 'gh.exe' @('api',$path,'--jq','.sha')
+    # Intentionally do not send raw logs, local paths, command arguments or secrets.
+    $markdown="# iScribe local build failure`n`n- Commit: $script:Revision`n- PR: $script:SelectedPR`n- Step: $script:StepName`n- Remote changed by script: $script:RemoteChanged`n- Full diagnostic log retained locally.`n"
+    $payload=@{message='Update local build failure summary';content=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($markdown))}
+    if ($lookup.ExitCode -eq 0 -and $lookup.Text) { $payload.sha=$lookup.Text }
+    $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
+    try {
+        [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+        $r=Capture 'gh.exe' @('api','-X','PUT',$path,'--input',$json)
+        if ($r.ExitCode -ne 0) { Write-Warning 'Отправка отчёта не удалась; локальный лог сохранён.' }
+        else { Log "Краткий отчёт: https://github.com/$DiagnosticsRepo/blob/main/latest/FAILED_BUILD.md" }
+    } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+}
+try {
+    $LogWriter=[IO.StreamWriter]::new($FullLog,$false,[Text.UTF8Encoding]::new($false))
+    Step '1. Подготовка и синхронизация исходного main'
+    if ($Mode -eq 'MainOnly' -and ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate)) { throw 'MainOnly не принимает параметры интеграции.' }
+    Assert-Tools ($Mode -ne 'MainOnly')
+    # Standard build must not inherit an opt-in profiling build flag.
+    Remove-Item Env:VITE_GPU_PROFILE -ErrorAction SilentlyContinue
+    $Root=Resolve-Project
+    Set-Location -LiteralPath $Root
+    Log "Репозиторий: $Root"
+    $Revision=Sync-Main
+    $BaseSha=$Revision
+    Log "Исходный main: $BaseSha"
+    $node=Capture 'node.exe' @('--version'); Log ('Node: '+$node.Text+' (CI использует Node 22)')
+    $pr=$null
+    if ($Mode -ne 'MainOnly') { Step '2. Поиск интеграционного PR'; $pr=Find-Candidate }
+    $route='MainOnly'
+    if ($pr) {
+        $SelectedPR=[int]$pr.number
+        $PinnedSha=[string]$pr.head.sha
+        if ($PinnedSha -notmatch '^[0-9a-f]{40}$') { throw 'GitHub не вернул корректный SHA кандидата.' }
+        if ($pr.merged -eq $true -or $pr.state -eq 'closed') {
+            if ($pr.merged -ne $true -or -not (Test-Ancestor $PinnedSha $BaseSha)) { throw 'PR закрыт без подтверждённого включения его head в main.' }
+            Log 'Кандидат уже в main. Повторное слияние не требуется.'
+        } else {
+            if ($pr.state -ne 'open' -or $pr.base.sha -ne $BaseSha) { throw 'PR не соответствует актуальному main.' }
+            Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
+            if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
+            if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
+            else {
+                Log "PR #${SelectedPR}: $($pr.html_url)"
+                if ($Mode -eq 'Local') { $ci=@{Status='not-required';Url=''} }
+                else { $ci=Get-CIState }
+                Log "GitHub CI: $($ci.Status) $($ci.Url)"
+                $route=$Mode
+                if ($route -eq 'Auto') {
+                    if ($ci.Status -eq 'passed') { $route='Online'; Log 'Точный облачный CI уже пройден: повторное полное тестирование не требуется.' }
+                    else {
+                        Log '1 — локальный конвейер; 2 — GitHub Actions; 0 — отмена.'
+                        $answer=Read-Host 'Выберите маршрут'
+                        if ($answer -eq '1') { $route='Local' } elseif ($answer -eq '2') { $route='Online' } else { $ExitCode=2; throw 'Операция отменена.' }
+                    }
+                }
+                Confirm-Integration $route
+            }
+        }
+    } else { Log 'Интеграционный кандидат не выбран. Сборка актуального main без слияния.' }
+    if ($route -eq 'Local') {
+        Step '3. Локальный кандидат слияния в изолированном worktree'
+        New-Worktree $BaseSha
+        Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
+        $Revision=Git-Text @('rev-parse','HEAD')
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'Кандидат отсутствует в локальном merge commit.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево слияния отличается от кандидата.' }
+        Run-LocalCI
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+        Step '4. Отправка точного проверенного merge commit в GitHub main'
+        $null=Assert-CurrentCandidate
+        # Normal fast-forward push only. GitHub protection rules are respected.
+        # Do NOT use --force, --admin, or bypass required checks.
+        Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
+        $RemoteChanged=$true
+        if ((Fetch-Main) -ne $Revision) { throw 'Удалённый main отличается от проверенного merge commit.' }
+        Log 'Проверенный локальный merge commit находится в GitHub main.'
+    } elseif ($route -eq 'Online') {
+        Step '3. GitHub Actions и слияние PR'
+        $fresh=Assert-CurrentCandidate
+        if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $null=Wait-CI
+        $null=Assert-CurrentCandidate $true
+        Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
+        $RemoteChanged=$true
+        $Revision=Sync-Main
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'GitHub не подтвердил включение точного кандидата в main.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево main после слияния отличается от проверенного кандидата. Сборка остановлена до проверки.' }
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    } else {
+        Step '3. Только синхронизация и сборка main'
+        $Revision=Sync-Main
+        Log 'Статус прежних CI не подтверждается этим маршрутом; выполняются сборка и release:check.'
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    }
+    Install-Html $source $Revision
+    $ExitCode=0
+} catch {
+    Log ("FAILED [$StepName]: "+$_.Exception.Message)
+    if ($RemoteChanged) { Log 'ВНИМАНИЕ: удалённый main уже изменён. Автоматический откат Git запрещён. После исправления повторите синхронизацию/сборку.' }
+    else { Log 'Скрипт не подтвердил изменение удалённого main. При сетевой ошибке проверьте его фактический SHA.' }
+    Log 'Предыдущий HTML не считается новым релизом.'
+    if ($ExitCode -ne 2) { try { Upload-FailureSummary } catch { Write-Warning 'Не удалось отправить краткую диагностику.' } }
+} finally {
+    if ($TempHtml -and (Test-Path -LiteralPath $TempHtml)) { Remove-Item -LiteralPath $TempHtml -Force -ErrorAction SilentlyContinue }
+    if ($WorktreeRegistered -and $Root) {
+        try {
+            Set-Location -LiteralPath $Root
+            # Only the isolated worktree created by THIS invocation is removed.
+            Run 'git.exe' @('worktree','remove','--force',$Worktree)
+        } catch { Write-Warning "Не удалось убрать временный worktree: $Worktree. Основной проект не удалён." }
+    }
+    $env:VITE_GPU_PROFILE=$PriorGpuProfile
+    try { Set-Location -LiteralPath $InitialLocation } catch {}
+    if ($LogWriter) { $LogWriter.Dispose(); $LogWriter=$null }
+    if ($ExitCode -eq 0 -or $ExitCode -eq 2) { Remove-Item -LiteralPath $FullLog -Force -ErrorAction SilentlyContinue }
+    else {
+        try {
+            New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+            $local=Join-Path $LogRoot ('failure-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6)+'.log')
+            Move-Item -LiteralPath $FullLog -Destination $local
+            Write-Host "Локальный журнал ошибки: $local" -ForegroundColor Yellow
+            Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Warning "Журнал оставлен: $FullLog" }
+    }
+}
+exit $ExitCode
