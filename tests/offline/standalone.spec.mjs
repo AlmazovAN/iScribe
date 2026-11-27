@@ -41,9 +41,7 @@ test('standalone HTML opens from disk and its embedded worker reaches model load
   predicate:request=>request.url().startsWith('https://huggingface.co/onnx-community/'),
   timeout:20000
  });
- await page.locator('.diagnostics-panel > summary').click();
- await page.locator('.diagnostics-cache > summary').click();
- await page.getByRole('button',{name:'Подготовить WASM'}).click();
+ await page.locator('.model').filter({hasText:'Whisper Small'}).getByRole('button').click();
  await request;
  const error=page.getByRole('alert');
  await expect(error).toBeVisible({timeout:25000});

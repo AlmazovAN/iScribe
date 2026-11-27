@@ -114,9 +114,8 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  expect(speakers.text).toContain('[SPEAKER_00]: Окно 1');
  expect(speakers.text).toContain('Окно 35');
  expect(speakers.text.match(/Окно \d+/g)).toHaveLength(35);
- await diagnostics(page).locator(':scope > summary').click();
- const benchmark=await downloadText(page,'Бенчмарк JSON',diagnostics(page));
- const report=JSON.parse(benchmark.text);
+ const benchmark=await downloadText(page,'Логирование JSON',diagnostics(page));
+ const report=JSON.parse(benchmark.text).benchmark;
  expect(report).toMatchObject({schema:'iscribe.benchmark.v1',source:'browser-observed-timings',
   resumedRuns:1,measuredCommittedWindows:35,measuredUniqueAudioSeconds:871,
   asrWindowMs:{count:35},committedCheckpointWindows:35});
@@ -129,26 +128,7 @@ test('14m31s: committed windows survive refresh; resume once; all three real TXT
  await writeFile(testInfo.outputPath('synthetic-benchmark.json'),JSON.stringify({
   ...report,ciFixture:'mocked-Whisper-871s; NOT a real inference benchmark'
  },null,2));
- await page.locator('.hardware-acceptance:not(.performance-comparison) > summary').click();
- await expect(page.locator('.hardware-acceptance:not(.performance-comparison)')).toContainText('Аппаратная приёмка');
- const [evidenceDownload]=await Promise.all([
-  page.waitForEvent('download'),
-  page.getByRole('button',{name:'Скачать протокол наблюдений JSON'}).click()
- ]);
- const evidence=JSON.parse(await readFile(await evidenceDownload.path(),'utf8'));
- expect(evidence).toMatchObject({schema:'iscribe.hardware-evidence.v1',
-  provenance:'unattested-browser-job',verdict:'HARDWARE ACCEPTANCE NOT VERIFIED',
-  job:{expectedWindows:35,committedWindows:35,completedASR:true,
-   persistedJobFound:true,persistedCheckpointMatches:true,
-   persistedTranscriptMatches:true,savedAudioPresent:true}});
- expect(evidence.gates).toHaveLength(7);
- expect(evidence.gates.every(g=>g.hardwareAcceptance==='NOT TESTED')).toBe(true);
- expect(evidence.gates.find(g=>g.id==='HW-1')?.evidence).toBe('consistent');
- expect(JSON.stringify(evidence)).not.toContain('meeting-871s.wav');
- expect(JSON.stringify(evidence)).not.toContain('Окно 1');
- await writeFile(testInfo.outputPath('synthetic-hardware-evidence.json'),JSON.stringify({
-  ...evidence,ciFixture:'mocked-Whisper-871s; NOT a real hardware test'
- },null,2));
+
 });
 
 test('speaker failures do not destroy complete TXT or rerun ASR on retry',async({page})=>{
@@ -226,9 +206,6 @@ test('speaker gaps remain unlabeled; saved TXT stays downloadable and speaker re
  await add(page,'speaker-gaps-60s.wav');
  await row(page).getByRole('button',{name:'Начать',exact:true}).click();
  await expect(row(page)).toContainText('Текст готов · без спикера: 2 из 3',{timeout:90000});
- await diagnostics(page).locator(':scope > summary').click();
- await expect(diagnostics(page).locator('.diagnostics-metrics')).toContainText('вне интервалов: 2');
- await expect(diagnostics(page).locator('.diagnostics-metrics')).toContainText('по перекрытию: 1');
  const persisted=(await snapshot(page))[0];
  expect(persisted).toMatchObject({asrComplete:true,nextWindow:3,stage:'partial',diagnostics:{unlabeled:2,uncovered:2,overlapMatches:1}});
  expect(persisted.speakerSegments.map(s=>s.speaker)).toEqual(['Fixture Speaker',undefined,undefined]);
@@ -253,20 +230,18 @@ test('diagnostics follow runtime status and keep TXT controls on the file row',a
  await expect(page.locator('.runtime-bar + .diagnostics-panel')).toHaveCount(1);
  await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeDisabled();
  await expect(file.getByRole('button',{name:'Начать',exact:true})).toBeVisible();
- await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeHidden();
- await panel.locator(':scope > summary').click();
- await expect(panel.getByRole('button',{name:'Проверить аудио'})).toBeVisible();
- await expect(panel.locator('.hardware-acceptance:not(.performance-comparison) > summary')).toContainText('Аппаратная приёмка');
- await expect(file.getByRole('button',{name:'Проверить аудио'})).toHaveCount(0);
+ await expect(panel.getByRole('button',{name:'Логирование JSON'})).toBeVisible();
+ await expect(panel.locator('details, summary')).toHaveCount(0);
+ await expect(panel.getByRole('button')).toHaveCount(1);
  await file.getByRole('button',{name:'Начать',exact:true}).click();
  await expect(file).toContainText('Текст и спикеры готовы',{timeout:90000});
  await expect(file.getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
- await panel.locator('.diagnostics-log summary').click();
- await expect(panel.getByRole('list',{name:'События выбранной записи'})).toContainText('Контрольная точка сохранена');
- const log=await downloadText(page,'Скачать журнал JSON',panel);
- expect(JSON.parse(log.text).schema).toBe('iscribe.diagnostics.v1');
+ const log=await downloadText(page,'Логирование JSON',panel);
+ const combined=JSON.parse(log.text);
+ expect(combined.schema).toBe('iscribe.diagnostics.v1');
+ expect(combined.benchmark.schema).toBe('iscribe.benchmark.v1');
+ expect(combined.events.some(e=>e.code==='checkpoint-committed')).toBe(true);
  expect(log.text).not.toContain('compact-ui-60s.wav');
- await expect(panel.getByRole('button',{name:'Бенчмарк JSON'})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
  await expect(file.getByRole('button',{name:'TXT + time',exact:true})).toBeVisible();
  await expect(file.getByRole('button',{name:'TXT + time + speaker',exact:true})).toBeVisible();
@@ -276,7 +251,7 @@ test('diagnostics follow runtime status and keep TXT controls on the file row',a
  await page.reload();
  await expect(row(page)).toHaveCount(1);
  await expect(row(page).getByRole('button',{name:'Скачать TXT',exact:true})).toBeEnabled();
- await expect(diagnostics(page).getByRole('button',{name:'Проверить аудио'})).toBeHidden();
+ await expect(diagnostics(page).getByRole('button',{name:'Логирование JSON'})).toBeVisible();
 });
 
 
