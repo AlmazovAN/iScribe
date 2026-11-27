@@ -43,7 +43,7 @@ $('run').addEventListener('click',async()=>{
      const result=await variant(model,backend,batch,outputName,threads);
      const parity=result.outputs.length===RUNS?base.outputs.map((v,i)=>compareEmbeddings(v,result.outputs[i])):null;
      const speedup=result.summary.status==='completed'&&result.summary.medianMs>0?base.summary.medianMs/result.summary.medianMs:null;
-     variants.push({...result.summary,parity,speedup,candidateForFurtherTesting:!!(parityPassed(parity)&&speedup>=1.1)});
+     variants.push({...result.summary,parity,speedupVsWasmBatch1:speedup,parityPassed:parityPassed(parity)});
      if(backend==='webgpu'&&batch===1&&result.summary.status==='failed'&&!cancelled)break;
     }
    }
