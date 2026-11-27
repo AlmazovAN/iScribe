@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {offlineAssetsFromBundle,renderOfflineWorker} from './scripts/offline-manifest.mjs';
 import {standaloneHtml} from './scripts/standalone-html';
+import {ffmpegAssets} from './scripts/ffmpeg-assets';
 let revision='unavailable';
 try{revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim()}catch{/* Source archive without git metadata. */}
 export default defineConfig(({mode})=>{
@@ -32,7 +33,7 @@ export default defineConfig(({mode})=>{
    if(standalone&&hostType==='js')return {runtime:'globalThis.__iscribeAssets['+JSON.stringify(filename)+']'};
   }
  },
- plugins:standalone?[standaloneHtml()]:[{
+ plugins:standalone?[ffmpegAssets(),standaloneHtml()]:[ffmpegAssets(),{
  name:'compressed-wasm-transport',
  generateBundle(_options,bundle){
   for(const [name,asset] of Object.entries(bundle)){

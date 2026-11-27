@@ -156,3 +156,13 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+## DEC-01
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-CORE-1 | Real WASM synthetic WAV -> mono 16 kHz; invalid compressed input rejected | Tests added; NOT TESTED |
+| DEC-CORE-2 | MP3/AAC/FLAC/Ogg/WebM; PCM compared with native FFmpeg | NOT TESTED |
+| DEC-CORE-3 | Standalone file:// and web offline, cancellation, no network audio | NOT TESTED |
+| DEC-CORE-4 | npm ci, typecheck, lint, Vitest, builds and preflights | NOT TESTED |

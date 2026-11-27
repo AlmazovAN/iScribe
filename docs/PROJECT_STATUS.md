@@ -106,3 +106,8 @@ A bounded per-run prefetch-depth trial is wired into ResourceManager and success
 
 ## DIAG-01 — компактная диагностика
 Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
+
+
+## DEC-01 experimental candidate
+
+Alternate FFmpeg.wasm full-file decoding is opt-in; legacy remains default, large files still use MediaBunny. See docs/DEC-01_FFMPEG_CORE.md. Local CI and actual browser/hardware acceptance NOT TESTED; no release or deployment.
