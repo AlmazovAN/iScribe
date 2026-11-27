@@ -63,6 +63,16 @@ export function performanceReport(profile:PerformanceProfile|undefined){
   timingsMs:Object.fromEntries(perfTimingKeys.map(key=>{const t=profile.timings[key];return [key,t?{count:numeric(t.count),totalMs:numeric(t.totalMs),maxMs:numeric(t.maxMs)}:null]})),
   backendAttempts:{webgpu:numeric(profile.backendAttempts.webgpu??0),webnn:numeric(profile.backendAttempts.webnn??0),wasm:numeric(profile.backendAttempts.wasm??0),unknown:numeric(profile.backendAttempts.unknown??0)},
   requestedBackendAttempts:{auto:numeric(profile.requestedBackendAttempts.auto??0),wasm:numeric(profile.requestedBackendAttempts.wasm??0),webgpu:numeric(profile.requestedBackendAttempts.webgpu??0),webnn:numeric(profile.requestedBackendAttempts.webnn??0),unknown:numeric(profile.requestedBackendAttempts.unknown??0)},
+  executionEvidence:{
+   scope:'ASR attempts',
+   initializedBackendSource:'engine capability report',
+   operatorAssignment:null,
+   gpuKernelEvents:null,
+   cpuFallbackOperators:null,
+   actualAdapter:null,
+   status:'unverified' as const,
+   limitation:'Initialized backend is not per-operator execution evidence. GPU API presence is not adapter identity. Null means not measured, not zero.'
+  },
   workerTransferMs:null,
   limitations:['Device hints describe the first profiled run; API presence is not adapter or model compatibility.',
    'WASM thread prerequisites and configured threads are not measured effective threads. Device memory is a coarse browser hint, not free RAM.',

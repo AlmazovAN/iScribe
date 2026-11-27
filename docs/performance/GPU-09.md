@@ -1,0 +1,11 @@
+# GPU-09 — Adaptive Performance Manager
+
+Existing PERF profiles already control WASM thread target, streamed prefetch cap, boundary pacing and opt-in calibrated provider choice. This change adds one bounded prefetch-depth trial to ResourceManager. No automatic provider, dtype, model, language, decoding or speaker changes. No change to memory hints, recovery caps, retries, or checkpoint logic.
+
+When the base policy permits two queued windows, three consecutive successful ready-at-demand observations allow a trial of one queued window. Two consecutive non-ready observations with measured wait >=25 ms restore the two-window target; no further trial until a new run or explicit profile change. Invalid samples or lower ceilings reset streaks. The controller never increases the base ceiling. Already queued work can drain; new work remains subject to the existing FIFO, rotation and recovery bounds. Decisions affect the next window policy, not active ASR. The host observation is not GPU telemetry, memory-pressure measurement, energy measurement, or proof of a performance benefit. Thresholds are proposed heuristics. The browser's coarse/capped deviceMemory hint may prevent two-window eligibility altogether. New optional policy snapshot reports observe/trial-one/restored-two and streaks; old reports have null. Existing profiles, user selection and recovery restrictions remain authoritative.
+
+## Verification
+12 isolated assertions passed on the controller logic after stripping TS annotations. Added Vitest controller and ResourceManager tests; full npm CI/typecheck/lint/Vitest/build/browser NOT TESTED because local git ls-remote failed DNS resolution and dependencies are unavailable. Hardware and quality NOT TESTED. The GPU-08 branch is independent; no dependency on its new timing fields. Other GPU experiments not integrated. No merge/deployment.
+
+## Acceptance
+Compare same long recording, model, language, backend, and selected mode with and without adaptation (three repetitions). Track observed wait, ready hits, queue depth, RTF, external RAM/GPU memory, transcript equivalence, retry and checkpoint behavior. Exercise cancellation, decoder rotation, profile change, and recovery. Confirm actual two-window eligibility before evaluating the trial; otherwise report not applicable. Do not approve on helper tests alone.

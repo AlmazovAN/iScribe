@@ -45,3 +45,15 @@ it('boundary delay is interruptible without waiting for the timer',async()=>{
   expect(vi.getTimerCount()).toBe(0);
  }finally{vi.useRealTimers()}
 });
+
+it('adapts only the prefetch depth and respects recovery and explicit profiles',()=>{
+ const a=new ResourceManager(null,{...device,deviceMemoryGiB:16});
+ a.select('max');const initial=a.policy();expect(initial.targetPrefetchWindows).toBe(2);
+ for(let i=0;i<3;i++)a.observePrefetch(true,0);
+ const trial=a.policy();
+ expect(trial).toMatchObject({requested:'max',effective:'max',targetPrefetchWindows:1,targetWasmThreads:initial.targetWasmThreads,pauseRatio:initial.pauseRatio,reasons:expect.arrayContaining(['prefetch-adaptive'])});
+ expect(resourceReport(observeWindowPolicy(undefined,trial))?.lastPolicy.prefetchAdaptation?.phase).toBe('trial-one');
+ a.restrictAfterRecovery();expect(a.policy()).toMatchObject({effective:'medium',targetPrefetchWindows:1});
+ a.select('eco');expect(a.policy().targetPrefetchWindows).toBe(0);
+ a.select('max');expect(a.policy().effective).toBe('medium');
+});
