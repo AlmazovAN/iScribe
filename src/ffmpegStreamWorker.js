@@ -30,7 +30,7 @@ function decode(start,count,id,allowShort=false){
    '-af','aresample=16000,atrim=start_sample='+skip+':end_sample='+(skip+count)+',asetpts=PTS-STARTPTS',
    '-t',(count/RATE).toFixed(7),'-ac','1','-ar','16000','-c:a','pcm_f32le','-f','f32le',OUTPUT);
   const status=execute(()=>core.exec(...args));
-  if(status!==0)throw new Error('decode');
+  if(status!==0)throw Object.assign(new Error('decode'),{exitCode:status});
   const bytes=core.FS.readFile(OUTPUT);
   const samples=bytes.byteLength/4;
   if(!Number.isSafeInteger(samples)||samples<=0||samples>count||(!allowShort&&samples!==count))
@@ -62,7 +62,7 @@ async function open({file,coreURL,wasmURL},id){
   status=execute(()=>core.ffprobe('-v','error','-select_streams','a:0',
    '-show_entries','stream=duration,start_time,sample_rate:format=duration,start_time','-of','json',INPUT));
  }finally{core.setLogger(()=>{})}
- if(status!==0)throw new Error('probe');
+ if(status!==0)throw Object.assign(new Error('probe'),{exitCode:status});
  let metadata;
  try{metadata=JSON.parse(json)}catch{throw new Error('probe')}
  const stream=metadata.streams?.[0],format=metadata.format;
@@ -109,6 +109,7 @@ self.onmessage=async({data:request})=>{
   }else throw new Error('protocol');
  }catch(error){
   const code=knownErrors.has(error?.message)?error.message:'runtime';
-  self.postMessage({id,kind:'error',code});
+  const exitCode=Number.isInteger(error?.exitCode)&&error.exitCode>=-255&&error.exitCode<=255?error.exitCode:undefined;
+  self.postMessage({id,kind:'error',code,exitCode});
  }finally{busy=false}
 };

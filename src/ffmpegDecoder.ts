@@ -1,6 +1,7 @@
 import {MAX_SECONDS,usesStreamedAudio,validateFile} from './audio';
 import {PCM_SAMPLE_RATE,inspectDecodedPcm} from './audioValidation';
 import workerSource from './ffmpegWorker.js?raw';
+import {FfmpegDecoderError,safeExitCode} from './decoderDiagnostics';
 
 export const FFMPEG_CORE_ASSET='assets/ffmpeg-core-0.12.10.js';
 export const FFMPEG_WASM_ASSET='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
@@ -35,18 +36,18 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
     if(data)resolve(data);else reject(error??new Error('FFmpeg: неизвестная ошибка.'));
    };
    const abort=()=>finish(signal?.reason??new DOMException('Отменено','AbortError'));
-   const timer=setTimeout(()=>finish(new Error('FFmpeg: превышено время декодирования.')),DEADLINE_MS);
+   const timer=setTimeout(()=>finish(new FfmpegDecoderError('timeout','decode')),DEADLINE_MS);
    signal?.addEventListener('abort',abort,{once:true});
    if(signal?.aborted){abort();return;}
    active.onmessage=(event:MessageEvent<Reply>)=>{
     const reply=event.data;
     if(reply?.kind==='pcm'&&reply.buffer instanceof ArrayBuffer){finish(undefined,reply.buffer);return;}
-    if(reply?.kind==='error'&&reply.code==='length'){finish(new Error('FFmpeg: пустая запись или длительность более одного часа.'));return;}
-    if(reply?.kind==='error'&&reply.code==='decode'){finish(new Error('FFmpeg: не удалось декодировать аудиодорожку (код '+Number(reply.status)+').'));return;}
-    finish(new Error('FFmpeg: ошибка запуска или обработки.'));
+    if(reply?.kind==='error'&&reply.code==='length'){finish(new FfmpegDecoderError('length','decode'));return;}
+    if(reply?.kind==='error'&&reply.code==='decode'){finish(new FfmpegDecoderError('decode','decode',safeExitCode(reply.status)));return;}
+    finish(new FfmpegDecoderError('runtime','decode'));
    };
-   active.onerror=()=>finish(new Error('FFmpeg: ошибка Worker.'));
-   active.onmessageerror=()=>finish(new Error('FFmpeg: ошибка передачи PCM.'));
+   active.onerror=()=>finish(new FfmpegDecoderError('worker','decode'));
+   active.onmessageerror=()=>finish(new FfmpegDecoderError('protocol','decode'));
    try{active.postMessage({file,coreURL:assetURL(FFMPEG_CORE_ASSET),wasmURL:assetURL(FFMPEG_WASM_ASSET),maxSamples:MAX_SAMPLES});}
    catch(error){finish(error);}
   });
