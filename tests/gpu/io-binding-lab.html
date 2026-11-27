@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="ru"><meta charset="utf-8"><title>iScribe GPU-05 I/O Binding Lab</title>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:16px}label,button{display:block;margin:16px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}button{padding:8px 16px}</style>
+<h1>GPU-05: I/O Binding Lab</h1>
+<p>Изолированный тест ONNX Runtime. Не требуется скачивать Whisper или загружать аудио. Закройте рабочий iScribe перед запуском.</p>
+<label>Размер одного тензора <select id="size"><option value="1">1 МБ</option><option value="4" selected>4 МБ</option><option value="16">16 МБ</option></select></label>
+<button id="run">Сравнить три стратегии</button>
+<button id="save" disabled>Скачать JSON</button>
+<pre id="report" aria-live="polite">Ожидание.</pre>
+<script type="module" src="./io-binding-lab.mjs"></script>
+</html>
