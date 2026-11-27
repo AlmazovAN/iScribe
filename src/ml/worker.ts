@@ -11,6 +11,20 @@ env.fetch=observedWhisperHttpFetch(env.fetch,repo=>postMessage({type:'iscribe:mo
 env.useWasmCache=import.meta.env.MODE!=='standalone';
 if(import.meta.env.PROD&&import.meta.env.MODE!=='standalone')env.fetch=compressedWasmFetch(env.fetch,new URL(wasmUrl,import.meta.url).href);
 env.experimental_useCrossOriginStorage=false;
+// Opt-in ORT profiling; configure before the first inference session.
+if(import.meta.env.VITE_GPU_PROFILE==='1'){
+ const gpu=env.backends.onnx.webgpu;
+ if(gpu){
+  gpu.profiling={mode:'default',ondata:data=>{
+   // Only numeric timing and operator metadata; no tensors or transcript.
+   console.info('[iscribe:gpu-profile]',JSON.stringify({
+    version:data.version,kernelId:data.kernelId,kernelType:data.kernelType,
+    kernelName:data.kernelName,programName:data.programName,
+    startTime:data.startTime,endTime:data.endTime
+   }));
+  }};
+ }
+}
 const wasm=env.backends.onnx.wasm;
 if(wasm){
  if(import.meta.env.MODE==='standalone'){
