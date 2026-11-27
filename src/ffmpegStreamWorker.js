@@ -39,6 +39,33 @@ function decode(start,count,id,allowShort=false){
   return Uint8Array.from(bytes).buffer;
  }finally{core.setProgress(()=>{});removeOutput()}
 }
+// core 0.12.10 has a known ffprobe success-status bug (#817).
+// Only accept -1 when a fresh, complete, validated report exists and no
+// error-level message was emitted. Do not waive FFmpeg decode exit codes.
+function probeMetadata(){
+ const output='/probe.json',fs=core.FS;
+ let hadError=false,status;
+ if(fs.analyzePath(output).exists)fs.unlink(output);
+ core.setLogger(event=>{if(event.type==='stderr'&&event.message?.trim())hadError=true;});
+ try{
+  status=execute(()=>core.ffprobe('-v','error','-protocol_whitelist','file','-select_streams','a:0',
+   '-show_entries','stream=duration,start_time,sample_rate:format=duration,start_time','-of','json','-o',output,INPUT));
+  if((status!==0&&status!==-1)||hadError)
+   throw Object.assign(new Error('probe-exit'),{exitCode:status});
+  if(!fs.analyzePath(output).exists||fs.stat(output).size<=0||fs.stat(output).size>65536)
+   throw Object.assign(new Error('probe-json'),{exitCode:status});
+  let metadata;
+  try{metadata=JSON.parse(fs.readFile(output,{encoding:'utf8'}))}
+  catch{throw Object.assign(new Error('probe-json'),{exitCode:status})}
+  if(!metadata||!Array.isArray(metadata.streams)||metadata.streams.length!==1||
+    !metadata.streams[0]||typeof metadata.streams[0]!=='object')
+   throw Object.assign(new Error('probe-metadata'),{exitCode:status});
+  return metadata;
+ }finally{
+  core.setLogger(()=>{});
+  if(fs.analyzePath(output).exists)fs.unlink(output);
+ }
+}
 async function open({file,coreURL,wasmURL},id){
  self.importScripts(coreURL);
  const response=await fetch(wasmURL);
@@ -53,18 +80,7 @@ async function open({file,coreURL,wasmURL},id){
  if(!workerfs)throw new Error('workerfs');
  fs.mkdir('/source');
  fs.mount(workerfs,{blobs:[{name:'input',data:file}]},'/source');
- let json='';
- core.setLogger(event=>{
-  if(event.type==='stdout'&&json.length<65536)json+=event.message+'\n';
- });
- let status;
- try{
-  status=execute(()=>core.ffprobe('-v','error','-protocol_whitelist','file','-select_streams','a:0',
-   '-show_entries','stream=duration,start_time,sample_rate:format=duration,start_time','-of','json',INPUT));
- }finally{core.setLogger(()=>{})}
- if(status!==0)throw Object.assign(new Error('probe'),{exitCode:status});
- let metadata;
- try{metadata=JSON.parse(json)}catch{throw new Error('probe')}
+ const metadata=probeMetadata();
  const stream=metadata.streams?.[0],format=metadata.format;
  sourceRate=Number(stream?.sample_rate);
  const positive=value=>Number.isFinite(Number(value))&&Number(value)>0;
@@ -78,7 +94,7 @@ async function open({file,coreURL,wasmURL},id){
  if(!Number.isSafeInteger(estimatedSamples)||estimatedSamples<=0||
     Math.ceil(estimatedSamples/(25*RATE))>file.size||
     !Number.isInteger(sourceRate)||sourceRate<8000||sourceRate>384000)
-  throw new Error('probe');
+  throw new Error('probe-metadata');
  // Container duration can include encoder padding or be an estimate (VBR).
  // Decode a bounded tail to find EOF on the selected audio track. Never
  // pad a short window or treat a fully filled tail budget as proven EOF.
@@ -91,7 +107,7 @@ async function open({file,coreURL,wasmURL},id){
   throw new Error('duration');
  return {length,sourceRate};
 }
-const knownErrors=new Set(['runtime','workerfs','decode','coverage','probe','timeline','duration','window','protocol']);
+const knownErrors=new Set(['runtime','workerfs','decode','coverage','probe','probe-exit','probe-json','probe-metadata','timeline','duration','window','protocol']);
 self.onmessage=async({data:request})=>{
  const {id,kind}=request;
  if(busy){self.postMessage({id,kind:'error',code:'protocol'});return;}

@@ -41,3 +41,7 @@ Record peak process memory, decoder and ASR times, exact build SHA and diagnosti
 ## Redistribution
 
 This candidate is for local source build and validation, not public binary distribution. @ffmpeg/core 0.12.10 is GPL-2.0-or-later; exact corresponding source/build configuration, third-party notices and redistribution terms still require review before distributing combined HTML or deploying Pages. Keep Pages manual; no public binary deployment until this review and hardware acceptance. Do not conflate package integrity or local CI PASS with public release acceptance.
+
+## Local CI iteration 1 — 2026-11-27
+
+After initial ECONNRESET failures, npm ci succeeded (228 packages), TypeScript/lint passed, Vitest 234/234 passed. Playwright 14/16 passed; both valid WAV window tests failed at FFprobe opening (including window 41). Build gates not reached. Upstream issue https://github.com/ffmpegwasm/ffmpeg.wasm/issues/817 reports false -1 success status in core 0.12.10. Fix: write fresh JSON to MEMFS, reject any other nonzero status or error-level stderr, validate output and selected stream, then retain existing metadata/tail checks. No decode error waiver. Distinct probe-exit/probe-json/probe-metadata codes and regression tests added. Exact failure branch from original run not recorded; fix requires rerun of actual browser tests. Local CI remains pending for revised candidate.

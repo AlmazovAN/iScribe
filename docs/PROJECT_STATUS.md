@@ -126,3 +126,6 @@ Persisted decoder identity, typed FFmpeg diagnostics and bounded automatic recov
 ## DEC-04 release candidate
 
 New jobs default to FFmpeg in the candidate; legacy retained for pinned checkpoints and explicit comparison. Native CLI synthetic reference experiment observed PASS; local CI, real browser FFmpeg and hardware acceptance NOT TESTED. See docs/DEC-04_ACCEPTANCE_RELEASE.md. Public binary distribution pending GPL review.
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.

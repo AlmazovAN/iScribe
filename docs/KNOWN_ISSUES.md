@@ -91,3 +91,6 @@ DEC-03: untagged historical checkpoints are assumed legacy; experimental runs fr
 
 
 DEC-04: FFmpeg full route still limited to one hour, streamed mode still excludes speakers; legacy removal deferred until migration/hardware acceptance. Native CLI reference PASS is not browser/WASM acceptance. Public distribution requires corresponding-source/license review.
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.

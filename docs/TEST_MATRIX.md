@@ -198,3 +198,6 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | DEC-RETRY | Runner typed failure recovery and durable reservation | Tests added; NOT TESTED |
 | DEC-CI | npm ci, typecheck, lint, Vitest, both builds and browser suites | NOT TESTED |
 | DEC-HW | Real recordings, WebGPU/WASM and memory | NOT TESTED |
+
+
+DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.
