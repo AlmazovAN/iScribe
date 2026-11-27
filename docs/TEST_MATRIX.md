@@ -150,3 +150,5 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | GPU-09-U | Three ready observations trigger one-window trial; two meaningful misses restore two; invalid observations rejected; ceiling unchanged | 12 isolated helper assertions PASS; Vitest NOT TESTED |
 | GPU-09-R | Manager preserves selected mode, threads, pacing, recovery cap, and report compatibility | NOT TESTED (Vitest added) |
 | GPU-09-H | Compare real long recordings, wait time, RTF, memory pressure and quality across profiles; verify no material regression | NOT TESTED |
+
+- Local CI v7: Windows Vitest invokes the offline PowerShell suite for manifest binding, stale/duplicate manifests, excluded draft/experimental PRs, stage ancestry and changed manifest rejection. Linux skips this Windows-specific test. Actual Windows run pending.

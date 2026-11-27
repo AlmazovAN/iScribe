@@ -1,8 +1,14 @@
 ﻿# CI-06 acceptance harness. Windows PowerShell 5.1 / PowerShell 7.
 # No production entry point is executed. All remote/build operations are mocked.
 [CmdletBinding()]
-param([string]$Source = (Join-Path (Split-Path -Parent $PSScriptRoot) 'iScribe-Update-Build.ps1'))
+param([string]$Source = '')
 $ErrorActionPreference='Stop'
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $here=$PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($here)) { $here=Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $Source=Join-Path (Split-Path -Parent $here) 'iScribe-Update-Build.ps1'
+}
+if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw 'CI harness source script not found.' }
 $script:Pass=0
 $script:Fail=0
 function Check([string]$Name,[scriptblock]$Body) {
@@ -22,10 +28,16 @@ function Throws([scriptblock]$Body,[string]$ExpectedPrefix='') {
 }
 $tokens=$null; $errors=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
-if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Host $_ }; exit 1 }
+if ($errors.Count -ne 0) {
+    Write-Host ("PowerShell parser failed: "+$errors.Count+" errors")
+    $errors | Select-Object -First 10 | ForEach-Object {
+        Write-Host ("Parser error "+$_.ErrorId+" at iScribe-Update-Build.ps1:"+$_.Extent.StartLineNumber+":"+$_.Extent.StartColumnNumber)
+    }
+    exit 1
+}
 Write-Host 'PASS PowerShell parser'
 $script:Pass++
-$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity')
+$wanted=@('Add-DiagnosticEvent','Get-DiagnosticCode','Get-DiagnosticCommand','ConvertTo-SafeLogLine','Get-SafeLogExcerpt','Get-ApiFailureKind','Invoke-GhApiRead','Gh-Json','Get-GitBlobSha','Get-DiagnosticRemoteState','Get-VerifiedDiagnosticRepo','Upload-DiagnosticJournal','Save-DiagnosticJournal','Get-SafeSha','Start-CloudCI','Get-CIState','Wait-CI','Run-LocalCI','Build-Only','Assert-CurrentCandidate','Assert-PRIdentity','Get-ReleaseManifest','Test-ReadyRelease','Assert-ManifestStages')
 # Load only named top-level function definitions, never the main script.
 foreach ($name in $wanted) {
     $nodes=@($ast.EndBlock.Statements | Where-Object { $_ -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq $name })
@@ -284,6 +296,51 @@ Check 'draft rejected when readiness required' {
     $script:FakePR.draft=$true
     try { Throws { Assert-CurrentCandidate $true } } finally { $script:FakePR.draft=$false }
 }
+
+$script:SelectedManifest=$null
+$manifestBody='<!-- iscribe-release: {"schema":1,"release_id":"TEST-001","base_sha":"'+$script:BaseSha+'","head_sha":"'+$script:PinnedSha+'","stages":[{"id":"TEST-01","pr":99,"sha":"'+$script:PinnedSha+'"}]} -->'
+$script:FakePR.body=$manifestBody
+$script:FakePR.labels=@()
+Check 'manifest parses and binds exact base and head' {
+    Equal (Get-ReleaseManifest $script:FakePR).Data.release_id 'TEST-001'
+    Equal (Get-ReleaseManifest $script:FakePR).Data.stages[0].pr 99
+}
+Check 'stale manifest and duplicate manifest rejected' {
+    $script:FakePR.body=$manifestBody.Replace($script:PinnedSha,('f'*40))
+    try { Throws { Get-ReleaseManifest $script:FakePR } } finally { $script:FakePR.body=$manifestBody }
+    $script:FakePR.body=$manifestBody+[char]10+$manifestBody
+    try { Throws { Get-ReleaseManifest $script:FakePR } } finally { $script:FakePR.body=$manifestBody }
+}
+Check 'experimental and draft candidates excluded' {
+    Equal (Test-ReadyRelease $script:FakePR) $true
+    $script:FakePR.labels=@(@{name='experimental'})
+    try { Equal (Test-ReadyRelease $script:FakePR) $false } finally { $script:FakePR.labels=@() }
+    $script:FakePR.draft=$true
+    try { Equal (Test-ReadyRelease $script:FakePR) $false } finally { $script:FakePR.draft=$false }
+}
+function Test-Ancestor([string]$Ancestor,[string]$Descendant) { return $script:FakeAncestor }
+$script:FakeAncestor=$true
+Check 'stage history must be included' {
+    $m=Get-ReleaseManifest $script:FakePR
+    Assert-ManifestStages $m
+    $script:FakeAncestor=$false
+    try { Throws { Assert-ManifestStages $m } 'Manifest stage not in candidate history' } finally { $script:FakeAncestor=$true }
+}
+Check 'changed manifest blocks publish' {
+    $script:SelectedManifest=Get-ReleaseManifest $script:FakePR
+    $script:FakePR.body=$manifestBody.Replace('TEST-001','TEST-002')
+    try { Throws { Assert-CurrentCandidate $true } 'Release manifest changed' } finally { $script:FakePR.body=$manifestBody; $script:SelectedManifest=$null }
+}
+
+Check 'diagnostics reconstruct known test source without local path' {
+    Equal (Get-DiagnosticCode "Split-Path : Cannot bind argument to parameter 'Path' because it is an empty string.") 'EMPTY_PATH'
+    Equal (ConvertTo-SafeLogLine "Split-Path : Cannot bind argument to parameter 'Path' because it is an empty string.") 'PowerShell: Path is empty'
+    Equal (ConvertTo-SafeLogLine 'At C:\Users\Example\Temp\scripts\Test-CI06.ps1:4 char:56') 'Source: scripts/Test-CI06.ps1:4:56'
+    Equal (ConvertTo-SafeLogLine 'FAIL  scripts/local-pipeline.test.mjs > PowerShell local pipeline regression suite') 'Failed test: scripts/local-pipeline.test.mjs / PowerShell local pipeline regression suite'
+    Equal (ConvertTo-SafeLogLine 'Tests  1 failed | 220 passed (221)') 'Tests: 1 failed, 220 passed (221 total)'
+    Equal (ConvertTo-SafeLogLine 'At C:\Users\Example\Temp\scripts\private.ps1:4 char:56') $null
+}
+
 Write-Host "CI-06 OFFLINE: $script:Pass passed, $script:Fail failed"
 if ($script:Fail -ne 0) { exit 1 }
 exit 0
