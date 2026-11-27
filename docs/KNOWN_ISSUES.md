@@ -75,3 +75,7 @@ GPU-08: early lookahead can overlap metadata persistence but still competes for 
 GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilization, energy, free RAM or proven speedup. Two-window eligibility may be unavailable because browsers expose coarse/capped device memory hints. Existing queued windows may drain during a trial. The thresholds are heuristics requiring real-recording acceptance. No automatic provider/model/dtype changes. Full suite and hardware NOT TESTED.
 
 - Local pipeline: legacy release candidates without manifests need explicit selection; stale candidates must be refreshed against main. Automatic cleanup, remote success report and retry queue are deferred. Real Windows acceptance pending.
+
+
+## DIAG-01 — компактная диагностика
+Одна постоянно видимая строка: выбор записи, текущий номер окна, единый JSON с событиями и вложенным бенчмарком. Отдельные ручные проверки, аппаратная панель, ручная калибровка и панель кэша удалены. Автоматическая проверка PCM, восстановление, кэш моделей и регистрация service worker сохранены. Схема старых заданий совместима; исторические поля не мигрируют. Аппаратная приёмка и локальный CI: NOT TESTED до выполнения локального конвейера. Сбой второго окна Whisper в standalone/WebGPU не исправлен; нужен повтор с единым журналом и данными текущей попытки. `elapsedSinceAttemptEventMs` — время с события перед dispatch, не чистое время GPU. Сравнение с предыдущей версией и изоляция повторного использования PCM требуются для подтверждения причины.
