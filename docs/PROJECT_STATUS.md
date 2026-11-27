@@ -100,3 +100,5 @@ Existing PERF-05 bounded streamed-audio lookahead is scheduled before in-flight 
 
 ## GPU-09 — Adaptive Performance Manager (candidate)
 A bounded per-run prefetch-depth trial is wired into ResourceManager and successful streamed-audio consumption. It changes neither selected/effective mode nor WASM thread target; it never exceeds profile, memory or recovery ceilings. See [GPU-09](performance/GPU-09.md). Full CI and hardware acceptance pending.
+
+- Local pipeline v7 candidate: manifest-based selection and stage ancestry checks, one candidate per invocation. Windows regression and end-to-end acceptance pending; not a claim of release readiness.
