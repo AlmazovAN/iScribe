@@ -8,7 +8,10 @@ self.onmessage=async({data})=>{
  let session,stage='initialization',reply;
  const times=[],outputs=[];
  try{
-  const {backend,batch}=data;
+  const {backend,batch,threads}=data;
+  if(![1,2,4,8].includes(threads))throw new Error('Invalid thread configuration');
+  const configuredWasmThreads=backend==='wasm'&&self.crossOriginIsolated===true&&typeof SharedArrayBuffer==='function'?Math.min(threads,Math.max(1,navigator.hardwareConcurrency||1)):1;
+  ort.env.wasm.numThreads=configuredWasmThreads;
   if(!['wasm','webgpu'].includes(backend)||!BATCHES.includes(batch))throw new Error('Invalid variant');
   const start=performance.now();
   session=await ort.InferenceSession.create(data.model,{executionProviders:[backend],preferredOutputLocation:'cpu'});
@@ -43,7 +46,7 @@ self.onmessage=async({data})=>{
    else{times.push(elapsed);outputs.push(runOutputs)}
   }
   const medianMs=median(times);
-  reply={summary:{status:'completed',requestedBackend:backend,batch,embeddingSize,initializationMs,warmupMs,timesMs:times,medianMs,embeddingsPerSecond:medianMs>0?ITEMS*1000/medianMs:null},outputs};
+  reply={summary:{status:'completed',requestedBackend:backend,batch,configuredWasmThreads,embeddingSize,initializationMs,warmupMs,timesMs:times,medianMs,embeddingsPerSecond:medianMs>0?ITEMS*1000/medianMs:null},outputs};
  }catch(error){
   console.warn('WeSpeaker lab',stage,error);
   reply={summary:{status:'failed',requestedBackend:data.backend,batch:data.batch,stage,timesMs:times},outputs:[]};
