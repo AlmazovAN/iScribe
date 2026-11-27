@@ -1,4 +1,4 @@
-﻿# iScribe Update & Build v6.2 — Windows PowerShell 5.1 / PowerShell 7
+﻿# iScribe Update & Build v6.3 — Windows PowerShell 5.1 / PowerShell 7
 # Auto: offer local CI by default; cloud CI only after explicit selection.
 # Local: test exact merge commit, then normal push; no Actions dispatch.
 # Online: dispatch CI once for the pinned candidate, wait, then ordinary PR merge.
@@ -147,10 +147,57 @@ function Git-Text([string[]]$GitArgs) {
     if ($r.ExitCode -ne 0) { throw ('git: ' + ($GitArgs -join ' ')) }
     return $r.Text
 }
+# CI-05: retry only safe GETs and reconciled diagnostic writes. Never
+# automatically retry workflow dispatch, git push, PR merge or test commands.
+function Get-ApiFailureKind([string]$ErrorText) {
+    if ($ErrorText -match '(?i)\bHTTP\s*[: ]?\s*([1-5][0-9]{2})\b') {
+        $status=[int]$Matches[1]
+        if ($status -eq 404) { return 'not-found' }
+        if ($status -in @(408,429,500,502,503,504)) { return 'transient' }
+        if ($status -eq 403 -and $ErrorText -match '(?i)rate limit') { return 'rate-limited' }
+        if ($status -in @(409,422)) { return 'conflict' }
+        return 'permanent'
+    }
+    if ($ErrorText -match '(?i)\b(ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|i/o timeout|TLS handshake timeout|connection reset|connection refused|connection timed out|no such host|temporary failure in name resolution|unexpected EOF|network is unreachable)\b') { return 'transient' }
+    return 'unknown'
+}
+function Invoke-GhApiOnce([string[]]$CliArgs) {
+    $errFile=Join-Path $env:TEMP ('iscribe-gh-error-'+[guid]::NewGuid().ToString('N')+'.txt')
+    $prior=$ErrorActionPreference
+    try {
+        $ErrorActionPreference='Continue'
+        $output=& gh.exe @CliArgs 2> $errFile
+        $code=$LASTEXITCODE
+        $err=''
+        if (Test-Path -LiteralPath $errFile -PathType Leaf) { $err=[IO.File]::ReadAllText($errFile) }
+        $kind='success'
+        if ($code -ne 0) { $kind=Get-ApiFailureKind $err }
+        # Never log or serialize raw stderr or response bodies.
+        return @{ExitCode=$code; Text=(($output | Out-String).Trim()); Kind=$kind}
+    } finally {
+        $ErrorActionPreference=$prior
+        Remove-Item -LiteralPath $errFile -Force -ErrorAction SilentlyContinue
+    }
+}
+function Wait-ApiRetry([int]$Attempt) {
+    $seconds=@(2,5)[$Attempt-1]
+    Write-Host "Временная ошибка GitHub API. Повтор через $seconds с."
+    Start-Sleep -Seconds $seconds
+}
+function Invoke-GhApiRead([string]$Endpoint) {
+    # Explicit method, so this helper cannot accidentally dispatch or mutate.
+    for ($attempt=1; $attempt -le 3; $attempt++) {
+        $r=Invoke-GhApiOnce @('api','-X','GET',$Endpoint)
+        if ($r.Kind -ne 'transient' -or $attempt -eq 3) { return $r }
+        Add-DiagnosticEvent 'api-retry' 'read-transient' $r.ExitCode
+        Wait-ApiRetry $attempt
+    }
+}
 function Gh-Json([string[]]$CliArgs) {
-    $r = Capture 'gh.exe' $CliArgs
+    if ($CliArgs.Count -ne 2 -or $CliArgs[0] -ne 'api') { throw 'Gh-Json accepts only read-only API endpoints.' }
+    $r=Invoke-GhApiRead $CliArgs[1]
     if ($r.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($r.Text)) {
-        throw ('GitHub CLI: ' + ($CliArgs -join ' ') + '. Проверьте gh auth status и доступ.')
+        throw ('GitHub API read failed: '+$r.Kind+'. Проверьте gh auth status и доступ.')
     }
     return ($r.Text | ConvertFrom-Json)
 }
@@ -471,7 +518,7 @@ function Save-DiagnosticJournal([string]$LocalLog) {
     catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
     $report=[ordered]@{
         schema='iscribe-build-diagnostics/v2'
-        script_version='6.2'
+        script_version='6.3'
         utc=[DateTime]::UtcNow.ToString('o')
         route=$script:DiagnosticRoute
         revision=(Get-SafeSha $script:Revision)
@@ -490,35 +537,91 @@ function Save-DiagnosticJournal([string]$LocalLog) {
     [IO.File]::WriteAllText($journalPath,($report | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
     return $journalPath
 }
-function Upload-DiagnosticJournal([string]$JournalPath) {
-    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return }
-    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return }
-    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return }
-    $repoInfo=Capture 'gh.exe' @('api',('repos/'+$DiagnosticsRepo))
+function Get-VerifiedDiagnosticRepo {
+    $repoInfo=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
     if ($repoInfo.ExitCode -ne 0 -or -not $repoInfo.Text) {
-        Write-Warning 'Диагностический репозиторий недоступен. Проверьте существование и права gh. Журнал оставлен локально.'
-        return
+        Write-Warning ('Диагностический репозиторий недоступен: '+$repoInfo.Kind+'. Проверьте существование и права gh.')
+        return $null
     }
     $info=$repoInfo.Text | ConvertFrom-Json
     if ($info.full_name -ne $DiagnosticsRepo -or $info.private -ne $true -or $info.visibility -ne 'private' -or $info.permissions.push -ne $true -or $info.archived -eq $true -or -not $info.default_branch) {
         Write-Warning 'Не подтверждены приватность, активность и права записи репозитория. Ничего не отправлено.'
-        return
+        return $null
     }
-    # Unique file per failed invocation, never overwrite a previous report.
-    $name='failure-'+[DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N')+'.json'
-    $remotePath='failures/'+[DateTime]::UtcNow.ToString('yyyy-MM')+'/'+$name
-    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    return $info
+}
+function Get-GitBlobSha([byte[]]$Bytes) {
+    # GitHub contents API uses Git blob SHA-1, not SHA-1 of raw file bytes.
+    $header=[Text.Encoding]::ASCII.GetBytes(('blob '+$Bytes.Length+[char]0))
+    $buffer=[byte[]]::new($header.Length+$Bytes.Length)
+    [Buffer]::BlockCopy($header,0,$buffer,0,$header.Length)
+    [Buffer]::BlockCopy($Bytes,0,$buffer,$header.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$ExpectedSha) {
+    $r=Invoke-GhApiRead ($Path+'?ref='+[uri]::EscapeDataString($Branch))
+    if ($r.ExitCode -ne 0) {
+        if ($r.Kind -eq 'not-found') { return 'absent' }
+        return 'unknown'
+    }
+    try {
+        $file=$r.Text | ConvertFrom-Json
+        if ($file.type -ceq 'file' -and $file.sha -ceq $ExpectedSha) { return 'matched' }
+        return 'conflict'
+    } catch { return 'unknown' }
+}
+function Upload-DiagnosticJournal([string]$JournalPath) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { return }
     $bytes=[IO.File]::ReadAllBytes($JournalPath)
     if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return }
-    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=[string]$info.default_branch}
+    $expected=Get-GitBlobSha $bytes
+    $branch=[string]$info.default_branch
+    # Stable filename for these exact bytes: all retries use the same path.
+    $report=$null
+    try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
+    $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    $remotePath='failures/'+$utc.ToString('yyyy-MM')+'/failure-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
+    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
     $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
     try {
         [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
-        $result=Capture 'gh.exe' @('api','-X','PUT',$path,'--input',$json)
-        if ($result.ExitCode -ne 0) { Write-Warning 'Отправка журнала не подтверждена; локальная копия сохранена. Автоматического повтора пока нет.'; return }
-        $receipt=$result.Text | ConvertFrom-Json
-        if ($receipt.content.path -cne $remotePath -or $receipt.content.sha -notmatch '^[0-9a-f]{40}$') { Write-Warning 'GitHub не подтвердил точный файл диагностики; локальная копия сохранена.'; return }
-        Write-Host "Диагностический журнал GitHub: https://github.com/$DiagnosticsRepo/blob/$($info.default_branch)/$remotePath"
+        for ($attempt=1; $attempt -le 3; $attempt++) {
+            # Recheck the privacy and access gate before every write.
+            $current=Get-VerifiedDiagnosticRepo
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return }
+            $before=Get-DiagnosticRemoteState $path $branch $expected
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return }
+            # Create only: no sha field, no overwriting an existing file.
+            $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
+            if ($result.ExitCode -eq 0) {
+                try {
+                    $receipt=$result.Text | ConvertFrom-Json
+                    if ($receipt.content.path -ceq $remotePath -and $receipt.content.sha -ceq $expected) {
+                        Write-Host "Диагностический журнал GitHub: $url"
+                        return
+                    }
+                } catch { }
+            }
+            # A timeout can mean the server already committed the file.
+            # Reconcile by exact path and blob hash before allowing retry.
+            $after=Get-DiagnosticRemoteState $path $branch $expected
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return }
+            if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
+                Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
+                return
+            }
+            Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
+            Wait-ApiRetry $attempt
+        }
     } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
 }
 
