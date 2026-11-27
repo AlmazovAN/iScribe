@@ -326,6 +326,15 @@ Check 'changed manifest blocks publish' {
     try { Throws { Assert-CurrentCandidate $true } 'Release manifest changed' } finally { $script:FakePR.body=$manifestBody; $script:SelectedManifest=$null }
 }
 
+Check 'diagnostics reconstruct known test source without local path' {
+    Equal (Get-DiagnosticCode "Split-Path : Cannot bind argument to parameter 'Path' because it is an empty string.") 'EMPTY_PATH'
+    Equal (ConvertTo-SafeLogLine "Split-Path : Cannot bind argument to parameter 'Path' because it is an empty string.") 'PowerShell: Path is empty'
+    Equal (ConvertTo-SafeLogLine 'At C:\Users\Example\Temp\scripts\Test-CI06.ps1:4 char:56') 'Source: scripts/Test-CI06.ps1:4:56'
+    Equal (ConvertTo-SafeLogLine 'FAIL  scripts/local-pipeline.test.mjs > PowerShell local pipeline regression suite') 'Failed test: scripts/local-pipeline.test.mjs / PowerShell local pipeline regression suite'
+    Equal (ConvertTo-SafeLogLine 'Tests  1 failed | 220 passed (221)') 'Tests: 1 failed, 220 passed (221 total)'
+    Equal (ConvertTo-SafeLogLine 'At C:\Users\Example\Temp\scripts\private.ps1:4 char:56') $null
+}
+
 Write-Host "CI-06 OFFLINE: $script:Pass passed, $script:Fail failed"
 if ($script:Fail -ne 0) { exit 1 }
 exit 0
