@@ -1,8 +1,14 @@
 ﻿# CI-06 acceptance harness. Windows PowerShell 5.1 / PowerShell 7.
 # No production entry point is executed. All remote/build operations are mocked.
 [CmdletBinding()]
-param([string]$Source = (Join-Path (Split-Path -Parent $PSScriptRoot) 'iScribe-Update-Build.ps1'))
+param([string]$Source = '')
 $ErrorActionPreference='Stop'
+if ([string]::IsNullOrWhiteSpace($Source)) {
+    $here=$PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($here)) { $here=Split-Path -Parent $MyInvocation.MyCommand.Path }
+    $Source=Join-Path (Split-Path -Parent $here) 'iScribe-Update-Build.ps1'
+}
+if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw 'CI harness source script not found.' }
 $script:Pass=0
 $script:Fail=0
 function Check([string]$Name,[scriptblock]$Body) {
