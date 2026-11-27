@@ -1,10 +1,10 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
-import {inspectStreamedAudio,openStreamedAudio,type StreamedAudio} from './streamedAudio';
+import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
-import {createJob,isRunning,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams,type WindowInspection,type WindowInspectionStrategy} from './jobs';
+import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow} from './recognitionProgress';
@@ -26,7 +26,6 @@ import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefe
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
-import {browserEvidenceHints,createHardwareEvidence,downloadHardwareEvidence} from './hardwareAcceptance';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null;calibrateNext:boolean};
 type StreamSession={audio:StreamedAudio;windows:number;rotations:number;closed:boolean};
 type SplitPart={part:number;totalParts:number};
@@ -48,7 +47,6 @@ export class JobRunner{
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
  private benchmarkDownload:typeof downloadBenchmarkJson;
- private hardwareDownload:typeof downloadHardwareEvidence;
  private decode:typeof decodeAudio;
  private openStream:typeof openStreamedAudio;
  private initialization:Promise<void>|undefined;
@@ -65,11 +63,11 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;downloadHardware?:typeof downloadHardwareEvidence;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;downloadBenchmark?:typeof downloadBenchmarkJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
-  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;this.hardwareDownload=options.downloadHardware??downloadHardwareEvidence;
+  this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;this.benchmarkDownload=options.downloadBenchmark??downloadBenchmarkJson;
   this.openStream=options.openStream??openStreamedAudio;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
@@ -132,33 +130,13 @@ export class JobRunner{
   const name='iscribe_benchmark_'+id.slice(0,8).replace(/[^a-z0-9]/gi,'')+'.json';
   this.benchmarkDownload(benchmarkReport(job),name);
  }
- async exportHardwareEvidence(id:string){
-  await this.init();
-  const job=this.job(id);
-  if(this.state.activeId===id||isRunning(job.stage)||job.stage==='queued')
-   throw new Error('Завершите текущий этап задания перед выгрузкой контрольного протокола.');
-  // Read the durable checkpoint and source from IndexedDB rather than
-  // trusting the live React snapshot. No source bytes or transcript leave.
-  const [stored,source,hints]=await Promise.all([
-   this.store.get(id,false),this.store.audio(id),browserEvidenceHints()
-  ]);
-  const report=createHardwareEvidence(job,stored,source,hints);
-  this.hardwareDownload(report,'iscribe_hardware_evidence_'+id.slice(0,8)+'.json');
- }
- private async inspectPcm(id:string,pcm:Float32Array|StreamedAudio,signal?:AbortSignal,file?:File,session?:StreamSession):Promise<AudioInspectionReport>{
+ private async inspectPcm(id:string,pcm:Float32Array,signal?:AbortSignal):Promise<AudioInspectionReport>{
   this.traceEvent(id,'audio-check-start','audio',{pcmSamples:pcm.length});
   await this.persist(id);
   try{
    const started=benchmarkNow();
    const onProgress=(done:number,total:number)=>this.set({operation:`Проверка аудио: окно ${done}/${total}`});
-   const report=pcm instanceof Float32Array
-    ?await inspectDecodedPcm(pcm,{signal,onProgress})
-    :await inspectStreamedAudio(pcm,signal,onProgress,async(window,index,total)=>{
-      if(!session||!file)throw new Error('Отсутствует сессия проверки потокового аудио.');
-      await this.rotateStreamIfNeeded(id,session,file,index,total,true);
-      const {report}=await this.readCheckedStreamWindow(id,session.audio,window,index,total,true);
-      session.windows++;return report;
-     });
+   const report=await inspectDecodedPcm(pcm,{signal,onProgress});
    this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
    this.patch(id,{audioCheck:{status:'passed',checkedAt:Date.now(),report}});
    this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount});
@@ -173,100 +151,6 @@ export class JobRunner{
    }
    throw error;
   }
- }
- async inspectAudio(id:string):Promise<void>{
-  if(this.state.busy||this.queue.length)throw new Error('Дождитесь завершения текущей операции перед проверкой аудио.');
-  this.job(id);
-  this.cancelled=false;this.abort=new AbortController();
-  this.set({busy:true,activeId:id,operation:'Проверка аудио'});
-  try{
-   await this.exclusive(async()=>{
-    const file=await this.store.audio(id);
-    if(!file)throw new Error('Исходное аудио недоступно в браузере.');
-    this.traceEvent(id,'audio-start','audio');await this.persist(id);
-    const started=Date.now();
-    const pcm=await this.readAudio(file);
-    const session=pcm instanceof Float32Array?undefined:this.newStreamSession(pcm);
-    let completed=false;
-    try{
-     this.check();this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-started,pcmSamples:pcm.length,decoderId:session?.audio.decoderId});
-     await this.inspectPcm(id,pcm,this.abort!.signal,file,session);completed=true;
-    }finally{if(session){this.closeStreamSession(id,session,completed?'finish':this.cancelled?'cancel':'error');await this.persist(id)}}
-   });
-   this.set({notice:'Аудио проверено без запуска Whisper. Результат отображён в строке файла.'});
-  }catch(error){
-   if(!this.cancelled&&this.job(id).audioCheck?.status!=='failed'){
-    const problem=error instanceof AudioValidationError?error.message:'Не удалось декодировать или проверить аудиофайл.';
-    this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
-    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error)});
-    try{await this.persist(id)}catch{/* Browser storage may be unavailable. */}
-   }
-   this.set({notice:this.cancelled?'Проверка аудио отменена.':error instanceof AudioValidationError?error.message:'Проверка аудио не завершена. См. диагностику JSON.'});
-  }finally{
-   this.abort=null;this.set({busy:false,activeId:null,operation:''});
-   this.continuePending();
-  }
- }
- // Standalone targeted probe: open a fresh streaming decoder, seek directly
- // to the chosen ASR window, and never call the model or reserve retries.
- async inspectWindow(id:string,windowNumber:number,strategy:WindowInspectionStrategy):Promise<void>{
-  await this.init();
-  if(!Number.isSafeInteger(windowNumber)||windowNumber<1)throw new Error('Укажите целый номер окна от 1.');
-  if(strategy!=='whole'&&strategy!=='split')throw new Error('Неизвестный способ проверки.');
-  const initial=this.job(id);
-  if(this.state.busy||this.queue.length||this.removing.has(id)||isRunning(initial.stage)||initial.stage==='queued')
-   throw new Error('Дождитесь завершения текущей операции перед проверкой окна.');
-  this.cancelled=false;this.abort=new AbortController();
-  this.set({busy:true,activeId:id,operation:'Проверка аудио · окно '+windowNumber});
-  const started=benchmarkNow();
-  const base={window:windowNumber,strategy,committedWindows:initial.nextWindow};
-  let result:WindowInspection|undefined;
-  try{
-   await this.exclusive(async()=>{
-    const file=await this.store.audio(id);
-    this.check();
-    if(!file)throw new Error('Исходное аудио недоступно в браузере.');
-    // Preserve the exact original source, even for small files; this probe
-    // intentionally exercises the streaming decoder rather than full decode.
-    this.traceEvent(id,'window-inspection-start','audio',base);
-    await this.persist(id);this.check();
-    let session:StreamSession|undefined;
-    let range:Pick<WindowInspection,'startSample'|'endSample'|'totalWindows'>={};
-    let failureStage:StreamStage='open';
-    const traceStart=this.job(id).trace?.at(-1);
-    try{
-     session=this.newStreamSession(await this.openGuardedStream(file,this.abort!.signal));
-     this.check();
-     const windows=audioWindows(session.audio.length,true),window=windows[windowNumber-1];
-     range={totalWindows:windows.length};
-     if(!window)throw new AudioValidationError(windowNumber,null,'invalid-window');
-     range={...range,startSample:window.start,endSample:window.end};failureStage='decode';
-     const checked=strategy==='split'
-      ?await this.readSplitStreamWindow(id,session.audio,window,windowNumber-1,windows.length,true)
-      :await this.readCheckedStreamWindow(id,session.audio,window,windowNumber-1,windows.length,true);
-     this.check();
-     result={...range,window:windowNumber,strategy,status:'passed',checkedAt:Date.now(),elapsedMs:benchmarkNow()-started,report:checked.report,completedParts:strategy==='split'?Math.ceil((window.end-window.start)/STREAM_SUBWINDOW_SAMPLES):1};
-    }catch(error){
-     const events=this.job(id).trace??[];
-     const startIndex=traceStart?events.lastIndexOf(traceStart):-1;
-     const current=events.slice(startIndex+1).filter(e=>e.window===windowNumber);
-     const failed=current.filter(e=>e.code==='window-error').at(-1);
-     result={...range,window:windowNumber,strategy,status:this.cancelled?'cancelled':'failed',checkedAt:Date.now(),elapsedMs:benchmarkNow()-started,
-      completedParts:current.filter(e=>e.code==='stream-split-part-ready').length,errorKind:this.cancelled?'cancelled':traceErrorKind(error),
-      failureStage:error instanceof StreamDecodeStalledError?error.stage:failed?.streamStage??failureStage};
-    }finally{
-     if(session)this.closeStreamSession(id,session,result?.status==='passed'?'finish':this.cancelled?'cancel':'error');
-    }
-    if(!result)throw new Error('Проверка окна не завершена.');
-    // Store at most the two latest strategies for the same window. Never
-    // overwrite whole-file PCM check, checkpoint, ASR text or recovery budget.
-    const final=result;
-    this.patch(id,{windowInspections:[...(this.job(id).windowInspections??[]).filter(r=>r.window===windowNumber&&r.strategy!==strategy),final]});
-    this.traceEvent(id,final.status==='passed'?'window-inspection-pass':final.status==='cancelled'?'window-inspection-cancelled':'window-inspection-error','audio',{...base,...range,elapsedMs:final.elapsedMs,streamStage:final.failureStage,errorKind:final.errorKind,pcmSamples:final.report?.pcmSamples});
-    await this.persist(id);
-   });
-   this.set({notice:result?.status==='passed'?'Проверка окна завершена. Whisper не запускался.':result?.status==='cancelled'?'Проверка окна отменена.':'Проверка окна не пройдена. См. диагностику JSON.'});
-  }finally{this.abort=null;this.set({busy:false,activeId:null,operation:''});this.continuePending()}
  }
  private traceEvent(id:string,code:TraceCode,phase:TracePhase,fields:Omit<TraceEvent,'at'|'phase'|'code'>={}){
   const job=this.job(id);

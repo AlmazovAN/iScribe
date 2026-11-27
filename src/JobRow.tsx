@@ -4,7 +4,7 @@ import {usesStreamedAudio} from './audio';
 import {isRunning,audioWindows} from './jobs';
 import {checkpointProgress} from './recognitionProgress';
 import {formatTime} from './formatTranscript';
-export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,onPreview,checking=false,queuePosition}:{job:Job;active:boolean;onStart:(id:string)=>void;onExport:(id:string,variant:'plain'|'time'|'speakers')=>void;onTrash:(id:string)=>void;onPreview:(id:string)=>void;checking?:boolean;queuePosition?:number}){
+export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,onPreview,queuePosition}:{job:Job;active:boolean;onStart:(id:string)=>void;onExport:(id:string,variant:'plain'|'time'|'speakers')=>void;onTrash:(id:string)=>void;onPreview:(id:string)=>void;queuePosition?:number}){
  const queued=queuePosition!==undefined&&!active,running=isRunning(job.stage);
  const textSegments=job.volatileSegments??job.segments;
  const hasText=useMemo(()=>textSegments.some(s=>s.text.trim()),[textSegments]);
@@ -17,13 +17,13 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
   ?audioWindows(samples,streamed):[],[samples,streamed,job.size]);
  const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
  const retry=job.stage==='partial'||job.stage==='error'||job.stage==='interrupted'||job.stage==='cancelled';
- const status=checking?'Проверка аудио':
+ const status=
   active&&queuePosition!==undefined&&job.stage!=='recognizing'&&!job.asrComplete?'Ожидание окружения':
   active&&(job.stage==='recognizing'||job.stage==='speakers')?'Распознавание':
   queued?'Ожидание очереди':
   job.asrComplete?'Распознано':
   job.stage==='waiting'?'Ожидание запуска':job.status;
- const hasMeter=running||queued||checking||job.nextWindow>0;
+ const hasMeter=running||queued||job.nextWindow>0;
  const currentWindow=progress&&job.stage==='recognizing'
   ?Math.min(progress.completedWindows+1,progress.totalWindows):progress?.completedWindows;
  const timeline=(seconds:number)=>progress
@@ -36,7 +36,7 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
   (job.stage==='speakers'&&speakerPercent>0&&speakerPercent<100?'≈ ':'')+timeline(speakerTime);
  const detail=job.stage==='recognizing'?(job.error?'Восстановление Worker · повтор окна':null):
   queued&&job.status==='В очереди'?null:job.status;
- const trashLabel=(checking?'Остановить проверку':queuePosition!==undefined||active?'Убрать из очереди':'Удалить запись')+' · '+job.name;
+ const trashLabel=(queuePosition!==undefined||active?'Убрать из очереди':'Удалить запись')+' · '+job.name;
  return <article className={'file-row '+(active?'active':'')} aria-label={job.name}>
   <div className="file-info"><span className="file-icon" aria-hidden="true">≋</span><div><button className="file-title" onClick={()=>onPreview(job.id)} title="Выбрать запись для диагностики">{job.name}</button><small>{validDuration?`${Math.floor(duration/60)} мин ${Math.floor(duration%60)} с`:'Длительность уточняется'} · {(job.size/1024/1024).toLocaleString('ru-RU',{maximumFractionDigits:1})} МБ{streamed?' · потоковый режим':''}</small></div></div>
   <div className="file-state">
@@ -52,14 +52,14 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
      <dt>Time codes</dt><dd title="Позиция последнего сохранённого таймкода">{timeline(timeCodeEnd)}</dd>
      <dt>Speakers</dt><dd title={job.stage==='speakers'?'Оценка по прогрессу разделения говорящих':undefined}>{speakerStatus}</dd>
     </dl>
-    <div className="file-progress-track" data-processing={active&&(running||checking)}>
-     <progress max={100} value={checking?undefined:job.stage==='speakers'?job.percent??undefined:progress?.percent} aria-label={`Обработка ${job.name}`}/>
+    <div className="file-progress-track" data-processing={active&&running}>
+     <progress max={100} value={job.stage==='speakers'?job.percent??undefined:progress?.percent} aria-label={`Обработка ${job.name}`}/>
     </div>
    </>}
    <small>{job.params.language}{job.backend?' · '+job.backend:''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
   </div>
   <div className="file-actions">
-   {(!active&&!running&&(!queued||job.stage==='interrupted')&&!checking&&(job.stage==='waiting'||retry))&&<button className="start" onClick={()=>onStart(job.id)}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
+   {(!active&&!running&&(!queued||job.stage==='interrupted')&&(job.stage==='waiting'||retry))&&<button className="start" onClick={()=>onStart(job.id)}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
    <button disabled={!hasText} onClick={()=>onExport(job.id,'plain')}>Скачать TXT</button>
    <button disabled={!hasText} onClick={()=>onExport(job.id,'time')}>TXT + time</button>
    <button disabled={!hasSpeakers} onClick={()=>onExport(job.id,'speakers')}>TXT + time + speaker{job.speakerSegments&&job.stage!=='done'?' *':''}</button>
