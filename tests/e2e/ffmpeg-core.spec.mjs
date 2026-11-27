@@ -25,5 +25,5 @@ test('DEC-01 real FFmpeg rejects invalid compressed input',async({page})=>{
   try{await decodeFfmpegAudio(new File(['not an audio stream'],'synthetic.mp3'));return 'unexpected success';}
   catch(error){return String(error.message);}
  });
- expect(result).toContain('не удалось декодировать');
+ expect(result.toLowerCase()).toContain('не удалось декодировать');
 });
