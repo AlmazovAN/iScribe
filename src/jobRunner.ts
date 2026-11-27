@@ -1,7 +1,7 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
-import {decodeSelectedAudio} from './audioDecoderProvider';
-import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
+import {decodeSelectedAudio,openSelectedStream} from './audioDecoderProvider';
+import type {StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
 import {JobStore} from './jobStore';
@@ -48,7 +48,7 @@ export class JobRunner{
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
  private decode:typeof decodeAudio;
- private openStream:typeof openStreamedAudio;
+ private openStream:typeof openSelectedStream;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -63,12 +63,12 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openStreamedAudio;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode??decodeSelectedAudio;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
-  this.openStream=options.openStream??openStreamedAudio;
+  this.openStream=options.openStream??openSelectedStream;
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
   this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;

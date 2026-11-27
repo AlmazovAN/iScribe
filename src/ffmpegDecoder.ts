@@ -2,12 +2,12 @@ import {MAX_SECONDS,usesStreamedAudio,validateFile} from './audio';
 import {PCM_SAMPLE_RATE,inspectDecodedPcm} from './audioValidation';
 import workerSource from './ffmpegWorker.js?raw';
 
-const CORE='assets/ffmpeg-core-0.12.10.js';
-const WASM='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
+export const FFMPEG_CORE_ASSET='assets/ffmpeg-core-0.12.10.js';
+export const FFMPEG_WASM_ASSET='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
 const MAX_SAMPLES=MAX_SECONDS*PCM_SAMPLE_RATE;
 const DEADLINE_MS=10*60*1000;
 type Reply={kind:'pcm';buffer:ArrayBuffer}|{kind:'error';code:'decode'|'length'|'runtime';status?:number};
-function assetURL(name:string):string{
+export function assetURL(name:string):string{
  const embedded=(globalThis as typeof globalThis&{__iscribeAssets?:Record<string,string>}).__iscribeAssets?.[name];
  return embedded??new URL(import.meta.env.DEV?'/'+name:name,document.baseURI).href;
 }
@@ -47,7 +47,7 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
    };
    active.onerror=()=>finish(new Error('FFmpeg: ошибка Worker.'));
    active.onmessageerror=()=>finish(new Error('FFmpeg: ошибка передачи PCM.'));
-   try{active.postMessage({file,coreURL:assetURL(CORE),wasmURL:assetURL(WASM),maxSamples:MAX_SAMPLES});}
+   try{active.postMessage({file,coreURL:assetURL(FFMPEG_CORE_ASSET),wasmURL:assetURL(FFMPEG_WASM_ASSET),maxSamples:MAX_SAMPLES});}
    catch(error){finish(error);}
   });
   // Release the WASM heap before PCM inspection / Whisper.
