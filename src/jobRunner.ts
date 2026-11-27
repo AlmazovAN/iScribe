@@ -816,6 +816,7 @@ export class JobRunner{
       if(prefetched.result.ok){
        const prepared=prefetched.result.value;
        if(prepared.decoderId!==session.audio.decoderId)throw new Error('Устаревший буфер декодера.');
+       this.resources.observePrefetch(prefetched.ready,waitMs);
        pcm=prepared.pcm;
        const fields={window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,decoderId:prepared.decoderId,attempt:1,committedWindows:this.job(id).nextWindow,strategy:'whole' as const};
        this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage:'decode'});
