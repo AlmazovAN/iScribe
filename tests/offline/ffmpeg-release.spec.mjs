@@ -22,7 +22,9 @@ async function persistedAudio(page){
    tx.oncomplete=()=>{
     db.close();const job=all.result.find(j=>j.name==='synthetic-release.wav');
     resolve(job?{decoder:job.decoderIdentity,check:job.audioCheck?.status,samples:job.audioCheck?.report?.pcmSamples,
-     ready:job.trace?.some(e=>e.code==='audio-ready'&&e.decoderKind==='ffmpeg'),stage:job.stage}:null);
+     ready:job.trace?.some(e=>e.code==='audio-ready'&&e.decoderKind==='ffmpeg'),stage:job.stage,
+     lastEvents:job.trace?.slice(-5).map(e=>({code:e.code,phase:e.phase,errorKind:e.errorKind,decoderFailure:e.decoderFailure,decoderExitCode:e.decoderExitCode})),
+     error:job.error}:null);
    };
    tx.onerror=()=>{db.close();reject(tx.error)};
   };
@@ -35,7 +37,13 @@ async function decodeFromUi(page){
  });
  const row=page.locator('.file-row');
  await row.getByRole('button',{name:'Начать',exact:true}).click();
- await expect.poll(()=>persistedAudio(page),{timeout:90000}).toMatchObject({
+ // Stop immediately on terminal failure, report the actual synthetic job
+ // error/typed trace rather than waiting 90 seconds for impossible success.
+ await expect.poll(async()=>{
+  const job=await persistedAudio(page);
+  return Boolean(job&&(job.check==='passed'||job.stage==='error'||job.stage==='cancelled'||job.stage==='partial'));
+ },{timeout:90000}).toBe(true);
+ expect(await persistedAudio(page)).toMatchObject({
   decoder:{kind:'ffmpeg',route:'full'},check:'passed',samples:16000,ready:true
  });
  await expect(row).toContainText('FFmpeg');
@@ -46,6 +54,11 @@ test('DEC-04 actual FFmpeg decodes through the single file:// HTML',async({page,
  const otherFiles=[];
  context.on('request',req=>{if(req.url().startsWith('file:')&&req.url()!==localUrl)otherFiles.push(req.url());});
  await page.goto(localUrl);
+ await expect(page.getByRole('button',{name:'Выбрать файлы'})).toBeEnabled();
+ expect(await page.evaluate(()=>{
+  const a=globalThis.__iscribeFfmpegEmbedded;
+  return Boolean(a?.core instanceof Blob&&a?.wasm instanceof Blob&&a.core.size>0&&a.wasm.size>0);
+ })).toBe(true);
  await decodeFromUi(page);
  expect(otherFiles).toEqual([]);
 });

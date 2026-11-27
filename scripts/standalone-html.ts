@@ -52,8 +52,11 @@ try {
  const compressed=new Blob([decode(embedded[wasm])]);
  const binary=await new Response(compressed.stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
  assets[wasm]=blobUrl([binary],"application/wasm");
- assets[${JSON.stringify(ffmpegCore)}]=blobUrl([decode(embedded[${JSON.stringify(ffmpegCore)}])],"text/javascript");
- assets[${JSON.stringify(ffmpegWasm)}]=blobUrl([decode(embedded[${JSON.stringify(ffmpegWasm)}])],"application/octet-stream");
+ // file:// uses opaque origins. Do not fetch page-owned FFmpeg Blob URLs inside a Worker.
+ globalThis.__iscribeFfmpegEmbedded={
+  core:new Blob([decode(embedded[${JSON.stringify(ffmpegCore)}])],{type:"text/javascript"}),
+  wasm:new Blob([decode(embedded[${JSON.stringify(ffmpegWasm)}])],{type:"application/octet-stream"})
+ };
  assets[worker]=blobUrl(["globalThis.__iscribeAssets="+JSON.stringify(assets)+";\\n",decode(embedded[worker])],"text/javascript");
  globalThis.__iscribeAssets=assets;
  globalThis.__iscribeWasmBinary=binary;

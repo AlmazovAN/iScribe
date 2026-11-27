@@ -94,3 +94,6 @@ DEC-04: FFmpeg full route still limited to one hour, streamed mode still exclude
 
 
 DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playwright 14/16, two valid WAV stream opens FAIL at FFprobe. Candidate patch addresses known core 0.12.10 false -1 and reads validated JSON from a fresh file; new probe diagnostics. Revised candidate NOT TESTED; no main merge.
+
+
+DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web builds and web preflight PASS; offline 5/6 (file:// FFmpeg only). Standalone worker transport changed to inline core and cloned compressed Blob; revised candidate pending local CI.

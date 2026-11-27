@@ -1,6 +1,6 @@
 import {describe,expect,it} from 'vitest';
 import {chooseAudioDecoder,legacyAudioDecoder,ffmpegAudioDecoder} from './audioDecoderProvider';
-import {decodeFfmpegAudio,readFfmpegPcm} from './ffmpegDecoder';
+import {decodeFfmpegAudio,readFfmpegPcm,ffmpegWorkerAssets} from './ffmpegDecoder';
 import {MAX_PCM_SAMPLES} from './audioValidation';
 import {STREAM_AUDIO_BYTES} from './audio';
 describe('DEC-01: FFmpeg decoder contract',()=>{
@@ -27,4 +27,12 @@ describe('DEC-01: FFmpeg decoder contract',()=>{
   await expect(decodeFfmpegAudio(file)).rejects.toThrow('потоковый режим');
  });
  it('keeps the existing one-hour PCM contract',()=>expect(MAX_PCM_SAMPLES).toBe(57600000));
+});
+
+it('packages a classic worker with inline core and structured-cloned compressed WASM',async()=>{
+ const core=new Blob(['var createFFmpegCore=()=>{};']),wasm=new Blob(['compressed']);
+ const assets=ffmpegWorkerAssets('self.onmessage=()=>{};',{core,wasm});
+ expect(await assets.script.text()).toContain('var createFFmpegCore=()=>{};;\nself.onmessage=()=>{};');
+ expect(assets.input).toEqual({wasmBlob:wasm});
+ expect(()=>ffmpegWorkerAssets('worker',{core:new Blob([]),wasm})).toThrow('ресурсы FFmpeg');
 });

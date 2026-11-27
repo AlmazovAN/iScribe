@@ -1,6 +1,6 @@
 import {validateFile} from './audio';
 import {AudioValidationError,PCM_SAMPLE_RATE} from './audioValidation';
-import {assetURL,FFMPEG_CORE_ASSET,FFMPEG_WASM_ASSET} from './ffmpegDecoder';
+import {ffmpegWorkerAssets} from './ffmpegDecoder';
 import {allocateStreamDecoderId,type StreamedAudio,type StreamReadObserver} from './streamedAudio';
 import type {AudioWindow} from './recognitionProgress';
 import workerSource from './ffmpegStreamWorker.js?raw';
@@ -28,7 +28,8 @@ export function validateFfmpegWindowPcm(buffer:ArrayBuffer,expected:number):Floa
 export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Promise<StreamedAudio>{
  validateFile(file);signal?.throwIfAborted();
  const decoderId=allocateStreamDecoderId();
- const source=URL.createObjectURL(new Blob([workerSource],{type:'text/javascript'}));
+ const assets=ffmpegWorkerAssets(workerSource);
+ const source=URL.createObjectURL(assets.script);
  let worker:Worker;
  try{worker=new Worker(source)}catch(error){URL.revokeObjectURL(source);throw error}
  let closed=false,reading=false,nextId=0,pending:Pending|undefined;
@@ -69,7 +70,7 @@ export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Pro
  signal?.addEventListener('abort',abort,{once:true});
  try{
   signal?.throwIfAborted();
-  const opened=await send({kind:'open',file,coreURL:assetURL(FFMPEG_CORE_ASSET),wasmURL:assetURL(FFMPEG_WASM_ASSET)});
+  const opened=await send({kind:'open',file,...assets.input});
   if(opened.kind!=='opened'||!Number.isSafeInteger(opened.length)||opened.length<=0||
     !Number.isInteger(opened.sourceRate)||opened.sourceRate<8000||opened.sourceRate>384000)
    throw new FfmpegDecoderError('probe','open');

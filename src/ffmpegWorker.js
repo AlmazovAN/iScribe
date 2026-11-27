@@ -1,18 +1,30 @@
 // Classic, isolated Worker. This file is embedded as raw JS, not executed
 // on the UI thread. No audio names, content, or FFmpeg logs leave the Worker.
-self.onmessage=async({data:{file,coreURL,wasmURL,maxSamples}})=>{
+// Standalone supplies the core inline and a compressed Blob. Web supplies
+// pinned same-origin URLs. Never depend on file:// cross-context Blob fetch.
+async function initializeCore({coreURL,wasmURL,wasmBlob}){
+ let wasmBinary;
+ try{
+  if(wasmBlob instanceof Blob){
+   if(typeof self.createFFmpegCore!=='function')throw new Error('missing core');
+   wasmBinary=new Uint8Array(await new Response(wasmBlob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  }else{
+   self.importScripts(coreURL);
+   const response=await fetch(wasmURL);
+   if(!response.ok||!response.body)throw new Error('missing wasm');
+   wasmBinary=new Uint8Array(await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  }
+ }catch{throw new Error('asset')}
+ try{
+  return await self.createFFmpegCore(wasmBlob instanceof Blob?{wasmBinary}:{
+   wasmBinary,mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL}))
+  });
+ }catch{throw new Error('initialize')}
+}
+self.onmessage=async({data:{file,coreURL,wasmURL,wasmBlob,maxSamples}})=>{
  let core;
  try{
-  self.importScripts(coreURL);
-  const response=await fetch(wasmURL);
-  if(!response.ok||!response.body)throw Error('FFmpeg WASM asset unavailable');
-  const wasmBinary=new Uint8Array(await new Response(
-   response.body.pipeThrough(new DecompressionStream('gzip'))
-  ).arrayBuffer());
-  core=await self.createFFmpegCore({
-   wasmBinary,
-   mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL}))
-  });
+  core=await initializeCore({coreURL,wasmURL,wasmBlob});
   core.setLogger(()=>{});
   const fs=core.FS,workerfs=fs.filesystems?.WORKERFS;
   if(!workerfs){self.postMessage({kind:'error',code:'workerfs'});return;}
@@ -31,8 +43,9 @@ self.onmessage=async({data:{file,coreURL,wasmURL,maxSamples}})=>{
   // FS ownership is not guaranteed. Transfer an independently owned buffer.
   const result=Uint8Array.from(bytes).buffer;
   self.postMessage({kind:'pcm',buffer:result},[result]);
- }catch{
-  self.postMessage({kind:'error',code:'runtime'});
+ }catch(error){
+  const code=error?.message==='asset'||error?.message==='initialize'?error.message:'runtime';
+  self.postMessage({kind:'error',code});
  }finally{
   if(core){
    try{core.FS.unlink('/output')}catch{/* missing file */}

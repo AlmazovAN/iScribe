@@ -66,16 +66,29 @@ function probeMetadata(){
   if(fs.analyzePath(output).exists)fs.unlink(output);
  }
 }
-async function open({file,coreURL,wasmURL},id){
- self.importScripts(coreURL);
- const response=await fetch(wasmURL);
- if(!response.ok||!response.body)throw new Error('runtime');
- const wasmBinary=new Uint8Array(await new Response(
-  response.body.pipeThrough(new DecompressionStream('gzip'))
- ).arrayBuffer());
- core=await self.createFFmpegCore({
-  wasmBinary,mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL}))
- });
+// Standalone supplies the core inline and a compressed Blob. Web supplies
+// pinned same-origin URLs. Never depend on file:// cross-context Blob fetch.
+async function initializeCore({coreURL,wasmURL,wasmBlob}){
+ let wasmBinary;
+ try{
+  if(wasmBlob instanceof Blob){
+   if(typeof self.createFFmpegCore!=='function')throw new Error('missing core');
+   wasmBinary=new Uint8Array(await new Response(wasmBlob.stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  }else{
+   self.importScripts(coreURL);
+   const response=await fetch(wasmURL);
+   if(!response.ok||!response.body)throw new Error('missing wasm');
+   wasmBinary=new Uint8Array(await new Response(response.body.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  }
+ }catch{throw new Error('asset')}
+ try{
+  return await self.createFFmpegCore(wasmBlob instanceof Blob?{wasmBinary}:{
+   wasmBinary,mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL}))
+  });
+ }catch{throw new Error('initialize')}
+}
+async function open({file,coreURL,wasmURL,wasmBlob},id){
+ core=await initializeCore({coreURL,wasmURL,wasmBlob});
  const fs=core.FS,workerfs=fs.filesystems?.WORKERFS;
  if(!workerfs)throw new Error('workerfs');
  fs.mkdir('/source');
@@ -107,7 +120,7 @@ async function open({file,coreURL,wasmURL},id){
   throw new Error('duration');
  return {length,sourceRate};
 }
-const knownErrors=new Set(['runtime','workerfs','decode','coverage','probe','probe-exit','probe-json','probe-metadata','timeline','duration','window','protocol']);
+const knownErrors=new Set(['runtime','asset','initialize','workerfs','decode','coverage','probe','probe-exit','probe-json','probe-metadata','timeline','duration','window','protocol']);
 self.onmessage=async({data:request})=>{
  const {id,kind}=request;
  if(busy){self.postMessage({id,kind:'error',code:'protocol'});return;}

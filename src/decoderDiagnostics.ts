@@ -1,10 +1,10 @@
 export type AudioDecoderKind='legacy'|'ffmpeg';
 export type DecoderRoute='full'|'windowed';
 export type DecoderIdentity={kind:AudioDecoderKind;route:DecoderRoute;revision:string};
-export type FfmpegFailure='runtime'|'worker'|'timeout'|'decode'|'coverage'|'length'|'workerfs'|'probe'|'probe-exit'|'probe-json'|'probe-metadata'|'timeline'|'duration'|'window'|'protocol';
+export type FfmpegFailure='runtime'|'asset'|'initialize'|'worker'|'timeout'|'decode'|'coverage'|'length'|'workerfs'|'probe'|'probe-exit'|'probe-json'|'probe-metadata'|'timeline'|'duration'|'window'|'protocol';
 export type FfmpegStage='open'|'decode';
 const messages:Record<FfmpegFailure,string>={
- runtime:'Ошибка запуска или обработки.',worker:'Ошибка Worker.',timeout:'Превышено время декодирования.',
+ runtime:'Ошибка запуска или обработки.',asset:'Не удалось загрузить локальные ресурсы FFmpeg.',initialize:'Не удалось инициализировать FFmpeg WASM.',worker:'Ошибка Worker.',timeout:'Превышено время декодирования.',
  decode:'Не удалось декодировать аудиодорожку.',coverage:'Окно декодировано не полностью.',
  length:'Пустая запись или длительность более одного часа.',workerfs:'WORKERFS недоступна.',
  probe:'Не удалось определить параметры аудиодорожки.',
