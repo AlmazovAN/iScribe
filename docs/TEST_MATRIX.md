@@ -186,3 +186,15 @@ The initial PERF-01–09 NOT TESTED entries above describe status at creation; s
 | DEC-REC-2 | Resume pins provider/route/revision and retains saved text | Tests added; NOT TESTED |
 | DEC-REC-3 | JSON omits raw errors/audio/transcripts and labels decoder/phase | Tests added; NOT TESTED |
 | DEC-REC-4 | Real worker timeout, reopen/split, cancel and retry, checkpoint reload | NOT TESTED |
+
+
+## DEC-04
+
+| Gate | Expected | Status |
+| --- | --- | --- |
+| DEC-REF | Native FFmpeg 7.1.5 synthetic five-format full/seek/tail comparison | PASS for generated samples only |
+| DEC-DIST | Actual production FFmpeg decode via file:// and cached offline web | Tests added; NOT TESTED |
+| DEC-41 | Actual browser FFmpeg distant seek and six subwindows | Test added; NOT TESTED |
+| DEC-RETRY | Runner typed failure recovery and durable reservation | Tests added; NOT TESTED |
+| DEC-CI | npm ci, typecheck, lint, Vitest, both builds and browser suites | NOT TESTED |
+| DEC-HW | Real recordings, WebGPU/WASM and memory | NOT TESTED |

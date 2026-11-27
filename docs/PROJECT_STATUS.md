@@ -121,3 +121,8 @@ FFmpeg opt-in now covers the windowed route through WORKERFS and exact-length PC
 ## DEC-03 experimental candidate
 
 Persisted decoder identity, typed FFmpeg diagnostics and bounded automatic recovery. See docs/DEC-03_RECOVERY_DIAGNOSTICS.md. Local tests NOT TESTED.
+
+
+## DEC-04 release candidate
+
+New jobs default to FFmpeg in the candidate; legacy retained for pinned checkpoints and explicit comparison. Native CLI synthetic reference experiment observed PASS; local CI, real browser FFmpeg and hardware acceptance NOT TESTED. See docs/DEC-04_ACCEPTANCE_RELEASE.md. Public binary distribution pending GPL review.

@@ -14,11 +14,13 @@ self.onmessage=async({data:{file,coreURL,wasmURL,maxSamples}})=>{
    mainScriptUrlOrBlob:coreURL+'#'+btoa(JSON.stringify({wasmURL}))
   });
   core.setLogger(()=>{});
-  core.FS.writeFile('/input',new Uint8Array(await file.arrayBuffer()));
+  const fs=core.FS,workerfs=fs.filesystems?.WORKERFS;
+  if(!workerfs){self.postMessage({kind:'error',code:'workerfs'});return;}
+  fs.mkdir('/source');fs.mount(workerfs,{blobs:[{name:'input',data:file}]},'/source');
   // One extra second allows the caller to distinguish too-long audio
   // from a valid one-hour recording. Never silently truncate.
   core.exec('-hide_banner','-loglevel','error','-xerror','-threads','1',
-   '-i','/input','-map','0:a:0','-vn','-sn','-dn','-t',String(maxSamples/16000+1),
+   '-protocol_whitelist','file','-i','/source/input','-map','0:a:0','-vn','-sn','-dn','-t',String(maxSamples/16000+1),
    '-ac','1','-ar','16000','-c:a','pcm_f32le','-f','f32le','/output');
   const status=core.ret;
   if(status!==0){self.postMessage({kind:'error',code:'decode',status});return;}
@@ -33,7 +35,8 @@ self.onmessage=async({data:{file,coreURL,wasmURL,maxSamples}})=>{
   self.postMessage({kind:'error',code:'runtime'});
  }finally{
   if(core){
-   for(const name of ['/input','/output'])try{core.FS.unlink(name)}catch{/* missing file */}
+   try{core.FS.unlink('/output')}catch{/* missing file */}
+   try{core.FS.unmount('/source')}catch{/* not mounted */}
   }
  }
 };

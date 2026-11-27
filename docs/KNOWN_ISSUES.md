@@ -88,3 +88,6 @@ DEC-02: FFmpeg random-seek overlap, VBR duration/tail probe, repeated CLI memory
 
 
 DEC-03: untagged historical checkpoints are assumed legacy; experimental runs from DEC-01/02 must be recreated as new jobs. Real seek fidelity and full/stream recovery remain unverified.
+
+
+DEC-04: FFmpeg full route still limited to one hour, streamed mode still excludes speakers; legacy removal deferred until migration/hardware acceptance. Native CLI reference PASS is not browser/WASM acceptance. Public distribution requires corresponding-source/license review.

@@ -2,6 +2,8 @@ import {readFileSync,readdirSync,statSync} from 'node:fs';
 import {relative,resolve,join,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 
+const FFMPEG_CORE='assets/ffmpeg-core-0.12.10.js';
+const FFMPEG_WASM='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
 function assetNames(dist){
  const files=[];
  function visit(dir){
@@ -27,7 +29,8 @@ export function verifyReleasePackage(dist=resolve('dist')){
  const wasm=files.filter(name=>name.endsWith('.wasm.gz.bin'));
  if(!js.length)errors.push('Missing built application/Worker JS');
  if(!css.length)errors.push('Missing built CSS');
- if(!wasm.length)errors.push('Missing bundled ONNX WASM runtime');
+ if(!wasm.some(name=>name!==FFMPEG_WASM&&/ort-wasm/.test(name)))errors.push('Missing bundled ONNX WASM runtime');
+ for(const name of [FFMPEG_CORE,FFMPEG_WASM])if(!present.has(name))errors.push('Missing bundled FFmpeg asset: '+name);
  if(present.has('tests/e2e/harness.html'))errors.push('Synthetic ML test harness must not be published');
  if(errors.length)throw new Error(errors.join('; '));
  const index=readFileSync(join(dist,'index.html'),'utf8');
@@ -37,7 +40,8 @@ export function verifyReleasePackage(dist=resolve('dist')){
  if(!notices.trim())errors.push('Third-party notices are empty');
  if(!sw.includes('iscribe-shell-')||!sw.includes('iscribe:offline-probe'))
   errors.push('Missing versioned Service Worker or offline integrity probe');
- if(!wasm.every(name=>sw.includes(name)))errors.push('Service Worker omits ONNX WASM runtime');
+ if(!wasm.every(name=>sw.includes(name)))errors.push('Service Worker omits WASM runtime');
+ if(!sw.includes(FFMPEG_CORE))errors.push('Service Worker omits FFmpeg core loader');
  const links=[...index.matchAll(/(?:src|href)="(\.\/assets\/[^"]+)"/g)].map(match=>match[1].slice(2));
  if(!links.some(name=>name.endsWith('.js')))errors.push('index.html has no bundled JS entrypoint');
  if(links.some(name=>!present.has(name)))errors.push('index.html refers to absent asset');
@@ -48,7 +52,7 @@ export function verifyReleasePackage(dist=resolve('dist')){
  if(errors.length)throw new Error(errors.join('; '));
  return {status:'PASS',testType:'package-integrity-only',
   files:files.length,js:js.length,css:css.length,wasm:wasm.length,
-  offlineShell:true,notices:true,hardwareAcceptance:'NOT TESTED'};
+  offlineShell:true,ffmpegAssets:true,notices:true,hardwareAcceptance:'NOT TESTED'};
 }
 export function verifyStandalonePackage(dist=resolve('dist')){
  const files=assetNames(dist);
@@ -59,6 +63,8 @@ export function verifyStandalonePackage(dist=resolve('dist')){
     !html.includes('application/wasm')||!html.includes('assets.notices=')||
     /<(?:link|script)\b[^>]*(?:href|src)=/i.test(html))
   throw new Error('Incomplete standalone HTML or external entry assets');
+ for(const name of [FFMPEG_CORE,FFMPEG_WASM])if(!html.includes(JSON.stringify(name)+':'))
+  throw new Error('Missing embedded FFmpeg asset: '+name);
  return {status:'PASS',testType:'package-integrity-only',files:1,hardwareAcceptance:'NOT TESTED'};
 }
 

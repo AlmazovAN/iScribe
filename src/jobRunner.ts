@@ -1,7 +1,7 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
 import {chooseAudioDecoder,providerForDecoder,openSelectedStream} from './audioDecoderProvider';
-import {resolveJobDecoder,canRetryFfmpeg,ffmpegFailureFields,type DecoderIdentity} from './decoderDiagnostics';
+import {resolveJobDecoder,canRetryFfmpeg,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
 import type {StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
@@ -51,6 +51,7 @@ export class JobRunner{
  private decode?:typeof decodeAudio;
  private openStream?:typeof openSelectedStream;
  private activeDecoder?:DecoderIdentity;
+ private readonly requestedDecoder:AudioDecoderKind;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -65,12 +66,14 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.openStream=options.openStream;
+   // Injected test/alternate runtimes do not claim to be real FFmpeg.
+   this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
   this.streamOpenIdleMs=options.streamOpenIdleMs??DEFAULT_STREAM_OPEN_IDLE_MS;
   this.streamDecodeIdleMs=options.streamDecodeIdleMs??DEFAULT_STREAM_DECODE_IDLE_MS;
@@ -395,7 +398,7 @@ export class JobRunner{
   this.traceEvent(id,'audio-start','audio');
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
-  const requested=chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind;
+  const requested=this.requestedDecoder;
    const identity=resolveJobDecoder(this.job(id).decoderIdentity,resumed,requested,usesStreamedAudio(file.size)?'windowed':'full');
    this.activeDecoder=identity;
    this.patch(id,{decoderIdentity:identity});
@@ -492,7 +495,7 @@ export class JobRunner{
    // An already-started metadata transaction must settle before another
    // attempt can write a newer snapshot. Storage failure is not retryable.
    if(pendingTrace)await pendingTrace;
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),jsHeapBytes:traceHeapBytes()});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:error instanceof AudioValidationError?'pcm-check':streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),jsHeapBytes:traceHeapBytes()});
    throw error;
   }finally{accepting=false}
   if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
@@ -564,7 +567,7 @@ export class JobRunner{
    this.check();
    try{
     if(priorFailure){const error=priorFailure.error;priorFailure=undefined;
-     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:error instanceof AudioValidationError?'pcm-check':'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
      throw error;
     }
     const result=attempt===3?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);

@@ -16,9 +16,9 @@ export function providerForDecoder(kind:AudioDecoderKind):AudioDecoderProvider{
  return kind==='ffmpeg'?ffmpegAudioDecoder:legacyAudioDecoder;
 }
 export function chooseAudioDecoder(search:string):AudioDecoderProvider{
- return providerForDecoder(new URLSearchParams(search).get('decoder')==='ffmpeg'?'ffmpeg':'legacy');
+ return providerForDecoder(new URLSearchParams(search).get('decoder')==='legacy'?'legacy':'ffmpeg');
 }
-// Both routes are opt-in until the final acceptance stage.
+// FFmpeg is the candidate default; legacy remains an explicit comparison/compatibility path.
 export function decodeSelectedAudio(file:File,signal?:AbortSignal):Promise<Float32Array>{
  return chooseAudioDecoder(typeof location==='undefined'?'':location.search).decode(file,signal);
 }
