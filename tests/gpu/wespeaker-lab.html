@@ -7,6 +7,8 @@
 <input id="model" type="file" accept=".onnx"></label>
 <label>Имя выхода эмбеддингов (пусто, если выход единственный)
 <input id="output" maxlength="128"></label>
+<label>Потоки WASM (как в рабочей конфигурации)
+<select id="threads"><option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8">8</option></select></label>
 <button id="run">Сравнить WASM и WebGPU, пакеты 1 / 2 / 4 / 8</button>
 <button id="cancel" disabled>Остановить</button>
 <button id="save" disabled>Скачать JSON</button>
