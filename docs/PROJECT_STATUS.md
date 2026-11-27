@@ -94,3 +94,6 @@ Local comparative benchmark imports, run provenance, combined evidence export an
 
 ## PERF-10 — integrated candidate
 PERF-01–08 exact-head CI PASS; PERF-09 original CI failed due to ambiguous file/scenario test selectors, corrected in 2ac6983. Final integration CI and actual hardware gate are independent. See [PERF-10](performance/PERF-10.md) for verified run IDs, remaining limits and local commands. Older integration notes above are historical; the final candidate is based on main dfdd1ebcabdae45e3a3ba3c4e003929e3c832785. Do not equate source integration with publication.
+
+## GPU-08 — Hybrid Execution Pipeline (candidate)
+Existing PERF-05 bounded streamed-audio lookahead is scheduled before in-flight attempt metadata persistence, allowing earlier preparation without starting ASR before the durable write. Optional timing fields record scheduling lead; no GPU utilization or actual acceleration claim. See [GPU-08](performance/GPU-08.md). Full CI and real-device acceptance pending.
