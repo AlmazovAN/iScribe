@@ -60,6 +60,7 @@ function Add-DiagnosticEvent([string]$Kind,[string]$Code,[int]$Exit=-1) {
 function Get-DiagnosticCode([string]$Message) {
     switch -Regex ($Message) {
         'Cannot bind argument to parameter .LiteralPath. because it is an empty string' { return 'EMPTY_LITERAL_PATH' }
+        'Cannot bind argument to parameter .Path. because it is an empty string|ParameterArgumentValidationErrorEmptyStringNotAllowed' { return 'EMPTY_PATH' }
         'Cannot find path|PathNotFound|ItemNotFound' { return 'PATH_NOT_FOUND' }
         'ENOSPC|not enough space|disk full' { return 'DISK_FULL' }
         'out of memory|ENOMEM|heap limit' { return 'OUT_OF_MEMORY' }
@@ -527,6 +528,1493 @@ function Get-SafeSha([string]$Value) {
 # arbitrary captures. Only fixed templates and constrained numeric/enum
 # captures are allowed. Unknown text is omitted, not merely masked.
 $script:SafeDiagnosticRules = @(
+        @{ pattern='(?i)Cannot bind argument to parameter .Path. because it is an empty string'; template='PowerShell: Path is empty' }
+        @{ pattern='(?i)\bParameterArgumentValidationErrorEmptyStringNotAllowed\b'; template='PowerShell: ParameterArgumentValidationErrorEmptyStringNotAllowed' }
+        @{ pattern='(?i)^\s*At\s+[^\r\n]*[\\/]scripts[\\/]Test-CI06\.ps1:\s*([0-9]{1,6})\s+char:\s*([0-9]{1,6})'; template='Source: scripts/Test-CI06.ps1:$1:$2' }
+        @{ pattern='(?i)^\s*At\s+[^\r\n]*[\\/]scripts[\\/]Test-CI06\.ps1:\s*        @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
+        @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
+        @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+(passed|failed|skipped)\s*(?:\([0-9.]+(?:ms|s|m)\))?\s*$'; template='Tests: $1 $2' }
+        @{ pattern='(?i)\bHTTP\s+(400|401|403|404|408|409|422|429|500|502|503|504)\b'; template='HTTP $1' }
+        @{ pattern='(?i)^\s*Node:\s*v([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+\(CI использует Node 22\)\s*$'; template='Node v$1' }
+        @{ pattern='(?i)^\s*\+\s*(npm\.cmd|git\.exe|npx\.cmd|gh\.exe)\s+'; template='Command: $1 (arguments omitted)' }
+        @{ pattern='(?i)\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENOSPC|ENOMEM|EACCES|EPERM|ENOENT|ERESOLVE|EINTEGRITY)\b'; template='System error: $1' }
+        @{ pattern='(?i)Cannot bind argument to parameter .LiteralPath. because it is an empty string'; template='PowerShell: LiteralPath is empty' }
+        @{ pattern='(?i)Cannot find path|PathNotFound|ItemNotFound'; template='PowerShell: path not found' }
+        @{ pattern='(?i)JavaScript heap out of memory|out of memory|heap limit'; template='Memory exhausted' }
+        @{ pattern='(?i)Permission denied|Access is denied'; template='Access denied' }
+        @{ pattern='(?i)authentication failed|не авторизован'; template='Authentication failed' }
+        @{ pattern='(?i)Could not resolve host|connection timed out'; template='Network resolution or timeout failure' }
+        @{ pattern='(?i)non-fast-forward|fetch first'; template='Git: non-fast-forward' }
+        @{ pattern='(?i)protected branch|GH006|GH013'; template='Git: branch protection rejected operation' }
+        @{ pattern='(?i)merge conflict|CONFLICT \('; template='Git: merge conflict' }
+        @{ pattern='(?i)AssertionError|expect\(.*\)'; template='Test assertion failed' }
+        @{ pattern='(?i)CI не пройден'; template='Cloud CI failed' }
+        @{ pattern='(?i)Время ожидания CI истекло'; template='Cloud CI timed out' }
+        @{ pattern='(?i)Конфигурация CI кандидата отличается'; template='CI workflow differs from base' }
+        @{ pattern='(?i)Кандидат не содержит актуальный main|origin/main изменился|PR или main изменился'; template='Candidate or main changed' }
+        @{ pattern='(?i)Не найдена встроенная точка входа|Повреждён встроенный блок|не обнаружена ревизия сборки'; template='HTML validation failed' }
+        @{ pattern='(?i)Не установлена программа'; template='Required tool not installed' }
+        @{ pattern='(?i)Не найден локальный репозиторий'; template='Local project not found' }
+        @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
+)
+function ConvertTo-SafeLogLine([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
+    if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
+    foreach ($rule in $script:SafeDiagnosticRules) {
+        $m=[regex]::Match($Line,$rule.pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromMilliseconds(100))
+        if ($m.Success) {
+            $safe=$m.Result($rule.template)
+            if ($safe -match '^TypeScript TS[0-9]{4,5}$') {
+                $location=[regex]::Match($Line,'\(([0-9]{1,6}),([0-9]{1,6})\)\s*:\s*(?:error\s+)?TS[0-9]{4,5}\s*:',[Text.RegularExpressions.RegexOptions]::IgnoreCase,[TimeSpan]::FromMilliseconds(100))
+                if ($location.Success) { $safe += ('; line '+$location.Groups[1].Value+', column '+$location.Groups[2].Value) }
+            }
+            return $safe
+        }
+    }
+    return $null
+}
+function Get-SafeLogExcerpt([string]$LocalLog) {
+    $items=[System.Collections.Generic.Queue[object]]::new()
+    $read=0
+    $matched=0
+    $privateBlock=$false
+    if (-not (Test-Path -LiteralPath $LocalLog -PathType Leaf)) { return @{status='unavailable';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    if ((Get-Item -LiteralPath $LocalLog).Length -gt 16777216) { return @{status='size-limit';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $reader=[IO.StreamReader]::new($LocalLog,[Text.Encoding]::UTF8,$true)
+    try {
+        while ($null -ne ($line=$reader.ReadLine())) {
+            $read++
+            if ($line -match '(?i)-----\s*BEGIN\s+[^-]*PRIVATE KEY') { $privateBlock=$true }
+            if ($privateBlock) {
+                if ($line -match '(?i)-----\s*END\s+[^-]*PRIVATE KEY') { $privateBlock=$false }
+                continue
+            }
+            $safe=ConvertTo-SafeLogLine $line
+            if ($null -ne $safe) {
+                $matched++
+                if ($items.Count -ge 500) { $null=$items.Dequeue() }
+                $items.Enqueue([ordered]@{log_line=$read;message=$safe})
+            }
+        }
+    } finally { $reader.Dispose() }
+    return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
+}
+
+function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
+    $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
+    try { $excerpt=Get-SafeLogExcerpt $LocalLog }
+    catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $report=[ordered]@{
+        schema='iscribe-build-diagnostics/v2'
+        script_version='7.0'
+        utc=[DateTime]::UtcNow.ToString('o')
+        route=$script:DiagnosticRoute
+        revision=(Get-SafeSha $script:Revision)
+        candidate_sha=(Get-SafeSha $script:PinnedSha)
+        base_sha=(Get-SafeSha $script:BaseSha)
+        pull_request=$script:SelectedPR
+        remote_changed=$script:RemoteChanged
+        ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
+        ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
+        outcome=$(if ($SelfTest) { 'self-test' } else { 'failed' })
+        detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
+        text_excerpt=$excerpt
+        events=$script:DiagnosticEvents.ToArray()
+        omitted_events=$script:DiagnosticOmitted
+    }
+    [IO.File]::WriteAllText($journalPath,($report | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    return $journalPath
+}
+function Get-VerifiedDiagnosticRepo {
+    $repoInfo=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+    if ($repoInfo.ExitCode -ne 0 -or -not $repoInfo.Text) {
+        Write-Warning ('Диагностический репозиторий недоступен: '+$repoInfo.Kind+'. Проверьте существование и права gh.')
+        return $null
+    }
+    $info=$repoInfo.Text | ConvertFrom-Json
+    if ($info.full_name -ne $DiagnosticsRepo -or $info.private -ne $true -or $info.visibility -ne 'private' -or $info.permissions.push -ne $true -or $info.archived -eq $true -or -not $info.default_branch) {
+        Write-Warning 'Не подтверждены приватность, активность и права записи репозитория. Ничего не отправлено.'
+        return $null
+    }
+    return $info
+}
+function Get-GitBlobSha([byte[]]$Bytes) {
+    # GitHub contents API uses Git blob SHA-1, not SHA-1 of raw file bytes.
+    $header=[Text.Encoding]::ASCII.GetBytes(('blob '+$Bytes.Length+[char]0))
+    $buffer=[byte[]]::new($header.Length+$Bytes.Length)
+    [Buffer]::BlockCopy($header,0,$buffer,0,$header.Length)
+    [Buffer]::BlockCopy($Bytes,0,$buffer,$header.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$ExpectedSha) {
+    $r=Invoke-GhApiRead ($Path+'?ref='+[uri]::EscapeDataString($Branch))
+    if ($r.ExitCode -ne 0) {
+        if ($r.Kind -eq 'not-found') { return 'absent' }
+        return 'unknown'
+    }
+    try {
+        $file=$r.Text | ConvertFrom-Json
+        if ($file.type -ceq 'file' -and $file.sha -ceq $ExpectedSha) { return 'matched' }
+        return 'conflict'
+    } catch { return 'unknown' }
+}
+function Upload-DiagnosticJournal([string]$JournalPath) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return $false }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return $false }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return $false }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($JournalPath)
+    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return $false }
+    $expected=Get-GitBlobSha $bytes
+    $branch=[string]$info.default_branch
+    # Stable filename for these exact bytes: all retries use the same path.
+    $report=$null
+    try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
+    $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    $prefix='failures'
+    $label='failure'
+    if ($report.outcome -ceq 'self-test') { $prefix='checks'; $label='check' }
+    elseif ($report.outcome -cne 'failed') { throw 'Неизвестный тип диагностического отчёта.' }
+    $remotePath=$prefix+'/'+$utc.ToString('yyyy-MM')+'/'+$label+'-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
+    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
+    $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
+    try {
+        [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+        for ($attempt=1; $attempt -le 3; $attempt++) {
+            # Recheck the privacy and access gate before every write.
+            $current=Get-VerifiedDiagnosticRepo
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return $false }
+            $before=Get-DiagnosticRemoteState $path $branch $expected
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return $true }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return $false }
+            # Create only: no sha field, no overwriting an existing file.
+            $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
+            # Always confirm read-back of exact contents, even if PUT reported success.
+            # A timeout can mean the server already committed the file.
+            # Reconcile by exact path and blob hash before allowing retry.
+            $after=Get-DiagnosticRemoteState $path $branch $expected
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return $true }
+            if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
+                Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
+                return $false
+            }
+            Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
+            Wait-ApiRetry $attempt
+        }
+    } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+    return $false
+}
+
+function Invoke-DiagnosticsCheck([bool]$Provision) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { throw 'Для проверки отправки диагностика должна быть включена.' }
+    if ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate) { throw 'Режим диагностики не принимает параметры интеграции.' }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { throw 'Требуется отдельный приватный репозиторий.' }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { throw 'Не установлен GitHub CLI (gh.exe).' }
+    if ((Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) { throw 'GitHub CLI не авторизован. Выполните gh auth login.' }
+    if ($Provision) {
+        if ($DiagnosticsRepo -cne 'AlmazovAN/iScribe-diagnostics') { throw 'DiagnosticsSetup разрешён только для штатного диагностического репозитория.' }
+        $probe=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+        if ($probe.Kind -eq 'not-found') {
+            # 404 may mean missing repository or insufficient access. The create
+            # request is explicit, private, and never modifies an existing repo.
+            Write-Host "Создание приватного репозитория $DiagnosticsRepo (одна попытка)"
+            $creation=Capture 'gh.exe' @('repo','create',$DiagnosticsRepo,'--private','--add-readme')
+            if ($creation.ExitCode -ne 0) { Write-Warning 'Создание не подтверждено; проверяем фактическое состояние без повторного создания.' }
+        } elseif ($probe.ExitCode -ne 0) {
+            throw ('Не удалось проверить существование репозитория: '+$probe.Kind)
+        }
+    }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { throw 'Приватный диагностический репозиторий с правами записи не подтверждён.' }
+    $script:DiagnosticRoute='diagnostics-check'
+    $script:DiagnosticStage='self-test'
+    Add-DiagnosticEvent 'self-test' 'synthetic-only'
+    $sample=Join-Path $env:TEMP ('iscribe-diag-check-'+[guid]::NewGuid().ToString('N')+'.log')
+    $journal=[IO.Path]::ChangeExtension($sample,'.diagnostic.json')
+    try {
+        # Synthetic fixture only, no local source paths, personal data or real credentials.
+        [IO.File]::WriteAllLines($sample,[string[]]@(
+            'HTTP 404',
+            'example.ts(12,3): error TS2322: synthetic message',
+            'Authorization: Bearer synthetic-only-0000',
+            'UNRECOGNIZED_SYNTHETIC_TEXT'
+        ),[Text.UTF8Encoding]::new($false))
+        $journal=Save-DiagnosticJournal $sample -SelfTest
+        $data=[IO.File]::ReadAllText($journal)
+        $report=$data | ConvertFrom-Json
+        $messages=@($report.text_excerpt.lines | ForEach-Object { $_.message })
+        if ($report.outcome -cne 'self-test' -or $report.text_excerpt.status -cne 'reconstructed' -or
+            $messages.Count -ne 2 -or $messages[0] -cne 'HTTP 404' -or
+            $messages[1] -cne 'TypeScript TS2322; line 12, column 3' -or
+            $data.Contains('synthetic-only-0000') -or $data.Contains('UNRECOGNIZED_SYNTHETIC_TEXT') -or $data.Contains('example.ts')) {
+            throw 'Проверка фильтрации не пройдена. Отправка запрещена.'
+        }
+        if (-not (Upload-DiagnosticJournal $journal)) { throw 'Тестовая запись или обратное чтение не подтверждены.' }
+        Write-Host 'DIAGNOSTICS CHECK PASS: приватность, фильтрация, запись и SHA при обратном чтении подтверждены.' -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $sample,$journal -Force -ErrorAction SilentlyContinue
+    }
+}
+if ($Mode -in @('DiagnosticsSetup','DiagnosticsCheck')) {
+    try {
+        Invoke-DiagnosticsCheck ($Mode -eq 'DiagnosticsSetup')
+        exit 0
+    } catch {
+        Write-Warning ('DIAGNOSTICS CHECK FAIL: '+$_.Exception.Message)
+        exit 1
+    }
+}
+
+try {
+    $LogWriter=[IO.StreamWriter]::new($FullLog,$false,[Text.UTF8Encoding]::new($false))
+    Step '1. Подготовка и синхронизация исходного main'
+    if ($Mode -eq 'MainOnly' -and ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate)) { throw 'MainOnly не принимает параметры интеграции.' }
+    Assert-Tools ($Mode -ne 'MainOnly')
+    # Standard build must not inherit an opt-in profiling build flag.
+    Remove-Item Env:VITE_GPU_PROFILE -ErrorAction SilentlyContinue
+    $Root=Resolve-Project
+    Set-Location -LiteralPath $Root
+    Log "Репозиторий: $Root"
+    $Revision=Sync-Main
+    $BaseSha=$Revision
+    Log "Исходный main: $BaseSha"
+    $node=Capture 'node.exe' @('--version'); Log ('Node: '+$node.Text+' (CI использует Node 22)')
+    $pr=$null
+    if ($Mode -ne 'MainOnly') { Step '2. Поиск интеграционного PR'; $pr=Find-Candidate }
+    $route='MainOnly'
+    if ($pr) {
+        $SelectedPR=[int]$pr.number
+        $PinnedSha=[string]$pr.head.sha
+        if ($PinnedSha -notmatch '^[0-9a-f]{40}$') { throw 'GitHub не вернул корректный SHA кандидата.' }
+        if ($pr.merged -eq $true -or $pr.state -eq 'closed') {
+            if ($pr.merged -ne $true -or -not (Test-Ancestor $PinnedSha $BaseSha)) { throw 'PR закрыт без подтверждённого включения его head в main.' }
+            Log 'Кандидат уже в main. Повторное слияние не требуется.'
+        } else {
+            if ($pr.state -ne 'open' -or $pr.base.sha -ne $BaseSha) { throw 'PR не соответствует актуальному main.' }
+            Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
+            if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
+            if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            Assert-ManifestStages $SelectedManifest
+            if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
+            else {
+                Log "PR #${SelectedPR}: $($pr.html_url)"
+                $route=$Mode
+                if ($route -eq 'Auto') {
+                    Log '1 — локальный конвейер (по умолчанию); 2 — GitHub Actions (новый запуск); 0 — отмена.'
+                    $answer=Read-Host 'Выберите маршрут [1]'
+                    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq '1') { $route='Local' }
+                    elseif ($answer -eq '2') { $route='Online' }
+                    else { $ExitCode=2; throw 'Операция отменена.' }
+                }
+                if ($route -eq 'Local') { Log 'Выбран локальный CI. GitHub Actions не запускается и не проверяется.' }
+                else { Log 'Выбран облачный CI. После подтверждения будет запрошен один новый запуск.' }
+                Confirm-Integration $route
+            }
+        }
+    } else { Log 'Интеграционный кандидат не выбран. Сборка актуального main без слияния.' }
+    $DiagnosticRoute=$route
+    if ($route -eq 'Local') {
+        Step '3. Локальный кандидат слияния в изолированном worktree'
+        if ((Git-Text @('rev-parse',($BaseSha+':.github/workflows'))) -ne (Git-Text @('rev-parse',($PinnedSha+':.github/workflows')))) { throw 'Workflow changes require a separate reviewed integration; local push blocked.' }
+        New-Worktree $BaseSha
+        Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
+        $Revision=Git-Text @('rev-parse','HEAD')
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'Кандидат отсутствует в локальном merge commit.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево слияния отличается от кандидата.' }
+        Run-LocalCI
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+        Step '4. Отправка точного проверенного merge commit в GitHub main'
+        $null=Assert-CurrentCandidate $true
+        # Normal fast-forward push only. GitHub protection rules are respected.
+        # Do NOT use --force, --admin, or bypass required checks.
+        Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
+        $RemoteChanged=$true
+        if ((Fetch-Main) -ne $Revision) { throw 'Удалённый main отличается от проверенного merge commit.' }
+        Log 'Проверенный локальный merge commit находится в GitHub main.'
+    } elseif ($route -eq 'Online') {
+        Step '3. GitHub Actions и слияние PR'
+        $fresh=Assert-CurrentCandidate
+        if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $fresh=Assert-CurrentCandidate $true
+        Start-CloudCI $fresh
+        $null=Wait-CI
+        $null=Assert-CurrentCandidate $true
+        Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
+        $RemoteChanged=$true
+        $Revision=Sync-Main
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'GitHub не подтвердил включение точного кандидата в main.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево main после слияния отличается от проверенного кандидата. Сборка остановлена до проверки.' }
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    } else {
+        Step '3. Только синхронизация и сборка main'
+        $Revision=Sync-Main
+        Log 'Статус прежних CI не подтверждается этим маршрутом; выполняются сборка и release:check.'
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    }
+    Install-Html $source $Revision
+    $ExitCode=0
+} catch {
+    Add-DiagnosticEvent 'failure' (Get-DiagnosticCode ([string]$_.Exception.Message))
+    Log ("FAILED [$StepName]: "+$_.Exception.Message)
+    if ($RemoteChanged) { Log 'ВНИМАНИЕ: удалённый main уже изменён. Автоматический откат Git запрещён. После исправления повторите синхронизацию/сборку.' }
+    else { Log 'Скрипт не подтвердил изменение удалённого main. При сетевой ошибке проверьте его фактический SHA.' }
+    Log 'Предыдущий HTML не считается новым релизом.'
+} finally {
+    if ($TempHtml -and (Test-Path -LiteralPath $TempHtml)) { Remove-Item -LiteralPath $TempHtml -Force -ErrorAction SilentlyContinue }
+    if ($WorktreeRegistered -and $Root) {
+        try {
+            Set-Location -LiteralPath $Root
+            # Only the isolated worktree created by THIS invocation is removed.
+            Run 'git.exe' @('worktree','remove','--force',$Worktree)
+        } catch { Write-Warning "Не удалось убрать временный worktree: $Worktree. Основной проект не удалён." }
+    }
+    $env:VITE_GPU_PROFILE=$PriorGpuProfile
+    try { Set-Location -LiteralPath $InitialLocation } catch {}
+    if ($LogWriter) { $LogWriter.Dispose(); $LogWriter=$null }
+    if ($ExitCode -eq 0 -or $ExitCode -eq 2) { Remove-Item -LiteralPath $FullLog -Force -ErrorAction SilentlyContinue }
+    else {
+        try {
+            New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+            $local=Join-Path $LogRoot ('failure-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6)+'.log')
+            Move-Item -LiteralPath $FullLog -Destination $local
+            Write-Host "Локальный журнал ошибки: $local" -ForegroundColor Yellow
+            try {
+                $journal=Save-DiagnosticJournal $local
+                Write-Host "Локальная диагностическая копия: $journal"
+                $null=Upload-DiagnosticJournal $journal
+            } catch { Write-Warning 'Не удалось создать или отправить диагностическую копию. Оригинальный журнал сохранён.' }
+            Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Warning "Журнал оставлен: $FullLog" }
+    }
+}
+exit $ExitCode
+; template='Source: scripts/Test-CI06.ps1' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+char:\s*([0-9]{1,6})\s*        @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
+        @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
+        @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+(passed|failed|skipped)\s*(?:\([0-9.]+(?:ms|s|m)\))?\s*$'; template='Tests: $1 $2' }
+        @{ pattern='(?i)\bHTTP\s+(400|401|403|404|408|409|422|429|500|502|503|504)\b'; template='HTTP $1' }
+        @{ pattern='(?i)^\s*Node:\s*v([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+\(CI использует Node 22\)\s*$'; template='Node v$1' }
+        @{ pattern='(?i)^\s*\+\s*(npm\.cmd|git\.exe|npx\.cmd|gh\.exe)\s+'; template='Command: $1 (arguments omitted)' }
+        @{ pattern='(?i)\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENOSPC|ENOMEM|EACCES|EPERM|ENOENT|ERESOLVE|EINTEGRITY)\b'; template='System error: $1' }
+        @{ pattern='(?i)Cannot bind argument to parameter .LiteralPath. because it is an empty string'; template='PowerShell: LiteralPath is empty' }
+        @{ pattern='(?i)Cannot find path|PathNotFound|ItemNotFound'; template='PowerShell: path not found' }
+        @{ pattern='(?i)JavaScript heap out of memory|out of memory|heap limit'; template='Memory exhausted' }
+        @{ pattern='(?i)Permission denied|Access is denied'; template='Access denied' }
+        @{ pattern='(?i)authentication failed|не авторизован'; template='Authentication failed' }
+        @{ pattern='(?i)Could not resolve host|connection timed out'; template='Network resolution or timeout failure' }
+        @{ pattern='(?i)non-fast-forward|fetch first'; template='Git: non-fast-forward' }
+        @{ pattern='(?i)protected branch|GH006|GH013'; template='Git: branch protection rejected operation' }
+        @{ pattern='(?i)merge conflict|CONFLICT \('; template='Git: merge conflict' }
+        @{ pattern='(?i)AssertionError|expect\(.*\)'; template='Test assertion failed' }
+        @{ pattern='(?i)CI не пройден'; template='Cloud CI failed' }
+        @{ pattern='(?i)Время ожидания CI истекло'; template='Cloud CI timed out' }
+        @{ pattern='(?i)Конфигурация CI кандидата отличается'; template='CI workflow differs from base' }
+        @{ pattern='(?i)Кандидат не содержит актуальный main|origin/main изменился|PR или main изменился'; template='Candidate or main changed' }
+        @{ pattern='(?i)Не найдена встроенная точка входа|Повреждён встроенный блок|не обнаружена ревизия сборки'; template='HTML validation failed' }
+        @{ pattern='(?i)Не установлена программа'; template='Required tool not installed' }
+        @{ pattern='(?i)Не найден локальный репозиторий'; template='Local project not found' }
+        @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
+)
+function ConvertTo-SafeLogLine([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
+    if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
+    foreach ($rule in $script:SafeDiagnosticRules) {
+        $m=[regex]::Match($Line,$rule.pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromMilliseconds(100))
+        if ($m.Success) {
+            $safe=$m.Result($rule.template)
+            if ($safe -match '^TypeScript TS[0-9]{4,5}$') {
+                $location=[regex]::Match($Line,'\(([0-9]{1,6}),([0-9]{1,6})\)\s*:\s*(?:error\s+)?TS[0-9]{4,5}\s*:',[Text.RegularExpressions.RegexOptions]::IgnoreCase,[TimeSpan]::FromMilliseconds(100))
+                if ($location.Success) { $safe += ('; line '+$location.Groups[1].Value+', column '+$location.Groups[2].Value) }
+            }
+            return $safe
+        }
+    }
+    return $null
+}
+function Get-SafeLogExcerpt([string]$LocalLog) {
+    $items=[System.Collections.Generic.Queue[object]]::new()
+    $read=0
+    $matched=0
+    $privateBlock=$false
+    if (-not (Test-Path -LiteralPath $LocalLog -PathType Leaf)) { return @{status='unavailable';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    if ((Get-Item -LiteralPath $LocalLog).Length -gt 16777216) { return @{status='size-limit';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $reader=[IO.StreamReader]::new($LocalLog,[Text.Encoding]::UTF8,$true)
+    try {
+        while ($null -ne ($line=$reader.ReadLine())) {
+            $read++
+            if ($line -match '(?i)-----\s*BEGIN\s+[^-]*PRIVATE KEY') { $privateBlock=$true }
+            if ($privateBlock) {
+                if ($line -match '(?i)-----\s*END\s+[^-]*PRIVATE KEY') { $privateBlock=$false }
+                continue
+            }
+            $safe=ConvertTo-SafeLogLine $line
+            if ($null -ne $safe) {
+                $matched++
+                if ($items.Count -ge 500) { $null=$items.Dequeue() }
+                $items.Enqueue([ordered]@{log_line=$read;message=$safe})
+            }
+        }
+    } finally { $reader.Dispose() }
+    return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
+}
+
+function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
+    $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
+    try { $excerpt=Get-SafeLogExcerpt $LocalLog }
+    catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $report=[ordered]@{
+        schema='iscribe-build-diagnostics/v2'
+        script_version='6.4'
+        utc=[DateTime]::UtcNow.ToString('o')
+        route=$script:DiagnosticRoute
+        revision=(Get-SafeSha $script:Revision)
+        candidate_sha=(Get-SafeSha $script:PinnedSha)
+        base_sha=(Get-SafeSha $script:BaseSha)
+        pull_request=$script:SelectedPR
+        remote_changed=$script:RemoteChanged
+        ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
+        ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
+        outcome=$(if ($SelfTest) { 'self-test' } else { 'failed' })
+        detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
+        text_excerpt=$excerpt
+        events=$script:DiagnosticEvents.ToArray()
+        omitted_events=$script:DiagnosticOmitted
+    }
+    [IO.File]::WriteAllText($journalPath,($report | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    return $journalPath
+}
+function Get-VerifiedDiagnosticRepo {
+    $repoInfo=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+    if ($repoInfo.ExitCode -ne 0 -or -not $repoInfo.Text) {
+        Write-Warning ('Диагностический репозиторий недоступен: '+$repoInfo.Kind+'. Проверьте существование и права gh.')
+        return $null
+    }
+    $info=$repoInfo.Text | ConvertFrom-Json
+    if ($info.full_name -ne $DiagnosticsRepo -or $info.private -ne $true -or $info.visibility -ne 'private' -or $info.permissions.push -ne $true -or $info.archived -eq $true -or -not $info.default_branch) {
+        Write-Warning 'Не подтверждены приватность, активность и права записи репозитория. Ничего не отправлено.'
+        return $null
+    }
+    return $info
+}
+function Get-GitBlobSha([byte[]]$Bytes) {
+    # GitHub contents API uses Git blob SHA-1, not SHA-1 of raw file bytes.
+    $header=[Text.Encoding]::ASCII.GetBytes(('blob '+$Bytes.Length+[char]0))
+    $buffer=[byte[]]::new($header.Length+$Bytes.Length)
+    [Buffer]::BlockCopy($header,0,$buffer,0,$header.Length)
+    [Buffer]::BlockCopy($Bytes,0,$buffer,$header.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$ExpectedSha) {
+    $r=Invoke-GhApiRead ($Path+'?ref='+[uri]::EscapeDataString($Branch))
+    if ($r.ExitCode -ne 0) {
+        if ($r.Kind -eq 'not-found') { return 'absent' }
+        return 'unknown'
+    }
+    try {
+        $file=$r.Text | ConvertFrom-Json
+        if ($file.type -ceq 'file' -and $file.sha -ceq $ExpectedSha) { return 'matched' }
+        return 'conflict'
+    } catch { return 'unknown' }
+}
+function Upload-DiagnosticJournal([string]$JournalPath) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return $false }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return $false }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return $false }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($JournalPath)
+    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return $false }
+    $expected=Get-GitBlobSha $bytes
+    $branch=[string]$info.default_branch
+    # Stable filename for these exact bytes: all retries use the same path.
+    $report=$null
+    try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
+    $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    $prefix='failures'
+    $label='failure'
+    if ($report.outcome -ceq 'self-test') { $prefix='checks'; $label='check' }
+    elseif ($report.outcome -cne 'failed') { throw 'Неизвестный тип диагностического отчёта.' }
+    $remotePath=$prefix+'/'+$utc.ToString('yyyy-MM')+'/'+$label+'-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
+    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
+    $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
+    try {
+        [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+        for ($attempt=1; $attempt -le 3; $attempt++) {
+            # Recheck the privacy and access gate before every write.
+            $current=Get-VerifiedDiagnosticRepo
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return $false }
+            $before=Get-DiagnosticRemoteState $path $branch $expected
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return $true }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return $false }
+            # Create only: no sha field, no overwriting an existing file.
+            $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
+            # Always confirm read-back of exact contents, even if PUT reported success.
+            # A timeout can mean the server already committed the file.
+            # Reconcile by exact path and blob hash before allowing retry.
+            $after=Get-DiagnosticRemoteState $path $branch $expected
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return $true }
+            if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
+                Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
+                return $false
+            }
+            Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
+            Wait-ApiRetry $attempt
+        }
+    } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+    return $false
+}
+
+function Invoke-DiagnosticsCheck([bool]$Provision) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { throw 'Для проверки отправки диагностика должна быть включена.' }
+    if ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate) { throw 'Режим диагностики не принимает параметры интеграции.' }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { throw 'Требуется отдельный приватный репозиторий.' }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { throw 'Не установлен GitHub CLI (gh.exe).' }
+    if ((Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) { throw 'GitHub CLI не авторизован. Выполните gh auth login.' }
+    if ($Provision) {
+        if ($DiagnosticsRepo -cne 'AlmazovAN/iScribe-diagnostics') { throw 'DiagnosticsSetup разрешён только для штатного диагностического репозитория.' }
+        $probe=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+        if ($probe.Kind -eq 'not-found') {
+            # 404 may mean missing repository or insufficient access. The create
+            # request is explicit, private, and never modifies an existing repo.
+            Write-Host "Создание приватного репозитория $DiagnosticsRepo (одна попытка)"
+            $creation=Capture 'gh.exe' @('repo','create',$DiagnosticsRepo,'--private','--add-readme')
+            if ($creation.ExitCode -ne 0) { Write-Warning 'Создание не подтверждено; проверяем фактическое состояние без повторного создания.' }
+        } elseif ($probe.ExitCode -ne 0) {
+            throw ('Не удалось проверить существование репозитория: '+$probe.Kind)
+        }
+    }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { throw 'Приватный диагностический репозиторий с правами записи не подтверждён.' }
+    $script:DiagnosticRoute='diagnostics-check'
+    $script:DiagnosticStage='self-test'
+    Add-DiagnosticEvent 'self-test' 'synthetic-only'
+    $sample=Join-Path $env:TEMP ('iscribe-diag-check-'+[guid]::NewGuid().ToString('N')+'.log')
+    $journal=[IO.Path]::ChangeExtension($sample,'.diagnostic.json')
+    try {
+        # Synthetic fixture only, no local source paths, personal data or real credentials.
+        [IO.File]::WriteAllLines($sample,[string[]]@(
+            'HTTP 404',
+            'example.ts(12,3): error TS2322: synthetic message',
+            'Authorization: Bearer synthetic-only-0000',
+            'UNRECOGNIZED_SYNTHETIC_TEXT'
+        ),[Text.UTF8Encoding]::new($false))
+        $journal=Save-DiagnosticJournal $sample -SelfTest
+        $data=[IO.File]::ReadAllText($journal)
+        $report=$data | ConvertFrom-Json
+        $messages=@($report.text_excerpt.lines | ForEach-Object { $_.message })
+        if ($report.outcome -cne 'self-test' -or $report.text_excerpt.status -cne 'reconstructed' -or
+            $messages.Count -ne 2 -or $messages[0] -cne 'HTTP 404' -or
+            $messages[1] -cne 'TypeScript TS2322; line 12, column 3' -or
+            $data.Contains('synthetic-only-0000') -or $data.Contains('UNRECOGNIZED_SYNTHETIC_TEXT') -or $data.Contains('example.ts')) {
+            throw 'Проверка фильтрации не пройдена. Отправка запрещена.'
+        }
+        if (-not (Upload-DiagnosticJournal $journal)) { throw 'Тестовая запись или обратное чтение не подтверждены.' }
+        Write-Host 'DIAGNOSTICS CHECK PASS: приватность, фильтрация, запись и SHA при обратном чтении подтверждены.' -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $sample,$journal -Force -ErrorAction SilentlyContinue
+    }
+}
+if ($Mode -in @('DiagnosticsSetup','DiagnosticsCheck')) {
+    try {
+        Invoke-DiagnosticsCheck ($Mode -eq 'DiagnosticsSetup')
+        exit 0
+    } catch {
+        Write-Warning ('DIAGNOSTICS CHECK FAIL: '+$_.Exception.Message)
+        exit 1
+    }
+}
+
+try {
+    $LogWriter=[IO.StreamWriter]::new($FullLog,$false,[Text.UTF8Encoding]::new($false))
+    Step '1. Подготовка и синхронизация исходного main'
+    if ($Mode -eq 'MainOnly' -and ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate)) { throw 'MainOnly не принимает параметры интеграции.' }
+    Assert-Tools ($Mode -ne 'MainOnly')
+    # Standard build must not inherit an opt-in profiling build flag.
+    Remove-Item Env:VITE_GPU_PROFILE -ErrorAction SilentlyContinue
+    $Root=Resolve-Project
+    Set-Location -LiteralPath $Root
+    Log "Репозиторий: $Root"
+    $Revision=Sync-Main
+    $BaseSha=$Revision
+    Log "Исходный main: $BaseSha"
+    $node=Capture 'node.exe' @('--version'); Log ('Node: '+$node.Text+' (CI использует Node 22)')
+    $pr=$null
+    if ($Mode -ne 'MainOnly') { Step '2. Поиск интеграционного PR'; $pr=Find-Candidate }
+    $route='MainOnly'
+    if ($pr) {
+        $SelectedPR=[int]$pr.number
+        $PinnedSha=[string]$pr.head.sha
+        if ($PinnedSha -notmatch '^[0-9a-f]{40}$') { throw 'GitHub не вернул корректный SHA кандидата.' }
+        if ($pr.merged -eq $true -or $pr.state -eq 'closed') {
+            if ($pr.merged -ne $true -or -not (Test-Ancestor $PinnedSha $BaseSha)) { throw 'PR закрыт без подтверждённого включения его head в main.' }
+            Log 'Кандидат уже в main. Повторное слияние не требуется.'
+        } else {
+            if ($pr.state -ne 'open' -or $pr.base.sha -ne $BaseSha) { throw 'PR не соответствует актуальному main.' }
+            Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
+            if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
+            if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            Assert-ManifestStages $SelectedManifest
+            if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
+            else {
+                Log "PR #${SelectedPR}: $($pr.html_url)"
+                $route=$Mode
+                if ($route -eq 'Auto') {
+                    Log '1 — локальный конвейер (по умолчанию); 2 — GitHub Actions (новый запуск); 0 — отмена.'
+                    $answer=Read-Host 'Выберите маршрут [1]'
+                    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq '1') { $route='Local' }
+                    elseif ($answer -eq '2') { $route='Online' }
+                    else { $ExitCode=2; throw 'Операция отменена.' }
+                }
+                if ($route -eq 'Local') { Log 'Выбран локальный CI. GitHub Actions не запускается и не проверяется.' }
+                else { Log 'Выбран облачный CI. После подтверждения будет запрошен один новый запуск.' }
+                Confirm-Integration $route
+            }
+        }
+    } else { Log 'Интеграционный кандидат не выбран. Сборка актуального main без слияния.' }
+    $DiagnosticRoute=$route
+    if ($route -eq 'Local') {
+        Step '3. Локальный кандидат слияния в изолированном worktree'
+        if ((Git-Text @('rev-parse',($BaseSha+':.github/workflows'))) -ne (Git-Text @('rev-parse',($PinnedSha+':.github/workflows')))) { throw 'Workflow changes require a separate reviewed integration; local push blocked.' }
+        New-Worktree $BaseSha
+        Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
+        $Revision=Git-Text @('rev-parse','HEAD')
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'Кандидат отсутствует в локальном merge commit.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево слияния отличается от кандидата.' }
+        Run-LocalCI
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+        Step '4. Отправка точного проверенного merge commit в GitHub main'
+        $null=Assert-CurrentCandidate $true
+        # Normal fast-forward push only. GitHub protection rules are respected.
+        # Do NOT use --force, --admin, or bypass required checks.
+        Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
+        $RemoteChanged=$true
+        if ((Fetch-Main) -ne $Revision) { throw 'Удалённый main отличается от проверенного merge commit.' }
+        Log 'Проверенный локальный merge commit находится в GitHub main.'
+    } elseif ($route -eq 'Online') {
+        Step '3. GitHub Actions и слияние PR'
+        $fresh=Assert-CurrentCandidate
+        if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $fresh=Assert-CurrentCandidate $true
+        Start-CloudCI $fresh
+        $null=Wait-CI
+        $null=Assert-CurrentCandidate $true
+        Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
+        $RemoteChanged=$true
+        $Revision=Sync-Main
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'GitHub не подтвердил включение точного кандидата в main.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево main после слияния отличается от проверенного кандидата. Сборка остановлена до проверки.' }
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    } else {
+        Step '3. Только синхронизация и сборка main'
+        $Revision=Sync-Main
+        Log 'Статус прежних CI не подтверждается этим маршрутом; выполняются сборка и release:check.'
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    }
+    Install-Html $source $Revision
+    $ExitCode=0
+} catch {
+    Add-DiagnosticEvent 'failure' (Get-DiagnosticCode ([string]$_.Exception.Message))
+    Log ("FAILED [$StepName]: "+$_.Exception.Message)
+    if ($RemoteChanged) { Log 'ВНИМАНИЕ: удалённый main уже изменён. Автоматический откат Git запрещён. После исправления повторите синхронизацию/сборку.' }
+    else { Log 'Скрипт не подтвердил изменение удалённого main. При сетевой ошибке проверьте его фактический SHA.' }
+    Log 'Предыдущий HTML не считается новым релизом.'
+} finally {
+    if ($TempHtml -and (Test-Path -LiteralPath $TempHtml)) { Remove-Item -LiteralPath $TempHtml -Force -ErrorAction SilentlyContinue }
+    if ($WorktreeRegistered -and $Root) {
+        try {
+            Set-Location -LiteralPath $Root
+            # Only the isolated worktree created by THIS invocation is removed.
+            Run 'git.exe' @('worktree','remove','--force',$Worktree)
+        } catch { Write-Warning "Не удалось убрать временный worktree: $Worktree. Основной проект не удалён." }
+    }
+    $env:VITE_GPU_PROFILE=$PriorGpuProfile
+    try { Set-Location -LiteralPath $InitialLocation } catch {}
+    if ($LogWriter) { $LogWriter.Dispose(); $LogWriter=$null }
+    if ($ExitCode -eq 0 -or $ExitCode -eq 2) { Remove-Item -LiteralPath $FullLog -Force -ErrorAction SilentlyContinue }
+    else {
+        try {
+            New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+            $local=Join-Path $LogRoot ('failure-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6)+'.log')
+            Move-Item -LiteralPath $FullLog -Destination $local
+            Write-Host "Локальный журнал ошибки: $local" -ForegroundColor Yellow
+            try {
+                $journal=Save-DiagnosticJournal $local
+                Write-Host "Локальная диагностическая копия: $journal"
+                $null=Upload-DiagnosticJournal $journal
+            } catch { Write-Warning 'Не удалось создать или отправить диагностическую копию. Оригинальный журнал сохранён.' }
+            Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Warning "Журнал оставлен: $FullLog" }
+    }
+}
+exit $ExitCode
+; template='PowerShell location: line $1, column $2' }
+        @{ pattern='(?i)^\s*FAIL\s+scripts/local-pipeline\.test\.mjs\s+>\s+PowerShell local pipeline regression suite\s*        @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
+        @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
+        @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+(passed|failed|skipped)\s*(?:\([0-9.]+(?:ms|s|m)\))?\s*$'; template='Tests: $1 $2' }
+        @{ pattern='(?i)\bHTTP\s+(400|401|403|404|408|409|422|429|500|502|503|504)\b'; template='HTTP $1' }
+        @{ pattern='(?i)^\s*Node:\s*v([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+\(CI использует Node 22\)\s*$'; template='Node v$1' }
+        @{ pattern='(?i)^\s*\+\s*(npm\.cmd|git\.exe|npx\.cmd|gh\.exe)\s+'; template='Command: $1 (arguments omitted)' }
+        @{ pattern='(?i)\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENOSPC|ENOMEM|EACCES|EPERM|ENOENT|ERESOLVE|EINTEGRITY)\b'; template='System error: $1' }
+        @{ pattern='(?i)Cannot bind argument to parameter .LiteralPath. because it is an empty string'; template='PowerShell: LiteralPath is empty' }
+        @{ pattern='(?i)Cannot find path|PathNotFound|ItemNotFound'; template='PowerShell: path not found' }
+        @{ pattern='(?i)JavaScript heap out of memory|out of memory|heap limit'; template='Memory exhausted' }
+        @{ pattern='(?i)Permission denied|Access is denied'; template='Access denied' }
+        @{ pattern='(?i)authentication failed|не авторизован'; template='Authentication failed' }
+        @{ pattern='(?i)Could not resolve host|connection timed out'; template='Network resolution or timeout failure' }
+        @{ pattern='(?i)non-fast-forward|fetch first'; template='Git: non-fast-forward' }
+        @{ pattern='(?i)protected branch|GH006|GH013'; template='Git: branch protection rejected operation' }
+        @{ pattern='(?i)merge conflict|CONFLICT \('; template='Git: merge conflict' }
+        @{ pattern='(?i)AssertionError|expect\(.*\)'; template='Test assertion failed' }
+        @{ pattern='(?i)CI не пройден'; template='Cloud CI failed' }
+        @{ pattern='(?i)Время ожидания CI истекло'; template='Cloud CI timed out' }
+        @{ pattern='(?i)Конфигурация CI кандидата отличается'; template='CI workflow differs from base' }
+        @{ pattern='(?i)Кандидат не содержит актуальный main|origin/main изменился|PR или main изменился'; template='Candidate or main changed' }
+        @{ pattern='(?i)Не найдена встроенная точка входа|Повреждён встроенный блок|не обнаружена ревизия сборки'; template='HTML validation failed' }
+        @{ pattern='(?i)Не установлена программа'; template='Required tool not installed' }
+        @{ pattern='(?i)Не найден локальный репозиторий'; template='Local project not found' }
+        @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
+)
+function ConvertTo-SafeLogLine([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
+    if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
+    foreach ($rule in $script:SafeDiagnosticRules) {
+        $m=[regex]::Match($Line,$rule.pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromMilliseconds(100))
+        if ($m.Success) {
+            $safe=$m.Result($rule.template)
+            if ($safe -match '^TypeScript TS[0-9]{4,5}$') {
+                $location=[regex]::Match($Line,'\(([0-9]{1,6}),([0-9]{1,6})\)\s*:\s*(?:error\s+)?TS[0-9]{4,5}\s*:',[Text.RegularExpressions.RegexOptions]::IgnoreCase,[TimeSpan]::FromMilliseconds(100))
+                if ($location.Success) { $safe += ('; line '+$location.Groups[1].Value+', column '+$location.Groups[2].Value) }
+            }
+            return $safe
+        }
+    }
+    return $null
+}
+function Get-SafeLogExcerpt([string]$LocalLog) {
+    $items=[System.Collections.Generic.Queue[object]]::new()
+    $read=0
+    $matched=0
+    $privateBlock=$false
+    if (-not (Test-Path -LiteralPath $LocalLog -PathType Leaf)) { return @{status='unavailable';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    if ((Get-Item -LiteralPath $LocalLog).Length -gt 16777216) { return @{status='size-limit';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $reader=[IO.StreamReader]::new($LocalLog,[Text.Encoding]::UTF8,$true)
+    try {
+        while ($null -ne ($line=$reader.ReadLine())) {
+            $read++
+            if ($line -match '(?i)-----\s*BEGIN\s+[^-]*PRIVATE KEY') { $privateBlock=$true }
+            if ($privateBlock) {
+                if ($line -match '(?i)-----\s*END\s+[^-]*PRIVATE KEY') { $privateBlock=$false }
+                continue
+            }
+            $safe=ConvertTo-SafeLogLine $line
+            if ($null -ne $safe) {
+                $matched++
+                if ($items.Count -ge 500) { $null=$items.Dequeue() }
+                $items.Enqueue([ordered]@{log_line=$read;message=$safe})
+            }
+        }
+    } finally { $reader.Dispose() }
+    return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
+}
+
+function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
+    $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
+    try { $excerpt=Get-SafeLogExcerpt $LocalLog }
+    catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $report=[ordered]@{
+        schema='iscribe-build-diagnostics/v2'
+        script_version='6.4'
+        utc=[DateTime]::UtcNow.ToString('o')
+        route=$script:DiagnosticRoute
+        revision=(Get-SafeSha $script:Revision)
+        candidate_sha=(Get-SafeSha $script:PinnedSha)
+        base_sha=(Get-SafeSha $script:BaseSha)
+        pull_request=$script:SelectedPR
+        remote_changed=$script:RemoteChanged
+        ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
+        ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
+        outcome=$(if ($SelfTest) { 'self-test' } else { 'failed' })
+        detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
+        text_excerpt=$excerpt
+        events=$script:DiagnosticEvents.ToArray()
+        omitted_events=$script:DiagnosticOmitted
+    }
+    [IO.File]::WriteAllText($journalPath,($report | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    return $journalPath
+}
+function Get-VerifiedDiagnosticRepo {
+    $repoInfo=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+    if ($repoInfo.ExitCode -ne 0 -or -not $repoInfo.Text) {
+        Write-Warning ('Диагностический репозиторий недоступен: '+$repoInfo.Kind+'. Проверьте существование и права gh.')
+        return $null
+    }
+    $info=$repoInfo.Text | ConvertFrom-Json
+    if ($info.full_name -ne $DiagnosticsRepo -or $info.private -ne $true -or $info.visibility -ne 'private' -or $info.permissions.push -ne $true -or $info.archived -eq $true -or -not $info.default_branch) {
+        Write-Warning 'Не подтверждены приватность, активность и права записи репозитория. Ничего не отправлено.'
+        return $null
+    }
+    return $info
+}
+function Get-GitBlobSha([byte[]]$Bytes) {
+    # GitHub contents API uses Git blob SHA-1, not SHA-1 of raw file bytes.
+    $header=[Text.Encoding]::ASCII.GetBytes(('blob '+$Bytes.Length+[char]0))
+    $buffer=[byte[]]::new($header.Length+$Bytes.Length)
+    [Buffer]::BlockCopy($header,0,$buffer,0,$header.Length)
+    [Buffer]::BlockCopy($Bytes,0,$buffer,$header.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$ExpectedSha) {
+    $r=Invoke-GhApiRead ($Path+'?ref='+[uri]::EscapeDataString($Branch))
+    if ($r.ExitCode -ne 0) {
+        if ($r.Kind -eq 'not-found') { return 'absent' }
+        return 'unknown'
+    }
+    try {
+        $file=$r.Text | ConvertFrom-Json
+        if ($file.type -ceq 'file' -and $file.sha -ceq $ExpectedSha) { return 'matched' }
+        return 'conflict'
+    } catch { return 'unknown' }
+}
+function Upload-DiagnosticJournal([string]$JournalPath) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return $false }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return $false }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return $false }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($JournalPath)
+    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return $false }
+    $expected=Get-GitBlobSha $bytes
+    $branch=[string]$info.default_branch
+    # Stable filename for these exact bytes: all retries use the same path.
+    $report=$null
+    try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
+    $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    $prefix='failures'
+    $label='failure'
+    if ($report.outcome -ceq 'self-test') { $prefix='checks'; $label='check' }
+    elseif ($report.outcome -cne 'failed') { throw 'Неизвестный тип диагностического отчёта.' }
+    $remotePath=$prefix+'/'+$utc.ToString('yyyy-MM')+'/'+$label+'-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
+    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
+    $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
+    try {
+        [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+        for ($attempt=1; $attempt -le 3; $attempt++) {
+            # Recheck the privacy and access gate before every write.
+            $current=Get-VerifiedDiagnosticRepo
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return $false }
+            $before=Get-DiagnosticRemoteState $path $branch $expected
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return $true }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return $false }
+            # Create only: no sha field, no overwriting an existing file.
+            $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
+            # Always confirm read-back of exact contents, even if PUT reported success.
+            # A timeout can mean the server already committed the file.
+            # Reconcile by exact path and blob hash before allowing retry.
+            $after=Get-DiagnosticRemoteState $path $branch $expected
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return $true }
+            if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
+                Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
+                return $false
+            }
+            Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
+            Wait-ApiRetry $attempt
+        }
+    } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+    return $false
+}
+
+function Invoke-DiagnosticsCheck([bool]$Provision) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { throw 'Для проверки отправки диагностика должна быть включена.' }
+    if ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate) { throw 'Режим диагностики не принимает параметры интеграции.' }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { throw 'Требуется отдельный приватный репозиторий.' }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { throw 'Не установлен GitHub CLI (gh.exe).' }
+    if ((Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) { throw 'GitHub CLI не авторизован. Выполните gh auth login.' }
+    if ($Provision) {
+        if ($DiagnosticsRepo -cne 'AlmazovAN/iScribe-diagnostics') { throw 'DiagnosticsSetup разрешён только для штатного диагностического репозитория.' }
+        $probe=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+        if ($probe.Kind -eq 'not-found') {
+            # 404 may mean missing repository or insufficient access. The create
+            # request is explicit, private, and never modifies an existing repo.
+            Write-Host "Создание приватного репозитория $DiagnosticsRepo (одна попытка)"
+            $creation=Capture 'gh.exe' @('repo','create',$DiagnosticsRepo,'--private','--add-readme')
+            if ($creation.ExitCode -ne 0) { Write-Warning 'Создание не подтверждено; проверяем фактическое состояние без повторного создания.' }
+        } elseif ($probe.ExitCode -ne 0) {
+            throw ('Не удалось проверить существование репозитория: '+$probe.Kind)
+        }
+    }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { throw 'Приватный диагностический репозиторий с правами записи не подтверждён.' }
+    $script:DiagnosticRoute='diagnostics-check'
+    $script:DiagnosticStage='self-test'
+    Add-DiagnosticEvent 'self-test' 'synthetic-only'
+    $sample=Join-Path $env:TEMP ('iscribe-diag-check-'+[guid]::NewGuid().ToString('N')+'.log')
+    $journal=[IO.Path]::ChangeExtension($sample,'.diagnostic.json')
+    try {
+        # Synthetic fixture only, no local source paths, personal data or real credentials.
+        [IO.File]::WriteAllLines($sample,[string[]]@(
+            'HTTP 404',
+            'example.ts(12,3): error TS2322: synthetic message',
+            'Authorization: Bearer synthetic-only-0000',
+            'UNRECOGNIZED_SYNTHETIC_TEXT'
+        ),[Text.UTF8Encoding]::new($false))
+        $journal=Save-DiagnosticJournal $sample -SelfTest
+        $data=[IO.File]::ReadAllText($journal)
+        $report=$data | ConvertFrom-Json
+        $messages=@($report.text_excerpt.lines | ForEach-Object { $_.message })
+        if ($report.outcome -cne 'self-test' -or $report.text_excerpt.status -cne 'reconstructed' -or
+            $messages.Count -ne 2 -or $messages[0] -cne 'HTTP 404' -or
+            $messages[1] -cne 'TypeScript TS2322; line 12, column 3' -or
+            $data.Contains('synthetic-only-0000') -or $data.Contains('UNRECOGNIZED_SYNTHETIC_TEXT') -or $data.Contains('example.ts')) {
+            throw 'Проверка фильтрации не пройдена. Отправка запрещена.'
+        }
+        if (-not (Upload-DiagnosticJournal $journal)) { throw 'Тестовая запись или обратное чтение не подтверждены.' }
+        Write-Host 'DIAGNOSTICS CHECK PASS: приватность, фильтрация, запись и SHA при обратном чтении подтверждены.' -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $sample,$journal -Force -ErrorAction SilentlyContinue
+    }
+}
+if ($Mode -in @('DiagnosticsSetup','DiagnosticsCheck')) {
+    try {
+        Invoke-DiagnosticsCheck ($Mode -eq 'DiagnosticsSetup')
+        exit 0
+    } catch {
+        Write-Warning ('DIAGNOSTICS CHECK FAIL: '+$_.Exception.Message)
+        exit 1
+    }
+}
+
+try {
+    $LogWriter=[IO.StreamWriter]::new($FullLog,$false,[Text.UTF8Encoding]::new($false))
+    Step '1. Подготовка и синхронизация исходного main'
+    if ($Mode -eq 'MainOnly' -and ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate)) { throw 'MainOnly не принимает параметры интеграции.' }
+    Assert-Tools ($Mode -ne 'MainOnly')
+    # Standard build must not inherit an opt-in profiling build flag.
+    Remove-Item Env:VITE_GPU_PROFILE -ErrorAction SilentlyContinue
+    $Root=Resolve-Project
+    Set-Location -LiteralPath $Root
+    Log "Репозиторий: $Root"
+    $Revision=Sync-Main
+    $BaseSha=$Revision
+    Log "Исходный main: $BaseSha"
+    $node=Capture 'node.exe' @('--version'); Log ('Node: '+$node.Text+' (CI использует Node 22)')
+    $pr=$null
+    if ($Mode -ne 'MainOnly') { Step '2. Поиск интеграционного PR'; $pr=Find-Candidate }
+    $route='MainOnly'
+    if ($pr) {
+        $SelectedPR=[int]$pr.number
+        $PinnedSha=[string]$pr.head.sha
+        if ($PinnedSha -notmatch '^[0-9a-f]{40}$') { throw 'GitHub не вернул корректный SHA кандидата.' }
+        if ($pr.merged -eq $true -or $pr.state -eq 'closed') {
+            if ($pr.merged -ne $true -or -not (Test-Ancestor $PinnedSha $BaseSha)) { throw 'PR закрыт без подтверждённого включения его head в main.' }
+            Log 'Кандидат уже в main. Повторное слияние не требуется.'
+        } else {
+            if ($pr.state -ne 'open' -or $pr.base.sha -ne $BaseSha) { throw 'PR не соответствует актуальному main.' }
+            Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
+            if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
+            if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            Assert-ManifestStages $SelectedManifest
+            if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
+            else {
+                Log "PR #${SelectedPR}: $($pr.html_url)"
+                $route=$Mode
+                if ($route -eq 'Auto') {
+                    Log '1 — локальный конвейер (по умолчанию); 2 — GitHub Actions (новый запуск); 0 — отмена.'
+                    $answer=Read-Host 'Выберите маршрут [1]'
+                    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq '1') { $route='Local' }
+                    elseif ($answer -eq '2') { $route='Online' }
+                    else { $ExitCode=2; throw 'Операция отменена.' }
+                }
+                if ($route -eq 'Local') { Log 'Выбран локальный CI. GitHub Actions не запускается и не проверяется.' }
+                else { Log 'Выбран облачный CI. После подтверждения будет запрошен один новый запуск.' }
+                Confirm-Integration $route
+            }
+        }
+    } else { Log 'Интеграционный кандидат не выбран. Сборка актуального main без слияния.' }
+    $DiagnosticRoute=$route
+    if ($route -eq 'Local') {
+        Step '3. Локальный кандидат слияния в изолированном worktree'
+        if ((Git-Text @('rev-parse',($BaseSha+':.github/workflows'))) -ne (Git-Text @('rev-parse',($PinnedSha+':.github/workflows')))) { throw 'Workflow changes require a separate reviewed integration; local push blocked.' }
+        New-Worktree $BaseSha
+        Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
+        $Revision=Git-Text @('rev-parse','HEAD')
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'Кандидат отсутствует в локальном merge commit.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево слияния отличается от кандидата.' }
+        Run-LocalCI
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+        Step '4. Отправка точного проверенного merge commit в GitHub main'
+        $null=Assert-CurrentCandidate $true
+        # Normal fast-forward push only. GitHub protection rules are respected.
+        # Do NOT use --force, --admin, or bypass required checks.
+        Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
+        $RemoteChanged=$true
+        if ((Fetch-Main) -ne $Revision) { throw 'Удалённый main отличается от проверенного merge commit.' }
+        Log 'Проверенный локальный merge commit находится в GitHub main.'
+    } elseif ($route -eq 'Online') {
+        Step '3. GitHub Actions и слияние PR'
+        $fresh=Assert-CurrentCandidate
+        if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $fresh=Assert-CurrentCandidate $true
+        Start-CloudCI $fresh
+        $null=Wait-CI
+        $null=Assert-CurrentCandidate $true
+        Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
+        $RemoteChanged=$true
+        $Revision=Sync-Main
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'GitHub не подтвердил включение точного кандидата в main.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево main после слияния отличается от проверенного кандидата. Сборка остановлена до проверки.' }
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    } else {
+        Step '3. Только синхронизация и сборка main'
+        $Revision=Sync-Main
+        Log 'Статус прежних CI не подтверждается этим маршрутом; выполняются сборка и release:check.'
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    }
+    Install-Html $source $Revision
+    $ExitCode=0
+} catch {
+    Add-DiagnosticEvent 'failure' (Get-DiagnosticCode ([string]$_.Exception.Message))
+    Log ("FAILED [$StepName]: "+$_.Exception.Message)
+    if ($RemoteChanged) { Log 'ВНИМАНИЕ: удалённый main уже изменён. Автоматический откат Git запрещён. После исправления повторите синхронизацию/сборку.' }
+    else { Log 'Скрипт не подтвердил изменение удалённого main. При сетевой ошибке проверьте его фактический SHA.' }
+    Log 'Предыдущий HTML не считается новым релизом.'
+} finally {
+    if ($TempHtml -and (Test-Path -LiteralPath $TempHtml)) { Remove-Item -LiteralPath $TempHtml -Force -ErrorAction SilentlyContinue }
+    if ($WorktreeRegistered -and $Root) {
+        try {
+            Set-Location -LiteralPath $Root
+            # Only the isolated worktree created by THIS invocation is removed.
+            Run 'git.exe' @('worktree','remove','--force',$Worktree)
+        } catch { Write-Warning "Не удалось убрать временный worktree: $Worktree. Основной проект не удалён." }
+    }
+    $env:VITE_GPU_PROFILE=$PriorGpuProfile
+    try { Set-Location -LiteralPath $InitialLocation } catch {}
+    if ($LogWriter) { $LogWriter.Dispose(); $LogWriter=$null }
+    if ($ExitCode -eq 0 -or $ExitCode -eq 2) { Remove-Item -LiteralPath $FullLog -Force -ErrorAction SilentlyContinue }
+    else {
+        try {
+            New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+            $local=Join-Path $LogRoot ('failure-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6)+'.log')
+            Move-Item -LiteralPath $FullLog -Destination $local
+            Write-Host "Локальный журнал ошибки: $local" -ForegroundColor Yellow
+            try {
+                $journal=Save-DiagnosticJournal $local
+                Write-Host "Локальная диагностическая копия: $journal"
+                $null=Upload-DiagnosticJournal $journal
+            } catch { Write-Warning 'Не удалось создать или отправить диагностическую копию. Оригинальный журнал сохранён.' }
+            Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Warning "Журнал оставлен: $FullLog" }
+    }
+}
+exit $ExitCode
+; template='Failed test: scripts/local-pipeline.test.mjs / PowerShell local pipeline regression suite' }
+        @{ pattern='(?i)^\s*(Test Files|Tests)\s+([0-9]{1,6})\s+failed\s*\|\s*([0-9]{1,6})\s+passed\s*\(([0-9]{1,6})\)\s*        @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
+        @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
+        @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+(passed|failed|skipped)\s*(?:\([0-9.]+(?:ms|s|m)\))?\s*$'; template='Tests: $1 $2' }
+        @{ pattern='(?i)\bHTTP\s+(400|401|403|404|408|409|422|429|500|502|503|504)\b'; template='HTTP $1' }
+        @{ pattern='(?i)^\s*Node:\s*v([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})\s+\(CI использует Node 22\)\s*$'; template='Node v$1' }
+        @{ pattern='(?i)^\s*\+\s*(npm\.cmd|git\.exe|npx\.cmd|gh\.exe)\s+'; template='Command: $1 (arguments omitted)' }
+        @{ pattern='(?i)\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENOSPC|ENOMEM|EACCES|EPERM|ENOENT|ERESOLVE|EINTEGRITY)\b'; template='System error: $1' }
+        @{ pattern='(?i)Cannot bind argument to parameter .LiteralPath. because it is an empty string'; template='PowerShell: LiteralPath is empty' }
+        @{ pattern='(?i)Cannot find path|PathNotFound|ItemNotFound'; template='PowerShell: path not found' }
+        @{ pattern='(?i)JavaScript heap out of memory|out of memory|heap limit'; template='Memory exhausted' }
+        @{ pattern='(?i)Permission denied|Access is denied'; template='Access denied' }
+        @{ pattern='(?i)authentication failed|не авторизован'; template='Authentication failed' }
+        @{ pattern='(?i)Could not resolve host|connection timed out'; template='Network resolution or timeout failure' }
+        @{ pattern='(?i)non-fast-forward|fetch first'; template='Git: non-fast-forward' }
+        @{ pattern='(?i)protected branch|GH006|GH013'; template='Git: branch protection rejected operation' }
+        @{ pattern='(?i)merge conflict|CONFLICT \('; template='Git: merge conflict' }
+        @{ pattern='(?i)AssertionError|expect\(.*\)'; template='Test assertion failed' }
+        @{ pattern='(?i)CI не пройден'; template='Cloud CI failed' }
+        @{ pattern='(?i)Время ожидания CI истекло'; template='Cloud CI timed out' }
+        @{ pattern='(?i)Конфигурация CI кандидата отличается'; template='CI workflow differs from base' }
+        @{ pattern='(?i)Кандидат не содержит актуальный main|origin/main изменился|PR или main изменился'; template='Candidate or main changed' }
+        @{ pattern='(?i)Не найдена встроенная точка входа|Повреждён встроенный блок|не обнаружена ревизия сборки'; template='HTML validation failed' }
+        @{ pattern='(?i)Не установлена программа'; template='Required tool not installed' }
+        @{ pattern='(?i)Не найден локальный репозиторий'; template='Local project not found' }
+        @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
+)
+function ConvertTo-SafeLogLine([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
+    if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
+    foreach ($rule in $script:SafeDiagnosticRules) {
+        $m=[regex]::Match($Line,$rule.pattern,[Text.RegularExpressions.RegexOptions]::CultureInvariant,[TimeSpan]::FromMilliseconds(100))
+        if ($m.Success) {
+            $safe=$m.Result($rule.template)
+            if ($safe -match '^TypeScript TS[0-9]{4,5}$') {
+                $location=[regex]::Match($Line,'\(([0-9]{1,6}),([0-9]{1,6})\)\s*:\s*(?:error\s+)?TS[0-9]{4,5}\s*:',[Text.RegularExpressions.RegexOptions]::IgnoreCase,[TimeSpan]::FromMilliseconds(100))
+                if ($location.Success) { $safe += ('; line '+$location.Groups[1].Value+', column '+$location.Groups[2].Value) }
+            }
+            return $safe
+        }
+    }
+    return $null
+}
+function Get-SafeLogExcerpt([string]$LocalLog) {
+    $items=[System.Collections.Generic.Queue[object]]::new()
+    $read=0
+    $matched=0
+    $privateBlock=$false
+    if (-not (Test-Path -LiteralPath $LocalLog -PathType Leaf)) { return @{status='unavailable';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    if ((Get-Item -LiteralPath $LocalLog).Length -gt 16777216) { return @{status='size-limit';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $reader=[IO.StreamReader]::new($LocalLog,[Text.Encoding]::UTF8,$true)
+    try {
+        while ($null -ne ($line=$reader.ReadLine())) {
+            $read++
+            if ($line -match '(?i)-----\s*BEGIN\s+[^-]*PRIVATE KEY') { $privateBlock=$true }
+            if ($privateBlock) {
+                if ($line -match '(?i)-----\s*END\s+[^-]*PRIVATE KEY') { $privateBlock=$false }
+                continue
+            }
+            $safe=ConvertTo-SafeLogLine $line
+            if ($null -ne $safe) {
+                $matched++
+                if ($items.Count -ge 500) { $null=$items.Dequeue() }
+                $items.Enqueue([ordered]@{log_line=$read;message=$safe})
+            }
+        }
+    } finally { $reader.Dispose() }
+    return @{status='reconstructed';lines=$items.ToArray();read_lines=$read;omitted_lines=($read-$matched);truncated_matches=($matched-$items.Count)}
+}
+
+function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
+    $journalPath=[IO.Path]::ChangeExtension($LocalLog,'.diagnostic.json')
+    try { $excerpt=Get-SafeLogExcerpt $LocalLog }
+    catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
+    $report=[ordered]@{
+        schema='iscribe-build-diagnostics/v2'
+        script_version='6.4'
+        utc=[DateTime]::UtcNow.ToString('o')
+        route=$script:DiagnosticRoute
+        revision=(Get-SafeSha $script:Revision)
+        candidate_sha=(Get-SafeSha $script:PinnedSha)
+        base_sha=(Get-SafeSha $script:BaseSha)
+        pull_request=$script:SelectedPR
+        remote_changed=$script:RemoteChanged
+        ci_request_id=$(if ($script:CiRequestId -cmatch '^[0-9a-f]{32}$') { $script:CiRequestId } else { $null })
+        ci_run_id=$(if ($script:CiRunId -match '^[0-9]+$') { $script:CiRunId } else { $null })
+        outcome=$(if ($SelfTest) { 'self-test' } else { 'failed' })
+        detail='allowlisted events and reconstructed technical excerpt only; full original retained locally'
+        text_excerpt=$excerpt
+        events=$script:DiagnosticEvents.ToArray()
+        omitted_events=$script:DiagnosticOmitted
+    }
+    [IO.File]::WriteAllText($journalPath,($report | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    return $journalPath
+}
+function Get-VerifiedDiagnosticRepo {
+    $repoInfo=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+    if ($repoInfo.ExitCode -ne 0 -or -not $repoInfo.Text) {
+        Write-Warning ('Диагностический репозиторий недоступен: '+$repoInfo.Kind+'. Проверьте существование и права gh.')
+        return $null
+    }
+    $info=$repoInfo.Text | ConvertFrom-Json
+    if ($info.full_name -ne $DiagnosticsRepo -or $info.private -ne $true -or $info.visibility -ne 'private' -or $info.permissions.push -ne $true -or $info.archived -eq $true -or -not $info.default_branch) {
+        Write-Warning 'Не подтверждены приватность, активность и права записи репозитория. Ничего не отправлено.'
+        return $null
+    }
+    return $info
+}
+function Get-GitBlobSha([byte[]]$Bytes) {
+    # GitHub contents API uses Git blob SHA-1, not SHA-1 of raw file bytes.
+    $header=[Text.Encoding]::ASCII.GetBytes(('blob '+$Bytes.Length+[char]0))
+    $buffer=[byte[]]::new($header.Length+$Bytes.Length)
+    [Buffer]::BlockCopy($header,0,$buffer,0,$header.Length)
+    [Buffer]::BlockCopy($Bytes,0,$buffer,$header.Length,$Bytes.Length)
+    $sha=[Security.Cryptography.SHA1]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($buffer))).Replace('-','').ToLowerInvariant() }
+    finally { $sha.Dispose() }
+}
+function Get-DiagnosticRemoteState([string]$Path,[string]$Branch,[string]$ExpectedSha) {
+    $r=Invoke-GhApiRead ($Path+'?ref='+[uri]::EscapeDataString($Branch))
+    if ($r.ExitCode -ne 0) {
+        if ($r.Kind -eq 'not-found') { return 'absent' }
+        return 'unknown'
+    }
+    try {
+        $file=$r.Text | ConvertFrom-Json
+        if ($file.type -ceq 'file' -and $file.sha -ceq $ExpectedSha) { return 'matched' }
+        return 'conflict'
+    } catch { return 'unknown' }
+}
+function Upload-DiagnosticJournal([string]$JournalPath) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { Write-Host 'Отправка диагностики отключена.'; return $false }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { Write-Warning 'gh.exe недоступен; диагностический журнал сохранён локально.'; return $false }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { Write-Warning 'Требуется отдельный приватный репозиторий диагностики.'; return $false }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { return $false }
+    $bytes=[IO.File]::ReadAllBytes($JournalPath)
+    if ($bytes.Length -gt 2097152) { Write-Warning 'Диагностический журнал превышает лимит 2 МБ; отправка отменена.'; return $false }
+    $expected=Get-GitBlobSha $bytes
+    $branch=[string]$info.default_branch
+    # Stable filename for these exact bytes: all retries use the same path.
+    $report=$null
+    try { $report=[Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { throw 'Некорректный диагностический JSON.' }
+    $utc=[DateTimeOffset]::Parse([string]$report.utc,[Globalization.CultureInfo]::InvariantCulture).UtcDateTime
+    $prefix='failures'
+    $label='failure'
+    if ($report.outcome -ceq 'self-test') { $prefix='checks'; $label='check' }
+    elseif ($report.outcome -cne 'failed') { throw 'Неизвестный тип диагностического отчёта.' }
+    $remotePath=$prefix+'/'+$utc.ToString('yyyy-MM')+'/'+$label+'-'+$utc.ToString('yyyyMMdd-HHmmss')+'-'+$expected+'.json'
+    $path='repos/'+$DiagnosticsRepo+'/contents/'+$remotePath
+    $url='https://github.com/'+$DiagnosticsRepo+'/blob/'+$branch+'/'+$remotePath
+    $payload=@{message='Add structured build failure diagnostic [skip ci]';content=[Convert]::ToBase64String($bytes);branch=$branch}
+    $json=Join-Path $env:TEMP ('iscribe-gh-'+[guid]::NewGuid().ToString('N')+'.json')
+    try {
+        [IO.File]::WriteAllText($json,($payload|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
+        for ($attempt=1; $attempt -le 3; $attempt++) {
+            # Recheck the privacy and access gate before every write.
+            $current=Get-VerifiedDiagnosticRepo
+            if (-not $current -or $current.default_branch -cne $branch) { Write-Warning 'Репозиторий или ветка изменились. Отправка остановлена.'; return $false }
+            $before=Get-DiagnosticRemoteState $path $branch $expected
+            if ($before -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (уже записан)"; return $true }
+            if ($before -ne 'absent') { Write-Warning 'Не подтверждено отсутствие файла или обнаружен конфликт. Запись запрещена.'; return $false }
+            # Create only: no sha field, no overwriting an existing file.
+            $result=Invoke-GhApiOnce @('api','-X','PUT',$path,'--input',$json)
+            # Always confirm read-back of exact contents, even if PUT reported success.
+            # A timeout can mean the server already committed the file.
+            # Reconcile by exact path and blob hash before allowing retry.
+            $after=Get-DiagnosticRemoteState $path $branch $expected
+            if ($after -eq 'matched') { Write-Host "Диагностический журнал GitHub: $url (запись подтверждена)"; return $true }
+            if ($after -ne 'absent' -or $result.Kind -ne 'transient' -or $attempt -eq 3) {
+                Write-Warning 'Отправка не подтверждена или повтор небезопасен. Локальная копия сохранена.'
+                return $false
+            }
+            Add-DiagnosticEvent 'api-retry' 'upload-transient' $result.ExitCode
+            Wait-ApiRetry $attempt
+        }
+    } finally { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+    return $false
+}
+
+function Invoke-DiagnosticsCheck([bool]$Provision) {
+    if ($NoUploadDiagnostics -or -not $UploadDiagnostics) { throw 'Для проверки отправки диагностика должна быть включена.' }
+    if ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate) { throw 'Режим диагностики не принимает параметры интеграции.' }
+    if ($DiagnosticsRepo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -or $DiagnosticsRepo -eq $Repository) { throw 'Требуется отдельный приватный репозиторий.' }
+    if (-not (Get-Command 'gh.exe' -ErrorAction SilentlyContinue)) { throw 'Не установлен GitHub CLI (gh.exe).' }
+    if ((Capture 'gh.exe' @('auth','status','--hostname','github.com')).ExitCode -ne 0) { throw 'GitHub CLI не авторизован. Выполните gh auth login.' }
+    if ($Provision) {
+        if ($DiagnosticsRepo -cne 'AlmazovAN/iScribe-diagnostics') { throw 'DiagnosticsSetup разрешён только для штатного диагностического репозитория.' }
+        $probe=Invoke-GhApiRead ('repos/'+$DiagnosticsRepo)
+        if ($probe.Kind -eq 'not-found') {
+            # 404 may mean missing repository or insufficient access. The create
+            # request is explicit, private, and never modifies an existing repo.
+            Write-Host "Создание приватного репозитория $DiagnosticsRepo (одна попытка)"
+            $creation=Capture 'gh.exe' @('repo','create',$DiagnosticsRepo,'--private','--add-readme')
+            if ($creation.ExitCode -ne 0) { Write-Warning 'Создание не подтверждено; проверяем фактическое состояние без повторного создания.' }
+        } elseif ($probe.ExitCode -ne 0) {
+            throw ('Не удалось проверить существование репозитория: '+$probe.Kind)
+        }
+    }
+    $info=Get-VerifiedDiagnosticRepo
+    if (-not $info) { throw 'Приватный диагностический репозиторий с правами записи не подтверждён.' }
+    $script:DiagnosticRoute='diagnostics-check'
+    $script:DiagnosticStage='self-test'
+    Add-DiagnosticEvent 'self-test' 'synthetic-only'
+    $sample=Join-Path $env:TEMP ('iscribe-diag-check-'+[guid]::NewGuid().ToString('N')+'.log')
+    $journal=[IO.Path]::ChangeExtension($sample,'.diagnostic.json')
+    try {
+        # Synthetic fixture only, no local source paths, personal data or real credentials.
+        [IO.File]::WriteAllLines($sample,[string[]]@(
+            'HTTP 404',
+            'example.ts(12,3): error TS2322: synthetic message',
+            'Authorization: Bearer synthetic-only-0000',
+            'UNRECOGNIZED_SYNTHETIC_TEXT'
+        ),[Text.UTF8Encoding]::new($false))
+        $journal=Save-DiagnosticJournal $sample -SelfTest
+        $data=[IO.File]::ReadAllText($journal)
+        $report=$data | ConvertFrom-Json
+        $messages=@($report.text_excerpt.lines | ForEach-Object { $_.message })
+        if ($report.outcome -cne 'self-test' -or $report.text_excerpt.status -cne 'reconstructed' -or
+            $messages.Count -ne 2 -or $messages[0] -cne 'HTTP 404' -or
+            $messages[1] -cne 'TypeScript TS2322; line 12, column 3' -or
+            $data.Contains('synthetic-only-0000') -or $data.Contains('UNRECOGNIZED_SYNTHETIC_TEXT') -or $data.Contains('example.ts')) {
+            throw 'Проверка фильтрации не пройдена. Отправка запрещена.'
+        }
+        if (-not (Upload-DiagnosticJournal $journal)) { throw 'Тестовая запись или обратное чтение не подтверждены.' }
+        Write-Host 'DIAGNOSTICS CHECK PASS: приватность, фильтрация, запись и SHA при обратном чтении подтверждены.' -ForegroundColor Green
+    } finally {
+        Remove-Item -LiteralPath $sample,$journal -Force -ErrorAction SilentlyContinue
+    }
+}
+if ($Mode -in @('DiagnosticsSetup','DiagnosticsCheck')) {
+    try {
+        Invoke-DiagnosticsCheck ($Mode -eq 'DiagnosticsSetup')
+        exit 0
+    } catch {
+        Write-Warning ('DIAGNOSTICS CHECK FAIL: '+$_.Exception.Message)
+        exit 1
+    }
+}
+
+try {
+    $LogWriter=[IO.StreamWriter]::new($FullLog,$false,[Text.UTF8Encoding]::new($false))
+    Step '1. Подготовка и синхронизация исходного main'
+    if ($Mode -eq 'MainOnly' -and ($PullRequest -gt 0 -or $IntegrationBranch -or $ExpectedHeadSha -or $Integrate)) { throw 'MainOnly не принимает параметры интеграции.' }
+    Assert-Tools ($Mode -ne 'MainOnly')
+    # Standard build must not inherit an opt-in profiling build flag.
+    Remove-Item Env:VITE_GPU_PROFILE -ErrorAction SilentlyContinue
+    $Root=Resolve-Project
+    Set-Location -LiteralPath $Root
+    Log "Репозиторий: $Root"
+    $Revision=Sync-Main
+    $BaseSha=$Revision
+    Log "Исходный main: $BaseSha"
+    $node=Capture 'node.exe' @('--version'); Log ('Node: '+$node.Text+' (CI использует Node 22)')
+    $pr=$null
+    if ($Mode -ne 'MainOnly') { Step '2. Поиск интеграционного PR'; $pr=Find-Candidate }
+    $route='MainOnly'
+    if ($pr) {
+        $SelectedPR=[int]$pr.number
+        $PinnedSha=[string]$pr.head.sha
+        if ($PinnedSha -notmatch '^[0-9a-f]{40}$') { throw 'GitHub не вернул корректный SHA кандидата.' }
+        if ($pr.merged -eq $true -or $pr.state -eq 'closed') {
+            if ($pr.merged -ne $true -or -not (Test-Ancestor $PinnedSha $BaseSha)) { throw 'PR закрыт без подтверждённого включения его head в main.' }
+            Log 'Кандидат уже в main. Повторное слияние не требуется.'
+        } else {
+            if ($pr.state -ne 'open' -or $pr.base.sha -ne $BaseSha) { throw 'PR не соответствует актуальному main.' }
+            Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
+            if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
+            if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            Assert-ManifestStages $SelectedManifest
+            if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
+            else {
+                Log "PR #${SelectedPR}: $($pr.html_url)"
+                $route=$Mode
+                if ($route -eq 'Auto') {
+                    Log '1 — локальный конвейер (по умолчанию); 2 — GitHub Actions (новый запуск); 0 — отмена.'
+                    $answer=Read-Host 'Выберите маршрут [1]'
+                    if ([string]::IsNullOrWhiteSpace($answer) -or $answer -eq '1') { $route='Local' }
+                    elseif ($answer -eq '2') { $route='Online' }
+                    else { $ExitCode=2; throw 'Операция отменена.' }
+                }
+                if ($route -eq 'Local') { Log 'Выбран локальный CI. GitHub Actions не запускается и не проверяется.' }
+                else { Log 'Выбран облачный CI. После подтверждения будет запрошен один новый запуск.' }
+                Confirm-Integration $route
+            }
+        }
+    } else { Log 'Интеграционный кандидат не выбран. Сборка актуального main без слияния.' }
+    $DiagnosticRoute=$route
+    if ($route -eq 'Local') {
+        Step '3. Локальный кандидат слияния в изолированном worktree'
+        if ((Git-Text @('rev-parse',($BaseSha+':.github/workflows'))) -ne (Git-Text @('rev-parse',($PinnedSha+':.github/workflows')))) { throw 'Workflow changes require a separate reviewed integration; local push blocked.' }
+        New-Worktree $BaseSha
+        Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
+        $Revision=Git-Text @('rev-parse','HEAD')
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'Кандидат отсутствует в локальном merge commit.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево слияния отличается от кандидата.' }
+        Run-LocalCI
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+        Step '4. Отправка точного проверенного merge commit в GitHub main'
+        $null=Assert-CurrentCandidate $true
+        # Normal fast-forward push only. GitHub protection rules are respected.
+        # Do NOT use --force, --admin, or bypass required checks.
+        Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
+        $RemoteChanged=$true
+        if ((Fetch-Main) -ne $Revision) { throw 'Удалённый main отличается от проверенного merge commit.' }
+        Log 'Проверенный локальный merge commit находится в GitHub main.'
+    } elseif ($route -eq 'Online') {
+        Step '3. GitHub Actions и слияние PR'
+        $fresh=Assert-CurrentCandidate
+        if ($fresh.draft) { Run 'gh.exe' @('pr','ready',[string]$SelectedPR,'--repo',$Repository) }
+        $fresh=Assert-CurrentCandidate $true
+        Start-CloudCI $fresh
+        $null=Wait-CI
+        $null=Assert-CurrentCandidate $true
+        Run 'gh.exe' @('pr','merge',[string]$SelectedPR,'--repo',$Repository,'--merge','--match-head-commit',$PinnedSha)
+        $RemoteChanged=$true
+        $Revision=Sync-Main
+        if (-not (Test-Ancestor $PinnedSha $Revision)) { throw 'GitHub не подтвердил включение точного кандидата в main.' }
+        if ((Git-Text @('rev-parse',($Revision+'^{tree}'))) -ne (Git-Text @('rev-parse',($PinnedSha+'^{tree}')))) { throw 'Дерево main после слияния отличается от проверенного кандидата. Сборка остановлена до проверки.' }
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    } else {
+        Step '3. Только синхронизация и сборка main'
+        $Revision=Sync-Main
+        Log 'Статус прежних CI не подтверждается этим маршрутом; выполняются сборка и release:check.'
+        New-Worktree $Revision
+        Build-Only
+        $source=Join-Path $Worktree 'dist\iScribe.html'
+        Assert-Html $source $Revision
+    }
+    Install-Html $source $Revision
+    $ExitCode=0
+} catch {
+    Add-DiagnosticEvent 'failure' (Get-DiagnosticCode ([string]$_.Exception.Message))
+    Log ("FAILED [$StepName]: "+$_.Exception.Message)
+    if ($RemoteChanged) { Log 'ВНИМАНИЕ: удалённый main уже изменён. Автоматический откат Git запрещён. После исправления повторите синхронизацию/сборку.' }
+    else { Log 'Скрипт не подтвердил изменение удалённого main. При сетевой ошибке проверьте его фактический SHA.' }
+    Log 'Предыдущий HTML не считается новым релизом.'
+} finally {
+    if ($TempHtml -and (Test-Path -LiteralPath $TempHtml)) { Remove-Item -LiteralPath $TempHtml -Force -ErrorAction SilentlyContinue }
+    if ($WorktreeRegistered -and $Root) {
+        try {
+            Set-Location -LiteralPath $Root
+            # Only the isolated worktree created by THIS invocation is removed.
+            Run 'git.exe' @('worktree','remove','--force',$Worktree)
+        } catch { Write-Warning "Не удалось убрать временный worktree: $Worktree. Основной проект не удалён." }
+    }
+    $env:VITE_GPU_PROFILE=$PriorGpuProfile
+    try { Set-Location -LiteralPath $InitialLocation } catch {}
+    if ($LogWriter) { $LogWriter.Dispose(); $LogWriter=$null }
+    if ($ExitCode -eq 0 -or $ExitCode -eq 2) { Remove-Item -LiteralPath $FullLog -Force -ErrorAction SilentlyContinue }
+    else {
+        try {
+            New-Item -ItemType Directory -Path $LogRoot -Force | Out-Null
+            $local=Join-Path $LogRoot ('failure-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+[guid]::NewGuid().ToString('N').Substring(0,6)+'.log')
+            Move-Item -LiteralPath $FullLog -Destination $local
+            Write-Host "Локальный журнал ошибки: $local" -ForegroundColor Yellow
+            try {
+                $journal=Save-DiagnosticJournal $local
+                Write-Host "Локальная диагностическая копия: $journal"
+                $null=Upload-DiagnosticJournal $journal
+            } catch { Write-Warning 'Не удалось создать или отправить диагностическую копию. Оригинальный журнал сохранён.' }
+            Get-ChildItem -LiteralPath $LogRoot -Filter 'failure-*.log' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 3 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Warning "Журнал оставлен: $FullLog" }
+    }
+}
+exit $ExitCode
+; template='$1: $2 failed, $3 passed ($4 total)' }
         @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
         @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
         @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
