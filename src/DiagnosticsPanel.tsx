@@ -132,6 +132,7 @@ export function DiagnosticsPanel({job,jobs,busy,checking,onSelect,onInspect,onIn
     {benchmark?.audioPipeline&&<details aria-label="Audio Pipeline"><summary>Audio Pipeline</summary>
      <p>Окон запланировано: {benchmark.audioPipeline.scheduled} · использовано: {benchmark.audioPipeline.consumed} · готовы к моменту запроса: {benchmark.audioPipeline.readyHits} · ошибки: {benchmark.audioPipeline.failed}.</p>
      <p>Максимальная глубина очереди: {benchmark.audioPipeline.peakQueued} · ожидание буфера: {benchmark.audioPipeline.waitMs} мс · подготовка использованных окон: {benchmark.audioPipeline.preparedMs} мс.</p>
+     <p>Ранние запуски подготовки: {benchmark.audioPipeline.earlyDispatches??'—'} · интервал до окончания записи метаданных: {benchmark.audioPipeline.preDispatchLeadMs??'—'} мс. Это наблюдаемое время, не подтверждённое ускорение.</p>
      <p>Время подготовки может перекрываться с распознаванием. Глубина очереди не измеряет полную память декодера.</p>
     </details>}
     {benchmark?.wasmThreads&&<details aria-label="Потоки WASM"><summary>Потоки WASM</summary>
