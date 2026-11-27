@@ -439,7 +439,7 @@ function Run-LocalCI {
     Run 'npm.cmd' @('run','lint')
     Run 'npm.cmd' @('test')
     Step 'Локальный CI: браузерные испытания Playwright'
-    Run 'npm.cmd' @('install','--no-save','--package-lock=false','@playwright/test@1.56.1')
+    Run 'node.exe' @('node_modules/@playwright/test/cli.js','--version')
     Run 'npx.cmd' @('playwright','install','chromium')
     $priorCI=$env:CI
     try {
