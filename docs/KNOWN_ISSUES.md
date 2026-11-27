@@ -73,3 +73,5 @@ PERF-10: real hardware gates T01–T10/HW-1–7 remain NOT TESTED; no production
 GPU-08: early lookahead can overlap metadata persistence but still competes for host resources. Scheduling lead is not actual GPU/CPU overlap or saved time. Existing two-window cap, one producer, rotation boundary and conservative retirement after decoder failure remain. No production GPU tensor transfer changes or full-audio pipeline changes. Full regression and hardware performance NOT TESTED.
 
 GPU-09: adaptive depth uses host readiness and observed wait, not GPU utilization, energy, free RAM or proven speedup. Two-window eligibility may be unavailable because browsers expose coarse/capped device memory hints. Existing queued windows may drain during a trial. The thresholds are heuristics requiring real-recording acceptance. No automatic provider/model/dtype changes. Full suite and hardware NOT TESTED.
+
+- Local pipeline: legacy release candidates without manifests need explicit selection; stale candidates must be refreshed against main. Automatic cleanup, remote success report and retry queue are deferred. Real Windows acceptance pending.

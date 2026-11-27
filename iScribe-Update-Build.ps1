@@ -1,4 +1,4 @@
-﻿# iScribe Update & Build v6.4 — Windows PowerShell 5.1 / PowerShell 7
+﻿# iScribe Update & Build v7.0 — Windows PowerShell 5.1 / PowerShell 7
 # Auto: offer local CI by default; cloud CI only after explicit selection.
 # Local: test exact merge commit, then normal push; no Actions dispatch.
 # Online: dispatch CI once for the pinned candidate, wait, then ordinary PR merge.
@@ -27,6 +27,7 @@ $Revision = 'unknown'
 $PinnedSha = $null
 $BaseSha = $null
 $SelectedPR = 0
+$SelectedManifest = $null
 $CiRequestId = $null
 $CiRunId = $null
 $CiBranch = $null
@@ -59,6 +60,7 @@ function Add-DiagnosticEvent([string]$Kind,[string]$Code,[int]$Exit=-1) {
 function Get-DiagnosticCode([string]$Message) {
     switch -Regex ($Message) {
         'Cannot bind argument to parameter .LiteralPath. because it is an empty string' { return 'EMPTY_LITERAL_PATH' }
+        'Cannot bind argument to parameter .Path. because it is an empty string|ParameterArgumentValidationErrorEmptyStringNotAllowed' { return 'EMPTY_PATH' }
         'Cannot find path|PathNotFound|ItemNotFound' { return 'PATH_NOT_FOUND' }
         'ENOSPC|not enough space|disk full' { return 'DISK_FULL' }
         'out of memory|ENOMEM|heap limit' { return 'OUT_OF_MEMORY' }
@@ -258,26 +260,108 @@ function Assert-PRIdentity($Pr) {
     if ($IntegrationBranch -and $Pr.head.ref -ne $IntegrationBranch) { throw 'PR не соответствует явно указанной ветке.' }
     if ($ExpectedHeadSha -and $Pr.head.sha -ne $ExpectedHeadSha) { throw 'PR не соответствует явно указанному SHA.' }
 }
+# Manifest is stored in the integration PR description, not in its own commit.
+# Exact format: <!-- iscribe-release: {"schema":1,"release_id":"...","base_sha":"...","head_sha":"...","stages":[{"id":"...","pr":123,"sha":"..."}]} -->
+function Get-ReleaseManifest($Pr) {
+    $body=[string]$Pr.body
+    $manifestMatches=[regex]::Matches($body,'(?m)^<!-- iscribe-release: (\{[^\r\n]*\}) -->\s*$')
+    if ($manifestMatches.Count -eq 0) { return $null }
+    if ($manifestMatches.Count -ne 1 -or $manifestMatches[0].Groups[1].Value.Length -gt 30000) { throw 'Invalid or duplicate release manifest.' }
+    $m=$manifestMatches[0].Groups[1].Value | ConvertFrom-Json
+    if ($m.schema -ne 1 -or [string]$m.release_id -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$' -or
+        [string]$m.base_sha -cnotmatch '^[0-9a-f]{40}$' -or [string]$m.head_sha -cnotmatch '^[0-9a-f]{40}$' -or
+        $m.base_sha -cne $Pr.base.sha -or $m.head_sha -cne $Pr.head.sha) { throw 'Release manifest identity or SHA is stale.' }
+    $stages=@($m.stages)
+    if ($stages.Count -lt 1 -or $stages.Count -gt 100) { throw 'Invalid manifest stage count.' }
+    $ids=@{}; $numbers=@{}
+    foreach ($stage in $stages) {
+        if ([string]$stage.id -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$' -or
+            [string]$stage.pr -notmatch '^[1-9][0-9]{0,8}$' -or [string]$stage.sha -cnotmatch '^[0-9a-f]{40}$' -or
+            $ids.ContainsKey([string]$stage.id) -or $numbers.ContainsKey([string]$stage.pr)) { throw 'Invalid or duplicate manifest stage.' }
+        $ids[[string]$stage.id]=$true; $numbers[[string]$stage.pr]=$true
+    }
+    return @{Data=$m;Raw=$manifestMatches[0].Groups[1].Value}
+}
+function Test-ReadyRelease($Pr) {
+    if ($Pr.state -ne 'open' -or $Pr.draft -or $Pr.base.ref -ne 'main' -or
+        $Pr.base.repo.full_name -ne $Repository -or $Pr.head.repo.full_name -ne $Repository -or
+        $Pr.head.ref -notmatch '^codex/.+-release-candidate$') { return $false }
+    $labels=@($Pr.labels | ForEach-Object {$_.name})
+    if (@($labels | Where-Object {$_ -in @('experimental','on-hold','abandoned','development','local-ci-failed')}).Count -gt 0) { return $false }
+    return $true
+}
 function Find-Candidate {
-    if ($PullRequest -gt 0) { $p=Get-PR $PullRequest; Assert-PRIdentity $p; return $p }
-    $all = @(Gh-Json @('api',('repos/' + $Repository + '/pulls?state=open&base=main&per_page=100')) | Where-Object { $_ -ne $null })
-    if ($all.Count -ge 100) { throw 'Слишком много открытых PR для безопасного автовыбора. Укажите -PullRequest.' }
-    $matches = @($all | Where-Object {
-        $_.head.repo.full_name -eq $Repository -and $(if ($IntegrationBranch) { $_.head.ref -eq $IntegrationBranch } else { $_.head.ref -match '^codex/.+-release-candidate$' })
-    })
-    if ($matches.Count -gt 1) { Log ('Кандидаты: ' + (($matches | ForEach-Object { '#'+$_.number+' '+$_.head.ref }) -join '; ')); throw 'Несколько кандидатов. Укажите -PullRequest.' }
-    if ($matches.Count -eq 0) {
-        if ($IntegrationBranch -or $ExpectedHeadSha -or $Mode -in @('Local','Online')) { throw 'Открытый интеграционный PR не найден. Укажите -PullRequest или используйте -Mode MainOnly.' }
-        if ($all.Count -gt 0) { Log 'Другие открытые PR не являются обозначенными release-candidate и автоматически не объединяются.' }
+    if ($PullRequest -gt 0) {
+        $p=Get-PR $PullRequest; Assert-PRIdentity $p
+        if ($p.state -eq 'open' -and -not (Test-ReadyRelease $p)) { throw 'Explicit PR is not a ready integration candidate.' }
+        $script:SelectedManifest=Get-ReleaseManifest $p
+        if (-not $script:SelectedManifest -and $p.state -eq 'open') { Log 'Legacy integration PR: no manifest; explicit selection and confirmation required.'; if ($Integrate) { throw 'Unattended integration requires a manifest.' } }
+        return $p
+    }
+    $all=@()
+    for ($page=1;$page -le 20;$page++) {
+        $batch=@(Gh-Json @('api',('repos/'+$Repository+'/pulls?state=open&per_page=100&page='+$page)) | Where-Object {$_ -ne $null})
+        $all+= $batch
+        if ($batch.Count -lt 100) { break }
+        if ($page -eq 20) { throw 'PR inventory exceeds safe pagination limit.' }
+    }
+    $ready=@(); $legacy=@()
+    foreach ($p in $all) {
+        if (-not (Test-ReadyRelease $p) -or ($IntegrationBranch -and $p.head.ref -ne $IntegrationBranch)) { continue }
+        try {
+            $manifest=Get-ReleaseManifest $p
+            if ($manifest) { $ready+= $p }
+            else { $legacy+= $p }
+        } catch { Log ('Excluded invalid/stale manifest on PR #'+$p.number) }
+    }
+    Log ('Open PRs: '+$all.Count+'; manifest-ready: '+$ready.Count+'; legacy candidates: '+$legacy.Count+'; ignored: '+($all.Count-$ready.Count-$legacy.Count))
+    $choices=@($ready)+@($legacy)
+    if ($choices.Count -eq 0) {
+        if ($IntegrationBranch -or $ExpectedHeadSha -or $Mode -in @('Local','Online')) { throw 'No ready integration candidate.' }
         return $null
     }
-    $p=$matches[0]; Assert-PRIdentity $p; return $p
+    if ($ready.Count -eq 1 -and $legacy.Count -eq 0) { $p=$ready[0] }
+    else {
+        foreach ($p in $choices) {
+            $m=Get-ReleaseManifest $p
+            if ($m) { Log ('#'+$p.number+' '+$m.Data.release_id+' / '+@($m.Data.stages).Count+' stages') }
+            else { Log ('#'+$p.number+' '+$p.head.ref+' / legacy, no manifest') }
+        }
+        $answer=Read-Host 'Enter one PR number (0 = cancel)'
+        if ($answer -eq '0') { $script:ExitCode=2; throw 'Integration cancelled.' }
+        $picked=@($choices | Where-Object {[string]$_.number -ceq $answer})
+        if ($picked.Count -ne 1) { throw 'Select exactly one listed integration PR.' }
+        $p=$picked[0]
+    }
+    $p=Get-PR ([int]$p.number)
+    Assert-PRIdentity $p
+    if (-not (Test-ReadyRelease $p)) { throw 'Candidate readiness changed.' }
+    $script:SelectedManifest=Get-ReleaseManifest $p
+    if (-not $script:SelectedManifest -and $Integrate) { throw 'Unattended integration requires a manifest.' }
+    return $p
+}
+function Assert-ManifestStages($Manifest) {
+    if (-not $Manifest) { return }
+    foreach ($stage in @($Manifest.Data.stages)) {
+        $p=Get-PR ([int]$stage.pr)
+        if ($p.head.repo.full_name -ne $Repository -or $p.base.repo.full_name -ne $Repository -or
+            $p.head.sha -cne $stage.sha -or $p.draft -or ($p.state -ne 'open' -and -not $p.merged)) {
+            throw ('Manifest stage PR identity/state changed: #'+$stage.pr)
+        }
+        if (-not (Test-Ancestor $stage.sha $script:PinnedSha)) { throw ('Manifest stage not in candidate history: #'+$stage.pr) }
+    }
 }
 function Assert-CurrentCandidate([bool]$RequireReady=$false) {
     $p=Get-PR $script:SelectedPR
     Assert-PRIdentity $p
     if ($p.state -ne 'open' -or $p.head.sha -ne $script:PinnedSha -or $p.base.sha -ne $script:BaseSha) { throw 'PR или main изменился. Повторите запуск с новой ревизией.' }
     if ($RequireReady -and $p.draft) { throw 'PR всё ещё является Draft.' }
+    if ($script:SelectedManifest) {
+        if (-not (Test-ReadyRelease $p)) { throw 'Candidate readiness changed.' }
+        $now=Get-ReleaseManifest $p
+        if (-not $now -or $now.Raw -cne $script:SelectedManifest.Raw) { throw 'Release manifest changed during testing.' }
+        Assert-ManifestStages $now
+    }
     $remote=Fetch-Main
     if ($remote -ne $script:BaseSha) { throw 'origin/main изменился. Проверка устарела; повторите запуск.' }
     return $p
@@ -355,7 +439,7 @@ function Run-LocalCI {
     Run 'npm.cmd' @('run','lint')
     Run 'npm.cmd' @('test')
     Step 'Локальный CI: браузерные испытания Playwright'
-    Run 'npm.cmd' @('install','--no-save','--package-lock=false','@playwright/test@1.56.1')
+    Run 'node.exe' @('node_modules/@playwright/test/cli.js','--version')
     Run 'npx.cmd' @('playwright','install','chromium')
     $priorCI=$env:CI
     try {
@@ -444,6 +528,15 @@ function Get-SafeSha([string]$Value) {
 # arbitrary captures. Only fixed templates and constrained numeric/enum
 # captures are allowed. Unknown text is omitted, not merely masked.
 $script:SafeDiagnosticRules = @(
+        @{ pattern='(?i)Cannot bind argument to parameter .Path. because it is an empty string'; template='PowerShell: Path is empty' }
+        @{ pattern='(?i)\bParameterArgumentValidationErrorEmptyStringNotAllowed\b'; template='PowerShell: ParameterArgumentValidationErrorEmptyStringNotAllowed' }
+        @{ pattern='(?i)^\s*At\s+[^\r\n]*[\\/]scripts[\\/]Test-CI06\.ps1:\s*([0-9]{1,6})\s+char:\s*([0-9]{1,6})'; template='Source: scripts/Test-CI06.ps1:$1:$2' }
+        @{ pattern='(?i)^\s*At\s+[^\r\n]*[\\/]iScribe-Update-Build\.ps1:\s*([0-9]{1,6})\s+char:\s*([0-9]{1,6})'; template='Source: iScribe-Update-Build.ps1:$1:$2' }
+        @{ pattern='(?i)^\s*At\s+[^\r\n]*[\\/]scripts[\\/]Test-CI06\.ps1:\s*$'; template='Source: scripts/Test-CI06.ps1' }
+        @{ pattern='(?i)^\s*([0-9]{1,6})\s+char:\s*([0-9]{1,6})\s*$'; template='PowerShell location: line $1, column $2' }
+        @{ pattern='(?i)^\s*FAIL\s+scripts/local-pipeline\.test\.mjs\s+>\s+PowerShell local pipeline regression suite\s*$'; template='Failed test: scripts/local-pipeline.test.mjs / PowerShell local pipeline regression suite' }
+        @{ pattern='(?i)^\s*(Test Files|Tests)\s+([0-9]{1,6})\s+failed\s*\|\s*([0-9]{1,6})\s+passed\s*\(([0-9]{1,6})\)\s*$'; template='$1: $2 failed, $3 passed ($4 total)' }
+        @{ pattern='(?i)^\s*Unexpected token .* in expression or statement\.\s*$'; template='PowerShell parser: unexpected token' }
         @{ pattern='(?i)\bTS([0-9]{4,5})\s*:'; template='TypeScript TS$1' }
         @{ pattern='(?i)\bnpm\s+(?:ERR!|error)\s+code\s+(EACCES|EPERM|ENOENT|ENOSPC|ENOMEM|ERESOLVE|EINTEGRITY|ECONNRESET|ETIMEDOUT|ENOTFOUND|E401|E403|E404|ELIFECYCLE)\b'; template='npm error code $1' }
         @{ pattern='(?i)^\s*(?:Test Files|Tests)\s+([0-9]{1,6})\s+(passed|failed)\s+\(([0-9]{1,6})\)\s*$'; template='Tests: $1 $2 ($3 total)' }
@@ -472,6 +565,7 @@ $script:SafeDiagnosticRules = @(
         @{ pattern='(?i)Есть изменения отслеживаемых файлов'; template='Tracked working tree is dirty' }
 )
 function ConvertTo-SafeLogLine([string]$Line) {
+    $Line=[regex]::Replace($Line,([string][char]27+'\[[0-9;]*m'),'')
     if ([string]::IsNullOrWhiteSpace($Line) -or $Line.Length -gt 8192) { return $null }
     if ($Line -match '(?i)-----\s*(BEGIN|END)\s+[^-]*PRIVATE KEY|authorization\s*[:=]|(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{8,}|(?:token|secret|password|passwd|api[_-]?key|credential|cookie|set-cookie|client[_-]?secret)\s*["'']?\s*[:=]|(?:gh[pousr]_|github_pat_|sk-(?:proj-)?)[A-Za-z0-9_-]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|(?:^|\s)(?:env:|export\s+|set\s+)[A-Za-z_][A-Za-z0-9_]*\s*=|https?://[^/\s]+@') { return $null }
     foreach ($rule in $script:SafeDiagnosticRules) {
@@ -520,7 +614,7 @@ function Save-DiagnosticJournal([string]$LocalLog,[switch]$SelfTest) {
     catch { $excerpt=@{status='filter-error';lines=@();read_lines=0;omitted_lines=0;truncated_matches=0} }
     $report=[ordered]@{
         schema='iscribe-build-diagnostics/v2'
-        script_version='6.4'
+        script_version='7.0'
         utc=[DateTime]::UtcNow.ToString('o')
         route=$script:DiagnosticRoute
         revision=(Get-SafeSha $script:Revision)
@@ -713,6 +807,7 @@ try {
             Run 'git.exe' @('fetch','origin',('refs/heads/'+$pr.head.ref+':refs/remotes/origin/'+$pr.head.ref))
             if ((Git-Text @('rev-parse',('refs/remotes/origin/'+$pr.head.ref))) -ne $PinnedSha) { throw 'Ветка изменилась во время получения. Повторите запуск.' }
             if (-not (Test-Ancestor $BaseSha $PinnedSha)) { throw 'Кандидат не содержит актуальный main. Сначала нужна новая интеграционная ветка.' }
+            Assert-ManifestStages $SelectedManifest
             if (Test-Ancestor $PinnedSha $BaseSha) { Log 'Кандидат уже в main.' }
             else {
                 Log "PR #${SelectedPR}: $($pr.html_url)"
@@ -733,6 +828,7 @@ try {
     $DiagnosticRoute=$route
     if ($route -eq 'Local') {
         Step '3. Локальный кандидат слияния в изолированном worktree'
+        if ((Git-Text @('rev-parse',($BaseSha+':.github/workflows'))) -ne (Git-Text @('rev-parse',($PinnedSha+':.github/workflows')))) { throw 'Workflow changes require a separate reviewed integration; local push blocked.' }
         New-Worktree $BaseSha
         Run 'git.exe' @('merge','--no-ff','--no-edit',$PinnedSha)
         $Revision=Git-Text @('rev-parse','HEAD')
@@ -742,7 +838,7 @@ try {
         $source=Join-Path $Worktree 'dist\iScribe.html'
         Assert-Html $source $Revision
         Step '4. Отправка точного проверенного merge commit в GitHub main'
-        $null=Assert-CurrentCandidate
+        $null=Assert-CurrentCandidate $true
         # Normal fast-forward push only. GitHub protection rules are respected.
         # Do NOT use --force, --admin, or bypass required checks.
         Run 'git.exe' @('push','origin',($Revision+':refs/heads/main'))
