@@ -742,6 +742,7 @@ export class JobRunner{
   if(pinned!==undefined&&(!validateSpeechPlan(pinned,audio.length)||streamed||!checkpoints))throw new CheckpointIntegrityError();
   if(pinned&&audio instanceof Float32Array&&checkpoints&&
     (pinned.decoderProfile!==this.checkpointProfile(id)||pinned.pcmFingerprint!==await checkpoints.pcmInput(audio)))throw new CheckpointIntegrityError();
+  this.check();
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
