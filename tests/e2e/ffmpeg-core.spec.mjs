@@ -44,3 +44,24 @@ test('DEC-FIX real compressed MP3 decodes through the strict FFmpeg path',async(
  expect(result).toMatchObject({samples:5184,finite:true});
  expect(result.peak).toBeGreaterThan(0.01);
 });
+
+test('DEC-FRAME bounded recovery of a damaged synthetic MP3 preserves PCM duration',async({page})=>{
+ await page.goto('/tests/e2e/harness.html');
+ const result=await page.evaluate(async(encoded)=>{
+  const {decodeFfmpegAudio}=await import('/src/ffmpegDecoder.ts');
+  const {canRecoverFfmpegFrame}=await import('/src/decoderDiagnostics.ts');
+  const original=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0)),damaged=new Uint8Array(original.length*6);
+  for(let i=0;i<6;i++)damaged.set(original,i*original.length);
+  const offset=original.length*2+108*4+4;damaged.fill(255,offset,offset+9);
+  const file=new File([damaged],'synthetic-damaged.mp3',{type:'audio/mpeg'});
+  let eligible=false,strictDiagnostic;
+  try{await decodeFfmpegAudio(file);}catch(error){eligible=canRecoverFfmpegFrame(error);strictDiagnostic=error.diagnostic;}
+  if(!eligible)return {eligible,strictDiagnostic};
+  try{
+   let recovered;
+   const pcm=await decodeFfmpegAudio(file,undefined,{expectedSamples:31104,onRecovered:d=>{recovered=d;}});
+   return {eligible,samples:pcm.length,finite:pcm.every(Number.isFinite),recovered};
+  }catch(error){return {eligible,failure:error.failure,diagnostic:error.diagnostic};}
+ },"//M4xAATuGaMP08YAAvW27cK9Xq9Xq9Xs79+rE4hioay3ibibjjIQaBoIYrGR4CAPg+D5/KOy5/lHTnT5zl/Ocv7un3ZQEwfPrD4IBiUAYPvkwQOZd/dy4Pg+D6AERSMBgQCAQCAAAANKWG///M4xBAZKY6tv5mgAv/faU/d+lSNNQwUMPp1kQemBEKFzIhUDFMQUFk4BiIgW9Gos4UEKCIb/jmjmk0RYi3/kyOaOaTRFiLf/mJdJkyLxeMf/8ul1IyMkQVZ/lgqCoiCoK3//+yRYyCZ41+G//M4xAoXUHocAd9AAADYBEYByBFGBYgExgWAImYPIJwmYlB+xp/4poYcmHjGE1A75gzAX6YAaCnmBPAG5gDQAWSgACFTvNxAkaruhWUuR/n9/Jq/0/bt/ptT/1e9C9dq1SAF///5P6oMWZMh//M4xAsVyHYcEs/4ZBMmIzvzAHwHIwEYDvMDHC1jEunSIyikO8MCiAzTKYiONXEzafzLoQBQpL9MlgacuVT21di59M/67Sn639n3/0/7SlyOu3bu3N6rPuQq///ldyFdqhHAHAASGDommIhG//M4xBIWEHYYAO/6gBkSjZpxmhjK7+4ZrYIoGDTgupnCcpq1AxkOUBjKC4KCwv2tRx3cjFOGdq7VTme/l7kXovau1Hya/o/XYm/tX5zoVaqwvPoqg/X/2hYwWADC4AAIHhoVQwnzIYCDPkIT//M4xBgYiNoUoO/mho0E4y7MF8NjIAqjCiwPEwLkFBMBGDvjACQUwUASwToDQIlw1yAFQtnu9evXvp689+q5M/uSv3p2re3aq/f5a5F+5vT8iuxLnFP11f//+wwMvej8DQAYwB4AkMBCASDA//M4xBQVsHYkAV9IABMC7MEbBjTC0xNExXFSBMt4BiDBtAQgwIgDqMB+BtDAUgJQwKoBeMAqAFiIAMTHXe64jJw9/9v//f////tT//97dqmwIIIIMIID//yzhaz2dextphgggYEYn9GwMVjg//M4xBwcEd6AVZugAB9MYXj4xYDDtQvabAZRODj5UAUbAMDyT/wt/C5sd4s//xKZEyHjNk//+UyDlc6Rc3//zpfN0S+bo///l83RL5uxfN3f/Lh4HwGHhO7//WHiY00lxpUhFKOS3f/gfswE//M4xAoVIHbBv8MQAszLszMYUBAjVVVVUCFPBUFQWfBUFQ7gqC2JQVBrBUFn4K0xKCwNPgqDQNPEoLA0HYKg0DT4LA0DWIgaPYiBrUDR7LA1xEe1A1yx5UxBTUUzLjEwMFVVVVVVVVVVVVVV");
+ expect(result).toMatchObject({eligible:true,samples:31104,finite:true,recovered:{details:['damaged-frame']}});
+});

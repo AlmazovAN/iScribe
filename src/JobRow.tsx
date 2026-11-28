@@ -56,7 +56,7 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
      <progress max={100} value={job.stage==='speakers'?job.percent??undefined:progress?.percent} aria-label={`Обработка ${job.name}`}/>
     </div>
    </>}
-   <small>{job.params.language}{job.backend?' · '+job.backend:''}{job.decoderIdentity?' · '+(job.decoderIdentity.kind==='ffmpeg'?'FFmpeg':job.decoderIdentity.route==='windowed'?'MediaBunny':'Web Audio'):''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
+   <small>{job.params.language}{job.backend?' · '+job.backend:''}{job.decoderIdentity?' · '+(job.decoderIdentity.kind==='ffmpeg'?'FFmpeg':job.decoderIdentity.route==='windowed'?'MediaBunny':'Web Audio'):''}{job.fullFrameRecoveryExpectedSamples!==undefined?' · восстановление кадров':''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
   </div>
   <div className="file-actions">
    {(!active&&!running&&(!queued||job.stage==='interrupted')&&(job.stage==='waiting'||retry))&&<button className="start" onClick={()=>onStart(job.id)}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}

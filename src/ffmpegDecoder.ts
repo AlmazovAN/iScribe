@@ -2,13 +2,14 @@ import {MAX_SECONDS,usesStreamedAudio,validateFile} from './audio';
 import {PCM_SAMPLE_RATE,inspectDecodedPcm} from './audioValidation';
 import workerSource from './ffmpegWorker.js?raw';
 import errorClassifier from './ffmpegErrorClassifier.js?raw';
-import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails} from './decoderDiagnostics';
+import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails,validateFrameRecovery,type FfmpegDetails} from './decoderDiagnostics';
 
 export const FFMPEG_CORE_ASSET='assets/ffmpeg-core-0.12.10.js';
 export const FFMPEG_WASM_ASSET='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
 const MAX_SAMPLES=MAX_SECONDS*PCM_SAMPLE_RATE;
 const DEADLINE_MS=10*60*1000;
-type Reply={kind:'pcm';buffer:ArrayBuffer}|{kind:'error';code:string;status?:number;details?:unknown;errorLines?:unknown};
+export type FfmpegFrameRecovery={expectedSamples:number;onRecovered?:(diagnostic:FfmpegDetails)=>void};
+type Reply={kind:'pcm';buffer:ArrayBuffer;details?:unknown;errorLines?:unknown}|{kind:'error';code:string;status?:number;details?:unknown;errorLines?:unknown};
 export function assetURL(name:string):string{
  const embedded=(globalThis as typeof globalThis&{__iscribeAssets?:Record<string,string>}).__iscribeAssets?.[name];
  return embedded??new URL(import.meta.env.DEV?'/'+name:name,document.baseURI).href;
@@ -33,9 +34,12 @@ export function readFfmpegPcm(buffer:ArrayBuffer):Float32Array{
  // No amplitude normalization, noise suppression or silent repair.
  return pcm;
 }
-export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<Float32Array>{
+export async function decodeFfmpegAudio(file:File,signal?:AbortSignal,recovery?:FfmpegFrameRecovery):Promise<Float32Array>{
  validateFile(file);signal?.throwIfAborted();
  if(usesStreamedAudio(file.size))throw new Error('FFmpeg: для этого файла требуется потоковый режим.');
+ if(recovery&&(!Number.isSafeInteger(recovery.expectedSamples)||recovery.expectedSamples<1||recovery.expectedSamples>MAX_SAMPLES))
+  throw new FfmpegDecoderError('recovery-rejected','decode');
+ let recoveredDiagnostic:FfmpegDetails|undefined;
  const assets=ffmpegWorkerAssets(workerSource);
  const source=URL.createObjectURL(assets.script);
  let worker:Worker|undefined;
@@ -56,20 +60,25 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
    if(signal?.aborted){abort();return;}
    active.onmessage=(event:MessageEvent<Reply>)=>{
     const reply=event.data;
-    if(reply?.kind==='pcm'&&reply.buffer instanceof ArrayBuffer){finish(undefined,reply.buffer);return;}
+    if(reply?.kind==='pcm'&&reply.buffer instanceof ArrayBuffer){
+     recoveredDiagnostic=safeFfmpegDetails(reply.details,reply.errorLines);
+     finish(undefined,reply.buffer);return;
+    }
     if(reply?.kind==='error'){finish(new FfmpegDecoderError(ffmpegFailure(reply.code),'decode',safeExitCode(reply.status),safeFfmpegDetails(reply.details,reply.errorLines)));return;}
     finish(new FfmpegDecoderError('runtime','decode'));
    };
    active.onerror=()=>finish(new FfmpegDecoderError('worker','decode'));
    active.onmessageerror=()=>finish(new FfmpegDecoderError('protocol','decode'));
-   try{active.postMessage({file,...assets.input,maxSamples:MAX_SAMPLES});}
+   try{active.postMessage({file,...assets.input,maxSamples:MAX_SAMPLES,frameRecovery:recovery!==undefined});}
    catch(error){finish(error);}
   });
   // Release the WASM heap before PCM inspection / Whisper.
   active.terminate();worker=undefined;
   signal?.throwIfAborted();
   const pcm=readFfmpegPcm(buffer);
+  if(recovery)validateFrameRecovery(recovery.expectedSamples,pcm.length,recoveredDiagnostic);
   await inspectDecodedPcm(pcm,{signal});
+  if(recovery&&recoveredDiagnostic)recovery.onRecovered?.(recoveredDiagnostic);
   return pcm;
  }finally{worker?.terminate();URL.revokeObjectURL(source)}
 }

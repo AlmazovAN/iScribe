@@ -1,5 +1,5 @@
 import {decodeAudio} from './audio';
-import {decodeFfmpegAudio} from './ffmpegDecoder';
+import {decodeFfmpegAudio,type FfmpegFrameRecovery} from './ffmpegDecoder';
 import {openFfmpegStreamedAudio} from './ffmpegStreamedAudio';
 import {openStreamedAudio,type StreamedAudio} from './streamedAudio';
 
@@ -7,7 +7,7 @@ import type {AudioDecoderKind} from './decoderDiagnostics';
 export type {AudioDecoderKind} from './decoderDiagnostics';
 export interface AudioDecoderProvider{
  readonly kind:AudioDecoderKind;
- decode(file:File,signal?:AbortSignal):Promise<Float32Array>;
+ decode(file:File,signal?:AbortSignal,recovery?:FfmpegFrameRecovery):Promise<Float32Array>;
  openStream(file:File,signal?:AbortSignal):Promise<StreamedAudio>;
 }
 export const legacyAudioDecoder:AudioDecoderProvider={kind:'legacy',decode:decodeAudio,openStream:openStreamedAudio};

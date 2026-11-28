@@ -718,3 +718,25 @@ it('DEC-04 reopens a FFmpeg window on coverage failure and retains prior ASR che
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovery-start',window:41,decoderKind:'ffmpeg',decoderFailure:'coverage'})]));
  await store.remove(job.id);
 });
+
+it('reserves one durable full frame recovery before ASR and records recovery',async()=>{
+ const {fake,store}=setup(),file=new File(['fixture'],'frame-recovery.mp3');
+ const job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,duration:60},file);
+ const decode=vi.fn<typeof import('./ffmpegDecoder').decodeFfmpegAudio>()
+  .mockRejectedValueOnce(new FfmpegDecoderError('decode','decode',1,{details:['damaged-frame','other'],errorLines:2}))
+  .mockImplementationOnce(async(_file,_signal,recovery)=>{
+   expect(recovery?.expectedSamples).toBe(960000);
+   expect((await store.get(job.id,false))?.fullFrameRecoveryExpectedSamples).toBe(960000);
+   expect(fake.transcribe).not.toHaveBeenCalled();
+   recovery?.onRecovered?.({details:['damaged-frame'],errorLines:1});
+   return new Float32Array(960000);
+  });
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',download:vi.fn()});
+ await runner.init();runner.enqueue(job.id);await finished(runner);
+ const saved=(await store.get(job.id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,fullDecodeRecoveries:1,fullFrameRecoveryExpectedSamples:960000});
+ expect(decode).toHaveBeenCalledTimes(2);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'decoder-frame-recovered',decoderDetails:['damaged-frame']})]));
+ await store.remove(job.id);
+});

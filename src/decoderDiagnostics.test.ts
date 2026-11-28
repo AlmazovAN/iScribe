@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {FfmpegDecoderError,canRetryFfmpeg,decoderIdentity,resolveJobDecoder,ffmpegFailure,ffmpegFailureFields,decoderReport,safeFfmpegDetails} from './decoderDiagnostics';
+import {FfmpegDecoderError,canRetryFfmpeg,decoderIdentity,resolveJobDecoder,ffmpegFailure,ffmpegFailureFields,decoderReport,safeFfmpegDetails,canRecoverFfmpegFrame,frameRecoveryExpectedSamples,validateFrameRecovery} from './decoderDiagnostics';
 import {reserveStreamRecovery} from './ml/recoveryPolicy';
 import {diagnosticReport,traceErrorKind} from './jobTrace';
 import {createJob} from './jobs';
@@ -58,4 +58,23 @@ it('allows only known decoder stderr categories and bounded numeric counters',()
  expect(ffmpegFailureFields(new FfmpegDecoderError('decode','decode',1,diagnostic))).toMatchObject({
   decoderDetails:['damaged-frame'],decoderErrorLines:2,decoderExitCode:1
  });
+});
+
+it('allows a known frame error plus a generic strict abort, not unrelated failures',()=>{
+ const err=(details:unknown,count=2)=>new FfmpegDecoderError('decode','decode',1,safeFfmpegDetails(details,count));
+ expect(canRecoverFfmpegFrame(err(['damaged-frame','other']))).toBe(true);
+ expect(canRecoverFfmpegFrame(err(['damaged-frame','memory']))).toBe(false);
+ expect(canRecoverFfmpegFrame(err(['other']))).toBe(false);
+ expect(canRecoverFfmpegFrame(err(['damaged-frame'],21))).toBe(false);
+ expect(frameRecoveryExpectedSamples(739.261975)).toBe(11828192);
+ expect(frameRecoveryExpectedSamples(undefined)).toBeUndefined();
+ expect(frameRecoveryExpectedSamples(3601)).toBeUndefined();
+});
+it('rejects recovered PCM with unexplained errors, excessive diagnostics or duration drift',()=>{
+ const diag=safeFfmpegDetails(['damaged-frame'],2);
+ expect(()=>validateFrameRecovery(160000,156000,diag)).not.toThrow();
+ expect(()=>validateFrameRecovery(160000,155999,diag)).toThrow('контроль');
+ expect(()=>validateFrameRecovery(160000,160000,safeFfmpegDetails(['other'],1))).toThrow();
+ expect(()=>validateFrameRecovery(160000,160000,safeFfmpegDetails(['damaged-frame'],21))).toThrow();
+ expect(()=>validateFrameRecovery(160000,160000,undefined)).toThrow();
 });

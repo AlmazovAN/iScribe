@@ -112,6 +112,13 @@ export class JobStore{
       throw new Error('Декодер задания изменился. Обновите страницу.');
      if((old?.fullDecodeRecoveries??0)>(job.fullDecodeRecoveries??0))
       throw new Error('Лимит полного декодирования изменился. Обновите страницу.');
+     if(old?.fullFrameRecoveryExpectedSamples!==undefined&&old.fullFrameRecoveryExpectedSamples!==job.fullFrameRecoveryExpectedSamples)
+      throw new Error('Режим восстановления аудиокадров изменился. Обновите страницу.');
+     if(job.fullFrameRecoveryExpectedSamples!==undefined&&
+        (!Number.isSafeInteger(job.fullFrameRecoveryExpectedSamples)||job.fullFrameRecoveryExpectedSamples<=0||job.fullFrameRecoveryExpectedSamples>57600000||
+         job.decoderIdentity?.kind!=='ffmpeg'||job.decoderIdentity.route!=='full'||job.fullDecodeRecoveries!==1||
+         (old?.fullFrameRecoveryExpectedSamples===undefined&&((old?.nextWindow??0)>0||old?.asrComplete))))
+      throw new Error('Некорректный режим восстановления аудиокадров.');
      const previous=old?.streamRecovery,next=job.streamRecovery;
      if(previous&&(!next||next.totalRecoveries<previous.totalRecoveries||next.window<previous.window||
        (next.window===previous.window&&next.windowRecoveries<previous.windowRecoveries)))

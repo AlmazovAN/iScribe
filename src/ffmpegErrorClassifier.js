@@ -12,7 +12,8 @@ globalThis.createFfmpegErrorCollector=function(){
   else if(/matches no streams|does not contain any stream|no audio stream/i.test(s))categories.add('missing-audio');
   else if(/cannot allocate memory|out of memory|allocation failed/i.test(s))categories.add('memory');
   else if(/unrecognized option|option .*not found|error parsing (global )?options|invalid argument.*option/i.test(s))categories.add('command-option');
-  else if(/header missing|invalid frame|error (while )?decoding|error submitting (a )?packet|corrupt(ed)? (input )?(packet|frame)|invalid (audio|mpeg) header|overread|invalid huffman|invalid side information/i.test(s))categories.add('damaged-frame');
+  else if(/header missing|invalid frame|big_values too big|error (while )?decoding|error processing packet in decoder|error submitting (a )?packet|corrupt(ed)? (input )?(packet|frame)|invalid (audio|mpeg) header|overread|invalid huffman|invalid side information/i.test(s))categories.add('damaged-frame');
+  else if(/task finished with error code|terminating thread with return code|conversion failed/i.test(s))categories.add('other');
   else if(/invalid data found when processing input|could not find codec parameters|moov atom not found|failed to read frame size|end of file/i.test(s))categories.add('invalid-container');
   else if(/input[/]output error|permission denied|no such file or directory|error reading|error opening input|error writing/i.test(s))categories.add('io');
   else categories.add('other');
