@@ -132,15 +132,15 @@ it('recovers a failed Worker and commits only one copy of the current window',as
  expect(saved.nextWindow).toBe(3);
  expect(saved.segments.map(s=>s.text)).toEqual(['first','second','third']);
 });
-it('stops after three failed inference attempts and keeps earlier checkpoint intact',async()=>{
+it('stops after two failed inference attempts and keeps earlier checkpoint intact',async()=>{
  const {runner,fake,store}=setup();await runner.init();
  await runner.add([new File(['a'],'exhausted.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
  fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}])
   .mockRejectedValue(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
  runner.enqueue(id);await finished(runner);
- expect(fake.transcribe).toHaveBeenCalledTimes(4);
- expect(fake.recover).toHaveBeenCalledTimes(2);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(fake.recover).toHaveBeenCalledTimes(1);
  const saved=(await store.list()).find(j=>j.id===id)!;
  expect(saved.stage).toBe('error');
  expect(saved.nextWindow).toBe(1);
@@ -341,15 +341,16 @@ it.each(['decode','resample'] as const)('stops a stalled streamed window 41 at %
  expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',phase:'audio',window:41,streamStage:stage,errorKind:'timeout'})]));
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(read).toHaveBeenCalledTimes(3);
- expect(openStream).toHaveBeenCalledTimes(3);
- expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(read).toHaveBeenCalledTimes(2);
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
+ expect(saved.recoveryLedger?.operations['stream-window']).toMatchObject({unit:41,attempts:2,done:false});
  expect(close).toHaveBeenCalled();
  // A fresh runner must not reset the persisted retry allowance.
  const resumed=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:100,streamResampleIdleMs:40});
  await resumed.init();resumed.enqueue(job.id);await finished(resumed);
- expect(openStream).toHaveBeenCalledTimes(4);
- expect(read).toHaveBeenCalledTimes(4);
+ expect(openStream).toHaveBeenCalledTimes(3); // opening the stream is not a window read
+ expect(read).toHaveBeenCalledTimes(2);
  expect((await store.get(job.id,false))?.nextWindow).toBe(40);
  await store.remove(job.id);
 });
@@ -452,7 +453,10 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
  Object.defineProperty(file,'size',{value:146_500_000});
  vi.spyOn(store,'audio').mockResolvedValue(file);
- const stalled=vi.fn<StreamedAudio['read']>(()=>new Promise(()=>{}));
+ const stalled=vi.fn<StreamedAudio['read']>(async(_window,observe)=>{
+  await observe?.({code:'stream-resample-start',streamStage:'resample',sourceSampleRate:44100});
+  return new Promise<Float32Array>(()=>{});
+ });
  const starts:number[]=[],length=1028*16000;
  const read=vi.fn<StreamedAudio['read']>(async(window,_observe,_beat,strict)=>{
   expect(strict).toBe(true);
@@ -464,12 +468,11 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  });
  const openStream=vi.fn<typeof openStreamedAudio>()
   .mockResolvedValueOnce({length,decoderId:1,read:stalled,close:vi.fn()})
-  .mockResolvedValueOnce({length,decoderId:2,read:stalled,close:vi.fn()})
   .mockImplementationOnce(async()=>{
    const durable=(await store.get(job.id,false))!;
    expect(durable.nextWindow).toBe(40);
-   expect(durable.streamRecovery?.totalRecoveries).toBe(2);
-   return {length,decoderId:3,read,close:vi.fn()};
+   expect(durable.streamRecovery?.totalRecoveries).toBe(1);
+   return {length,decoderId:2,read,close:vi.fn()};
   });
  // Capture the actual PCM given to Whisper; every part must occupy its
  // original sample range, including the short final fragment.
@@ -477,12 +480,12 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  fake.transcribe.mockImplementation(async()=>[{start:3,end:4,text:'fallback'}]);
  const original=fake.transcribe;
  const manager={...fake,transcribe:vi.fn(async(pcm:Float32Array)=>{actual.push(pcm);return original()})};
- const runner=new JobRunner({store,manager:manager as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,openStream,streamDecodeIdleMs:60,streamResampleIdleMs:60});
  await runner.init();runner.enqueue(job.id);await finished(runner);
  const saved=(await store.get(job.id,false))!;
- expect(openStream).toHaveBeenCalledTimes(3);
- expect(stalled).toHaveBeenCalledTimes(2);
- expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(stalled).toHaveBeenCalledTimes(1);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
  expect(saved.segments[0].text).toBe('saved');
  if(scenario==='success'){
   expect(starts).toEqual([1000,1005,1010,1015,1020,1025].map(x=>x*16000));
@@ -570,7 +573,7 @@ it('does not open another decoder if watchdog disposal failed',async()=>{
  expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
  expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'recovery'})]));
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'error'})]));
  await store.remove(job.id);
 });
 
