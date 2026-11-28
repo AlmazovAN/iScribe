@@ -156,3 +156,6 @@ Opt-in full-PCM Silero v5.1.2 advisory VAD, pinned upstream revision/blob, state
 
 ## PIPE-08 candidate
 Opt-in pause-aware full-PCM segmentation, 30s max with unchanged 5s overlap and full source coverage. Immutable plan pinned before ASR; legacy jobs and streaming remain fixed. Actual plan used in UI and diagnostics. Exact planner/VAD tsc + 6/6 Node smoke including 1000 generated maps PASS; real VAD/full CI/quality NOT TESTED. See [PIPE-08](PIPE-08_SPEECH_SEGMENTATION.md).
+
+## PIPE-09 candidate
+ASR QA inspects saved RAW before commit, preserves existing hard timestamp validation and adds advisory repeat/near-silence/density/timestamp evidence; atomic summary and local WER script. Exact helper tsc + 7/7 Node and exact script 4/4 smoke PASS; full CI/real accuracy NOT TESTED. No engine option, batching or automatic text suppression change. See [PIPE-09](PIPE-09_WHISPER_ASR_QUALITY.md).

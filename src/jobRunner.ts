@@ -32,6 +32,7 @@ import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {IdleModelLease,shouldReleaseBeforeJob} from './performance/resourceLifecycle';
 import {VAD_CONTRACT,SILERO_BLOB,validateVadReport,type VadReport} from './ml/vad';
 import {buildSpeechWindows,validateSpeechPlan,SEGMENTATION_CONTRACT,type SpeechWindowPlan} from './speechSegmentation';
+import {inspectRawAsr,inspectOwnedAsr,addAsrQuality,AsrQualityError} from './ml/asrQuality';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
@@ -477,7 +478,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined||disk.windowPlan!==undefined)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined||disk.windowPlan!==undefined||disk.asrQuality!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -956,7 +957,6 @@ export class JobRunner{
     }
     const rawInputs=checkpoints?[profile,window.start,window.end,await checkpoints.pcmInput(pcm),params.model,params.language,'engine-0.1.1-transformers-4.3.1-asr-v1',...(this.job(id).windowPlan?[SEGMENTATION_CONTRACT]:[])]:undefined;
     const raw=checkpoints&&rawInputs?await checkpoints.loadRaw('asr',rawInputs):undefined;
-    if(raw!==undefined&&!Array.isArray(raw))throw new CheckpointIntegrityError();
     this.set({operation:'Распознавание'});
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
     let result:TranscriptSegment[]|undefined=raw as TranscriptSegment[]|undefined,successfulAttemptMs=0;
@@ -1022,7 +1022,7 @@ export class JobRunner{
       dispatched=undefined;
       successfulAttemptMs=benchmarkNow()-attemptMeasured;
       this.bench(id,b=>({...addBenchmarkTiming(b,'asrAttemptMs',successfulAttemptMs),attempts:b.attempts+1}));
-      this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:result.length,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
+      this.traceEvent(id,'window-result','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,segmentCount:Array.isArray(result)?result.length:undefined,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
       break;
      }catch(error){
       // A timed-out or rejected request may still own its dispatch buffer.
@@ -1053,7 +1053,7 @@ export class JobRunner{
       this.patch(id,{backend:prepared.backend});
      }
     }
-    if(!result)throw new Error('Окно не вернуло результат распознавания.');
+    if(result===undefined)throw new Error('Окно не вернуло результат распознавания.');
     // Outside Worker retry: a storage or validation failure must never
     // automatically repeat a successful inference.
     if(checkpoints&&rawInputs&&raw===undefined){
@@ -1061,7 +1061,16 @@ export class JobRunner{
      this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'asr',artifactState:'saved',window:index+1});
     }
     this.check();
-    const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
+    const rawQuality=inspectRawAsr(result,pcm);
+    if(rawQuality.invalidSegments>0){
+     this.traceEvent(id,'asr-quality','asr',{window:index+1,totalWindows:windows.length,asrQuality:rawQuality,errorKind:'inference'});
+     throw new AsrQualityError();
+    }
+    const owned=absoluteSegments(result,window),prior=this.job(id).segments;
+    const quality=inspectOwnedAsr(rawQuality,owned,prior,pcm.length);
+    this.traceEvent(id,'asr-quality','asr',{window:index+1,totalWindows:windows.length,asrQuality:quality});
+    const asrQuality=addAsrQuality(this.job(id).asrQuality,quality);
+    const segments=[...prior,...owned];
     const after=checkpointProgress(windows,index+1);
     if(streamed){
      this.set({operation:'Сохранение контрольной точки'});
@@ -1074,7 +1083,7 @@ export class JobRunner{
     const ledger=this.job(id).recoveryLedger;
     const record=ledger?.operations.asr;
     const recoveryLedger=ledger&&record?.unit===index+1&&!record.done?finishOperation(ledger,'asr',index+1):ledger;
-    await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after),recoveryLedger},segments);
+    await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after),recoveryLedger,asrQuality},segments);
     if(checkpoints&&profile&&session){
      try{await checkpoints.discardWindow(profile,window.start,window.end)}
      catch{this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'cleanup-failed',window:index+1,errorKind:'storage'})}

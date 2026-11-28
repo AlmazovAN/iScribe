@@ -1,4 +1,5 @@
 import type {Job} from './jobs';
+import {qualitySummary,type AsrWindowQuality} from './ml/asrQuality';
 import {recoveryReport,type RecoveryOperation} from './recoveryManager';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
@@ -10,7 +11,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'pipeline-stage'|'checkpoint-artifact'|'vad-result'|'vad-fallback'|'segmentation-plan'|'recovery-reserved'|'recovery-exhausted'|
+ 'pipeline-stage'|'checkpoint-artifact'|'vad-result'|'vad-fallback'|'segmentation-plan'|'asr-quality'|'recovery-reserved'|'recovery-exhausted'|
  'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
@@ -30,6 +31,7 @@ export type TraceEvent={
  artifactStage?:'pcm'|'window-pcm'|'asr'|'diarization'|'vad';
  segmentationMode?:'fixed'|'pause-aware';
  adjustedCuts?:number;
+ asrQuality?:AsrWindowQuality;
  vadFrames?:number;
  vadSpeechSamples?:number;
  vadIntervals?:number;
@@ -104,7 +106,7 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
   if(value.code==='audio-validation-failed')return 'invalid-audio';
   if(value.code==='checkpoint-integrity')return 'storage';
   if(value.code==='worker-failed'||value.code==='worker-disposal-failed')return 'worker';
-  if(value.code==='transcribe-failed')return 'inference';
+  if(value.code==='transcribe-failed'||value.code==='asr-quality-invalid')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
   if(value.name==='QuotaExceededError'||value.code==='storage-failed')return 'storage';
   if(value.name==='NetworkError'||value.code==='network-failed')return 'network';
@@ -151,6 +153,7 @@ export function diagnosticReport(job:Job){
   decoder:decoderReport(job.decoderIdentity),
   fullDecodeRecoveries:job.fullDecodeRecoveries??0,
   recoveryLedger:recoveryReport(job.recoveryLedger),
+  asrQuality:qualitySummary(job.asrQuality),
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import {expect,it} from 'vitest';
 import {JobStore} from './jobStore';
 import {createJob,absoluteSegments,audioWindows} from './jobs';
+import {addAsrQuality,inspectRawAsr,inspectOwnedAsr} from './ml/asrQuality';
 import {initialLedger,reserveOperation,finishOperation} from './recoveryManager';
 import {buildSpeechWindows,SEGMENTATION_CONTRACT,type SpeechWindowPlan} from './speechSegmentation';
 it('recovers committed text and source after reopening, without claiming the worker is still running',async()=>{
@@ -73,5 +74,18 @@ it('PIPE-08 saves immutable window geometry before ASR and rejects a stale or ch
  await expect(store.save({...j,windowPlan:{...plan,pcmFingerprint:'b'.repeat(64)}})).rejects.toThrow('Нельзя изменить');
  await store.save({...j,windowPlan:plan,nextWindow:1,segments:[{start:3,end:4,text:'saved'}]});
  expect((await store.get(j.id,false))?.windowPlan).toEqual(plan);
+ await store.remove(j.id);
+});
+
+it('PIPE-09 preserves quality summary atomically and refuses stale counters',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'quality-counter.wav'),j=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(j,file);
+ const pcm=new Float32Array(16000),text=[{start:0,end:1,text:'test'}],quality=addAsrQuality(undefined,inspectOwnedAsr(inspectRawAsr(text,pcm),text,[],pcm.length));
+ const first={...j,nextWindow:1,segments:text,asrQuality:quality};
+ await store.save(first);
+ expect((await new JobStore().get(j.id,false))?.asrQuality).toEqual(quality);
+ await expect(store.save({...first,asrQuality:undefined})).rejects.toThrow('журнал качества');
+ await expect(store.save({...first,nextWindow:2})).rejects.toThrow('Журнал качества');
+ expect((await store.get(j.id,false))?.nextWindow).toBe(1);
  await store.remove(j.id);
 });

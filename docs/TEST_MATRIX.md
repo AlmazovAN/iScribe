@@ -242,3 +242,9 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - SEG-01 geometry, exact overlap/full coverage, deterministic 1000 generated maps, legacy lock and corrupt plan rejection — exact planner/VAD strict tsc + 6/6 Node groups PASS; Vitest NOT TESTED.
 - SEG-02 immutable IndexedDB plan, publish before ASR, resume exact geometry after interruption with flags off, progress/diagnostics and boundary ownership — tests authored, NOT TESTED in full project.
 - SEG-03 real VAD/quiet speech, paired WER/boundary/RTF tests, local mandatory CI and #76 reconciliation — NOT TESTED.
+
+## PIPE-09 candidate gates
+- ASRQ-01 RAW/timestamp metrics, repeat and near-silence warnings, bounded analysis, atomic summary and redaction — exact helper strict tsc + 7/7 Node PASS; Vitest NOT TESTED.
+- ASRQ-02 local plain TXT WER normalization/edit distance/bounds/privacy — exact script 4/4 Node smoke PASS; Vitest NOT TESTED.
+- ASRQ-03 RAW replay/invalid metadata, JobRunner warning-preservation, JobStore transaction and full local CI — authored, NOT TESTED.
+- ASRQ-04 real paired WER, hallucination/quiet speech manual review, timing/RTF/memory and #76 reconciliation — NOT TESTED.
