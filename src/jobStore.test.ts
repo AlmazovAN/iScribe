@@ -101,3 +101,20 @@ it('PIPE-10 preserves alignment checkpoint and rejects rollback',async()=>{
  await expect(store.save({...saved,alignmentCheckpoint:{...alignmentCheckpoint,alignedWords:2}})).rejects.toThrow('Нельзя изменить');
  await store.remove(job.id);
 });
+
+it('PIPE-11 saves speaker rows and word summary together and rejects rollback',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'word-speaker-store.wav'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
+ const alignmentCheckpoint={revision:1 as const,contract:'ctc-v1-q8-stride320-min035-word-offsets' as const,language:'ru' as const,samples:16000,segmentCount:1,decoderProfile:'PRIVATE PROFILE',pcmFingerprint:'a'.repeat(64),transcriptFingerprint:'b'.repeat(64),alignedSegments:1,alignedWords:2};
+ const base={...job,duration:1,sourceFingerprint:'source',artifactContract:'pipe04-v1',nextWindow:1,asrComplete:true,segments:[{start:0,end:1,text:'а б'}],alignmentCheckpoint};
+ await store.save(base,file);
+ const wordSpeakerStats={revision:1 as const,mode:'word-v1' as const,sourceSegments:1,alignedSourceSegments:1,fallbackSourceSegments:0,outputSegments:2,alignedWords:2,labeledWords:1,unknownWords:1,ambiguousWords:1,weakWords:0,uncoveredWords:0,splitSourceSegments:1};
+ const speakerSegments=[{start:0,end:.4,text:'а ',speaker:'A'},{start:.6,end:1,text:'б'}];
+ const pinned={...base,wordSpeakerStats,speakerSegments};
+ await store.save(pinned);
+ const restored=(await new JobStore().get(job.id,false))!;
+ expect(restored.wordSpeakerStats).toEqual(wordSpeakerStats);expect(restored.speakerSegments).toEqual(speakerSegments);
+ await expect(store.save(base)).rejects.toThrow('Нельзя изменить');
+ await expect(store.save({...pinned,speakerSegments:speakerSegments.slice(0,1)})).rejects.toThrow('Некорректная');
+ expect((await store.get(job.id,false))?.speakerSegments).toEqual(speakerSegments);
+ await store.remove(job.id);
+});
