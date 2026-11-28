@@ -1,4 +1,5 @@
 import type {Job} from './jobs';
+import {validLedger,type RecoveryOperation} from './recoveryManager';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
 import type {PipelineStage,PipelineState,PipelineReason} from './pipelineOrchestrator';
@@ -9,7 +10,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'pipeline-stage'|'checkpoint-artifact'|
+ 'pipeline-stage'|'checkpoint-artifact'|'recovery-reserved'|'recovery-exhausted'|
  'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
@@ -54,6 +55,8 @@ export type TraceEvent={
  decoderDetails?:FfmpegDetailCode[];
  decoderErrorLines?:number;
  recoveryCount?:number;
+ recoveryOperation?:RecoveryOperation;
+ recoveryLimit?:'operation'|'job';
  decoderWindows?:number;
  rotationCount?:number;
  closeReason?:'rotation'|'recovery'|'finish'|'error'|'cancel';
@@ -141,6 +144,7 @@ export function diagnosticReport(job:Job){
   },
   decoder:decoderReport(job.decoderIdentity),
   fullDecodeRecoveries:job.fullDecodeRecoveries??0,
+  recoveryLedger:validLedger(job.recoveryLedger)?job.recoveryLedger:null,
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,
