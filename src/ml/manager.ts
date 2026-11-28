@@ -54,7 +54,7 @@ export class ModelManager{
  releaseIdle():boolean{
   if(this.busy||(!this.client&&!this.asrWorker))return false;
   ++this.generation;
-  try{this.disposeAsr();return true}finally{this.phase('idle',null,null)}
+  try{this.disposeAsr();return true}finally{this.phase(this.resourceBlocked?'error':'idle',null,null)}
  }
  private busy=false;
  private speakerWorker:Worker|null=null;
