@@ -28,8 +28,8 @@ describe('DEC-03: bounded decoder recovery and provenance',()=>{
   expect(canRetryFfmpeg(short,'full')).toBe(false);
   const a=reserveStreamRecovery(short,41),b=reserveStreamRecovery(short,41,a!);
   expect(a).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
-  expect(b).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
-  expect(reserveStreamRecovery(short,41,b!)).toBeNull();
+  expect(b).toBeNull();
+  expect(reserveStreamRecovery(short,41,a!)).toBeNull();
   expect(reserveStreamRecovery(short,42,{window:41,windowRecoveries:2,totalRecoveries:5})).toBeNull();
   for(const failure of ['decode','runtime','asset','initialize','protocol','probe','probe-exit','probe-json','probe-metadata','length','duration','timeline','workerfs','window'] as const)
    expect(reserveStreamRecovery(new FfmpegDecoderError(failure,'decode'),1)).toBeNull();
