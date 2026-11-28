@@ -16,7 +16,7 @@ import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,isRe
 import {initialLedger,reserveOperation,finishOperation,RecoveryExhaustedError,type RecoveryOperation} from './recoveryManager';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,WorkerDisposalError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
-import {alignSpeakers} from './ml/speakers';
+import {alignSpeakers,alignWordSpeakers,wordSpeakerSummary} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
 import {addBenchmarkTiming,benchmarkNow,emptyBenchmark,recordWindowCommit,sampleMainThreadHeap,type JobBenchmark} from './benchmark';
 import {addPerfTiming,collectDeviceHints,emptyPerformanceProfile,observeBackend,type PerfTimingKey} from './performance/profiler';
@@ -33,7 +33,7 @@ import {IdleModelLease,shouldReleaseBeforeJob} from './performance/resourceLifec
 import {VAD_CONTRACT,SILERO_BLOB,validateVadReport,type VadReport} from './ml/vad';
 import {buildSpeechWindows,validateSpeechPlan,SEGMENTATION_CONTRACT,type SpeechWindowPlan} from './speechSegmentation';
 import {inspectRawAsr,inspectOwnedAsr,addAsrQuality,AsrQualityError} from './ml/asrQuality';
-import {ALIGNMENT_CONTRACT,ALIGNMENT_MAX_SEGMENTS,alignmentInputs,alignmentMatches,alignmentSummary,alignmentExport,validateAlignmentReport,validateAlignmentCheckpoint,type AlignmentCheckpoint} from './ml/forcedAlignment';
+import {ALIGNMENT_CONTRACT,ALIGNMENT_MAX_SEGMENTS,alignmentInputs,alignmentMatches,alignmentSummary,alignmentExport,validateAlignmentReport,validateAlignmentCheckpoint,type AlignmentCheckpoint,type AlignmentReport} from './ml/forcedAlignment';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
@@ -69,6 +69,7 @@ export class JobRunner{
  private readonly vadEnabled:boolean;
  private readonly adaptiveSegmentation:boolean;
  private readonly alignmentEnabled:boolean;
+ private readonly wordSpeakerEnabled:boolean;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -83,7 +84,7 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{alignmentEnabled?:boolean;adaptiveSegmentation?:boolean;vadEnabled?:boolean;checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{wordSpeakerEnabled?:boolean;alignmentEnabled?:boolean;adaptiveSegmentation?:boolean;vadEnabled?:boolean;checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
@@ -94,6 +95,7 @@ export class JobRunner{
   this.vadEnabled=options.vadEnabled??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('vad')==='silero');
   this.adaptiveSegmentation=options.adaptiveSegmentation??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('segmentation')==='adaptive');
   this.alignmentEnabled=options.alignmentEnabled??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('alignment')==='ctc');
+  this.wordSpeakerEnabled=options.wordSpeakerEnabled??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('speakers')==='words');
    // Injected test/alternate runtimes do not claim to be real FFmpeg.
    this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
@@ -481,7 +483,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined||disk.windowPlan!==undefined||disk.asrQuality!==undefined||disk.alignmentCheckpoint!==undefined)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined||disk.windowPlan!==undefined||disk.asrQuality!==undefined||disk.alignmentCheckpoint!==undefined||disk.wordSpeakerStats!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -787,12 +789,17 @@ export class JobRunner{
   else if(!(audio instanceof Float32Array))pipeline.skip({stage:'alignment',reason:'alignment-streaming-unavailable'});
   else if(!checkpoints)pipeline.skip({stage:'alignment',reason:'alignment-checkpoint-unavailable'});
   else await pipeline.run('alignment',()=>this.runAlignment(id,audio,checkpoints));
+  const speakerJob=this.job(id),pinnedWords=speakerJob.wordSpeakerStats!==undefined;
+  if(pinnedWords&&(!wordSpeakerSummary(speakerJob.wordSpeakerStats)||!speakerJob.alignmentCheckpoint||!params.diarize||!(audio instanceof Float32Array)||!checkpoints))throw new CheckpointIntegrityError();
+  const useWords=pinnedWords||Boolean(this.wordSpeakerEnabled&&speakerJob.alignmentCheckpoint?.alignedWords&&checkpoints&&audio instanceof Float32Array);
   if(params.diarize&&audio instanceof Float32Array){
    const turns=await pipeline.run('diarization',async()=>{
     if(!checkpoints)return this.runDiarization(id,audio);
     const inputs=[this.checkpointProfile(id),await checkpoints.pcmInput(audio),'speaker-engine-0.1.1-wasm-v1'];
-    // Explicit retry after a published speaker assignment remains a real retry.
-    if(this.job(id).speakerSegments===undefined){
+    // In word mode, keep the same global speaker clusters across explicit
+    // resume; an independent pass cannot be assumed to share identities.
+    // Legacy segment mode retains explicit rerun behavior.
+    if(useWords||this.job(id).speakerSegments===undefined){
      const raw=await checkpoints.loadRaw('diarization',inputs);
      if(raw!==undefined){
       if(!Array.isArray(raw))throw new CheckpointIntegrityError();
@@ -801,12 +808,23 @@ export class JobRunner{
       return raw as SpeakerTurns;
      }
     }
+    if(pinnedWords)throw new CheckpointIntegrityError();
     const result=await this.runDiarization(id,audio);
     await checkpoints.saveRaw('diarization',inputs,result);
     this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'diarization',artifactState:'saved'});
     return result;
    });
-   await pipeline.run('speaker-assignment',()=>this.runSpeakerAssignment(id,turns));
+   await pipeline.run('speaker-assignment',async()=>{
+    let words:AlignmentReport|undefined;
+    if(useWords){
+     const j=this.job(id),a=j.alignmentCheckpoint;
+     if(!checkpoints||!validateAlignmentCheckpoint(a))throw new CheckpointIntegrityError();
+     const raw=await checkpoints.loadRaw('alignment',alignmentInputs(a));
+     if(!validateAlignmentReport(raw,j.segments,a.samples,a.language)||!alignmentMatches(a,raw))throw new CheckpointIntegrityError();
+     words=raw;
+    }
+    await this.runSpeakerAssignment(id,turns,audio.length/16000,words);
+   });
   }else{
    const reason=params.diarize?'streaming-speakers-unavailable':'speakers-disabled';
    pipeline.skip({stage:'diarization',reason});
@@ -1174,16 +1192,22 @@ export class JobRunner{
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
   return turns;
  }
- private runSpeakerAssignment(id:string,turns:SpeakerTurns){
-   const segments=this.job(id).segments;
+ private async runSpeakerAssignment(id:string,turns:SpeakerTurns,duration:number,words?:AlignmentReport){
+   const job=this.job(id),segments=job.segments;
+   if(!Array.isArray(turns)||turns.length>100000)throw new CheckpointIntegrityError();
    const alignmentStarted=benchmarkNow();let alignmentQueries=0,alignmentCandidates=0;
-   const aligned=alignSpeakers(segments,turns,(queries,candidates)=>{alignmentQueries=queries;alignmentCandidates=candidates}),speakerSegments=aligned.segments;
+   const observe=(queries:number,candidates:number)=>{alignmentQueries=queries;alignmentCandidates=candidates};
+   const wordResult=words?alignWordSpeakers(segments,turns,words,observe):undefined;
+   const aligned=wordResult??alignSpeakers(segments,turns,observe,duration),speakerSegments=aligned.segments;
+   if(job.wordSpeakerStats!==undefined&&(!wordResult||JSON.stringify(job.wordSpeakerStats)!==JSON.stringify(wordResult.wordStats)||JSON.stringify(job.speakerSegments)!==JSON.stringify(speakerSegments)))throw new CheckpointIntegrityError();
    this.bench(id,b=>{const prev=b.speakerPerformance??emptySpeakerPerformance();return {...b,speakerPerformance:{...prev,alignmentMs:prev.alignmentMs+benchmarkNow()-alignmentStarted,alignmentQueries:prev.alignmentQueries+alignmentQueries,alignmentCandidates:prev.alignmentCandidates+alignmentCandidates}}});
    const stats=aligned.stats;
    // Mapping diagnostics are numeric, contain no audio, speaker identifiers,
    // transcript text or source filename. ASR checkpoints remain untouched.
    this.traceEvent(id,'speaker-alignment','speaker',{segmentCount:stats.segments,unlabeled:stats.unlabeled,ambiguous:stats.ambiguous,uncovered:stats.uncovered,boundaryMatches:stats.boundaryMatches});
-   this.patch(id,{speakerSegments,diagnostics:stats,stage:stats.unlabeled?'partial':'done',status:stats.unlabeled?`Текст готов · без спикера: ${stats.unlabeled} из ${stats.segments}`:'Текст и спикеры готовы',percent:100});
+   const patch:Partial<Job>={speakerSegments,diagnostics:stats,stage:stats.unlabeled?'partial':'done',status:stats.unlabeled?`Текст готов · без спикера: ${stats.unlabeled} из ${stats.segments}`:'Текст и спикеры готовы',percent:100};
+   if(wordResult){await this.commit(id,{...patch,wordSpeakerStats:wordResult.wordStats});this.check()}
+   else this.patch(id,patch);
  }
  cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'});if(this.manager.resourceBlocked)this.blockResources()}
  async prepare(model:WhisperId,wasmOnly=false){
