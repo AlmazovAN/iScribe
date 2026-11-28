@@ -58,12 +58,12 @@ export function validateSpeechPlan(value:unknown,samples:number):value is Speech
 type PlanOwner={windowPlan?:SpeechWindowPlan;duration?:number;nextWindow:number;asrComplete:boolean;recoveryLedger?:{operations:{asr?:unknown}}};
 export function assertSpeechPlanForward(old:PlanOwner|undefined,next:PlanOwner):void{
  const p=next.windowPlan;
- if(p){
+ if(p!==undefined){
   if(!validateSpeechPlan(p,Math.round((next.duration??0)*RATE))||!Number.isSafeInteger(next.nextWindow)||next.nextWindow<0||next.nextWindow>p.windows.length||(next.asrComplete&&next.nextWindow!==p.windows.length))
    throw new Error('Некорректный сохранённый план окон.');
  }
- if(old?.windowPlan){
+ if(old?.windowPlan!==undefined){
   if(!p||JSON.stringify(old.windowPlan)!==JSON.stringify(p))throw new Error('Нельзя изменить сохранённый план окон.');
- }else if(p&&((old?.nextWindow??0)>0||old?.asrComplete||old?.recoveryLedger?.operations.asr||next.nextWindow>0||next.asrComplete||next.recoveryLedger?.operations.asr))
+ }else if(p!==undefined&&((old?.nextWindow??0)>0||old?.asrComplete||old?.recoveryLedger?.operations.asr||next.nextWindow>0||next.asrComplete||next.recoveryLedger?.operations.asr))
   throw new Error('Нельзя менять границы после начала ASR.');
 }
