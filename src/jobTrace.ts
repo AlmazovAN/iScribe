@@ -10,7 +10,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'pipeline-stage'|'checkpoint-artifact'|'recovery-reserved'|'recovery-exhausted'|
+ 'pipeline-stage'|'checkpoint-artifact'|'vad-result'|'vad-fallback'|'recovery-reserved'|'recovery-exhausted'|
  'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
@@ -27,7 +27,10 @@ export type TraceEvent={
  at:number;
  phase:TracePhase;
  code:TraceCode;
- artifactStage?:'pcm'|'window-pcm'|'asr'|'diarization';
+ artifactStage?:'pcm'|'window-pcm'|'asr'|'diarization'|'vad';
+ vadFrames?:number;
+ vadSpeechSamples?:number;
+ vadIntervals?:number;
  artifactState?:'saved'|'reused'|'cleanup-failed';
  artifactIntegrityFailure?:boolean;
  pipelineStage?:PipelineStage;
