@@ -9,7 +9,7 @@ function file(){return new File(['stored audio'],'reference.wav')}
 function job(f:File=file()){return createJob(f,{model:'whisper-small',language:'ru',diarize:true})}
 async function inspectDb(dbName:string){
  const db=await new Promise<IDBDatabase>((resolve,reject)=>{
-  const open=indexedDB.open(dbName,2);
+  const open=indexedDB.open(dbName);
   open.onsuccess=()=>resolve(open.result);open.onerror=()=>reject(open.error);
  });
  try{
@@ -115,7 +115,7 @@ it('refuses to report an orphaned or missing transcript chunk as a valid complet
  const dbName=name(),store=new JobStore(dbName),j=job();
  await store.save({...j,nextWindow:1,segments:[{start:1,end:2,text:'durable'}]});
  const db=await new Promise<IDBDatabase>((resolve,reject)=>{
-  const open=indexedDB.open(dbName,2);
+  const open=indexedDB.open(dbName);
   open.onsuccess=()=>resolve(open.result);open.onerror=()=>reject(open.error);
  });
  await new Promise<void>((resolve,reject)=>{
