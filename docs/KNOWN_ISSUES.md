@@ -112,3 +112,5 @@ PIPE-05: speculative prefetch accounted on consumption, model initialization/rot
 PIPE-06: successful terminate request is not proof of RAM/VRAM returned to OS. Browser idle timers can be throttled; 120s lease is provisional. Full PCM can remain resident through speaker/export; lower-level suppressed or late opening cleanup failures are not fully observable. Actual memory and 10-job regression acceptance pending. #76 reconciliation remains mandatory.
 
 PIPE-07: VAD is opt-in and advisory, no audio suppression; actual Silero weights, CORS/cache, ORT standalone/web initialization and RU/EN speech recall NOT TESTED. Model fetch and npm blocked by DNS in development. Thresholds provisional, no streaming VAD or per-frame durable recurrent state. Do not use empty speech map to drop audio.
+
+PIPE-08: adaptive mode opt-in, no speech exclusion, variable window count and added PCM hashing/plan transaction. No real Silero, WER, boundary quality or hardware acceptance yet. Identical midpoint ownership does not prove equivalent ASR predictions. Streamed input stays fixed. Pinned plan requires compatible source/PCM; no automatic geometry reset.
