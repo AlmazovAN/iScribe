@@ -3,6 +3,7 @@ import {expect,it} from 'vitest';
 import {JobStore} from './jobStore';
 import {createJob,absoluteSegments,audioWindows} from './jobs';
 import {initialLedger,reserveOperation,finishOperation} from './recoveryManager';
+import {buildSpeechWindows,SEGMENTATION_CONTRACT,type SpeechWindowPlan} from './speechSegmentation';
 it('recovers committed text and source after reopening, without claiming the worker is still running',async()=>{
  const store=new JobStore(),file=new File(['audio'],'meeting.wav'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
  await store.save({...job,stage:'speakers',asrComplete:true,segments:[{start:0,end:2,text:'Сохранено'}]},file);
@@ -58,5 +59,19 @@ it('PIPE-05 refuses stale reservation writes and commits completion with text',a
  const reopened=(await new JobStore().get(j.id,false))!;
  expect(reopened.recoveryLedger).toEqual(done);
  expect(reopened.nextWindow).toBe(1);expect(reopened.segments).toHaveLength(1);
+ await store.remove(j.id);
+});
+
+it('PIPE-08 saves immutable window geometry before ASR and rejects a stale or changed plan',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'plan.wav'),j={...createJob(file,{model:'whisper-small',language:'ru',diarize:false}),duration:60};
+ const samples=960000,intervals=[{start:0,end:384000},{start:424000,end:samples}];
+ const plan:SpeechWindowPlan={revision:1,contract:SEGMENTATION_CONTRACT,samples,pcmFingerprint:'a'.repeat(64),decoderProfile:'test',...buildSpeechWindows(samples,{revision:1,samples,frames:1875,speechSamples:920000,intervals})};
+ await store.save(j,file);await store.save({...j,windowPlan:plan});
+ const saved=(await new JobStore().get(j.id,false))!;
+ expect(saved.windowPlan).toEqual(plan);
+ await expect(store.save(j)).rejects.toThrow('Нельзя изменить');
+ await expect(store.save({...j,windowPlan:{...plan,pcmFingerprint:'b'.repeat(64)}})).rejects.toThrow('Нельзя изменить');
+ await store.save({...j,windowPlan:plan,nextWindow:1,segments:[{start:3,end:4,text:'saved'}]});
+ expect((await store.get(j.id,false))?.windowPlan).toEqual(plan);
  await store.remove(j.id);
 });
