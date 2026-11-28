@@ -11,7 +11,7 @@ import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow,type CheckpointProgress} from './recognitionProgress';
 import {PipelineOrchestrator} from './pipelineOrchestrator';
-import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError} from './checkpointManager';
+import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError,ARTIFACT_CONTRACT} from './checkpointManager';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
@@ -422,8 +422,8 @@ export class JobRunner{
     this.set({operation:'Проверка идентичности аудио'});
     const fingerprint=await sourceFingerprint(file,this.abort!.signal);this.check();
     const previous=this.job(id).sourceFingerprint;
-    if(previous&&previous!==fingerprint)throw new CheckpointIntegrityError();
-    this.patch(id,{sourceFingerprint:fingerprint});
+    if(previous&&(previous!==fingerprint||this.job(id).artifactContract!==ARTIFACT_CONTRACT))throw new CheckpointIntegrityError();
+    this.patch(id,{sourceFingerprint:fingerprint,artifactContract:ARTIFACT_CONTRACT});
     checkpoints=new CheckpointManager(this.store,id,fingerprint,this.abort!.signal);
    }
    await this.persist(id);this.check();
