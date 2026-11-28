@@ -24,7 +24,7 @@ export function segmentCrop(segment:AlignmentSegment,samples:number):{start:numb
 export function buildTarget(text:string,language:AlignmentLanguage,vocab:Readonly<Record<string,number>>):AlignmentTarget|null{
  if(typeof text!=='string'||text.length>4096||vocab['<pad>']!==0||vocab['|']!==4)return null;
  const ids:number[]=[],words:AlignmentTarget['words']=[];
- for(const m of text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)){
+ for(const m of text.matchAll(/[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?:['’-][\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*/gu)){
   const from=m.index!,to=from+m[0].length;
   const normalized=(language==='ru'?m[0].toLowerCase():m[0].toUpperCase()).normalize('NFC').replaceAll('’',"'");
   if(words.length)ids.push(4);
@@ -94,12 +94,13 @@ export function validateAlignmentReport(value:unknown,segments:readonly Alignmen
  if(!value||typeof value!=='object'||!Number.isSafeInteger(samples)||samples<1||samples>3600*ALIGNMENT_RATE||segments.length>ALIGNMENT_MAX_SEGMENTS)return false;
  const r=value as AlignmentReport;
  if(r.revision!==1||r.contract!==ALIGNMENT_CONTRACT||r.language!==language||r.samples!==samples||r.segmentCount!==segments.length||!Array.isArray(r.rows)||r.rows.length>segments.length)return false;
- let lastIndex=-1;
+ let lastIndex=-1,totalWords=0;
  for(const row of r.rows){
   if(!row||!Number.isSafeInteger(row.index)||row.index<=lastIndex||row.index>=segments.length||!Array.isArray(row.words)||!row.words.length||row.words.length>ALIGNMENT_MAX_TOKENS)return false;
+  totalWords+=row.words.length;if(totalWords>50512)return false;
   lastIndex=row.index;const s=segments[row.index],crop=segmentCrop(s,samples);
   if(!crop)return false;
-  const matches=[...s.text.matchAll(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)];
+  const matches=[...s.text.matchAll(/[\p{L}\p{N}][\p{L}\p{N}\p{M}]*(?:['’-][\p{L}\p{N}][\p{L}\p{N}\p{M}]*)*/gu)];
   if(matches.length!==row.words.length)return false;
   let end=crop.start;
   for(let i=0;i<row.words.length;i++){
@@ -113,4 +114,36 @@ export function validateAlignmentReport(value:unknown,segments:readonly Alignmen
 }
 export function alignmentSummary(r:AlignmentReport){
  return {alignedSegments:r.rows.length,unalignedSegments:r.segmentCount-r.rows.length,alignedWords:r.rows.reduce((n,x)=>n+x.words.length,0)};
+}
+
+export type AlignmentCheckpoint={revision:1;contract:typeof ALIGNMENT_CONTRACT;language:AlignmentLanguage;samples:number;segmentCount:number;decoderProfile:string;pcmFingerprint:string;transcriptFingerprint:string;alignedSegments:number;alignedWords:number};
+const HEX=/^[0-9a-f]{64}$/;
+export function validateAlignmentCheckpoint(value:unknown):value is AlignmentCheckpoint{
+ if(!value||typeof value!=='object')return false;
+ const a=value as AlignmentCheckpoint;
+ return a.revision===1&&a.contract===ALIGNMENT_CONTRACT&&(a.language==='ru'||a.language==='en')&&
+ Number.isSafeInteger(a.samples)&&a.samples>0&&a.samples<=3600*ALIGNMENT_RATE&&Number.isSafeInteger(a.segmentCount)&&a.segmentCount>=0&&a.segmentCount<=ALIGNMENT_MAX_SEGMENTS&&
+ typeof a.decoderProfile==='string'&&a.decoderProfile.length>0&&a.decoderProfile.length<=512&&typeof a.pcmFingerprint==='string'&&HEX.test(a.pcmFingerprint)&&typeof a.transcriptFingerprint==='string'&&HEX.test(a.transcriptFingerprint)&&
+ Number.isSafeInteger(a.alignedSegments)&&a.alignedSegments>=0&&a.alignedSegments<=a.segmentCount&&Number.isSafeInteger(a.alignedWords)&&a.alignedWords>=a.alignedSegments&&a.alignedWords<=50512&&(!a.alignedSegments?a.alignedWords===0:true);
+}
+export function alignmentInputs(a:Pick<AlignmentCheckpoint,'language'|'samples'|'decoderProfile'|'pcmFingerprint'|'transcriptFingerprint'>):readonly unknown[]{
+ return [ALIGNMENT_CONTRACT,modelKey(a.language),a.samples,a.decoderProfile,a.pcmFingerprint,a.transcriptFingerprint];
+}
+export function alignmentMatches(checkpoint:AlignmentCheckpoint,report:AlignmentReport):boolean{
+ const s=alignmentSummary(report);
+ return checkpoint.language===report.language&&checkpoint.samples===report.samples&&checkpoint.segmentCount===report.segmentCount&&checkpoint.alignedSegments===s.alignedSegments&&checkpoint.alignedWords===s.alignedWords;
+}
+type Owner={alignmentCheckpoint?:AlignmentCheckpoint;asrComplete:boolean;duration?:number;params:{language:AlignmentLanguage};sourceFingerprint?:string};
+export function assertAlignmentForward(old:Owner|undefined,next:Owner,segments:number):void{
+ const a=next.alignmentCheckpoint;
+ if(a!==undefined&&(!validateAlignmentCheckpoint(a)||!next.asrComplete||!next.sourceFingerprint||a.language!==next.params.language||a.samples!==Math.round((next.duration??0)*ALIGNMENT_RATE)||a.segmentCount!==segments))throw new Error('Некорректная контрольная точка выравнивания.');
+ if(old?.alignmentCheckpoint!==undefined&&JSON.stringify(old.alignmentCheckpoint)!==JSON.stringify(a))throw new Error('Нельзя изменить сохранённое выравнивание.');
+}
+export function alignmentExport(report:AlignmentReport,segments:readonly AlignmentSegment[]){
+ if(!validateAlignmentReport(report,segments,report.samples,report.language))throw new Error('Некорректные данные выравнивания.');
+ const byIndex=new Map(report.rows.map(r=>[r.index,r.words]));
+ return {schema:'iscribe.word-alignment.v1',experimental:true,model:modelKey(report.language),language:report.language,...alignmentSummary(report),segments:segments.map((s,index)=>({
+  index,text:s.text,originalStart:s.start,originalEnd:s.end,aligned:byIndex.has(index),
+  words:(byIndex.get(index)??[]).map(w=>({text:s.text.slice(w.from,w.to),from:w.from,to:w.to,start:w.startSample/ALIGNMENT_RATE,end:w.endSample/ALIGNMENT_RATE,score:w.score}))
+ }))};
 }
