@@ -162,3 +162,6 @@ ASR QA inspects saved RAW before commit, preserves existing hard timestamp valid
 
 ## PIPE-10 candidate
 Opt-in full PCM Wav2Vec2 CTC word alignment (RU/EN pinned q8 candidates), original text retained, separate versioned RAW artifact and private JSON word export. Exact CTC helper strict tsc + 7/7 Node groups PASS including 200 exhaustive short cases; actual ONNX/browser/full CI NOT TESTED. TXT and speaker assignment unchanged. See [PIPE-10](PIPE-10_FORCED_ALIGNMENT.md).
+
+## PIPE-11 candidate
+Production turn bounds/unknown-label handling plus opt-in word speaker assignment via validated CTC intervals. Preserve full-pass global clusters on word-mode replay; atomic speaker rows/numeric summary, no change to model clustering. Exact helper/dependencies strict tsc + 6/6 Node smoke PASS; full CI/real acoustic quality NOT TESTED. Streamed route remains without speakers. See [PIPE-11](PIPE-11_SPEAKER_DIARIZATION.md).

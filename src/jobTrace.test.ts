@@ -56,3 +56,11 @@ it('PIPE-10 exports only alignment counts, not identities or words, in diagnosti
  expect(JSON.stringify(report)).not.toContain('PRIVATE');
  expect(JSON.stringify(report)).not.toContain(alignmentCheckpoint.pcmFingerprint);
 });
+
+it('PIPE-11 diagnostic JSON keeps only validated numeric word-speaker summary',()=>{
+ const j=createJob(new File(['hidden audio'],'private.wav'),{model:'whisper-small',language:'ru',diarize:true});
+ const wordSpeakerStats={...{revision:1 as const,mode:'word-v1' as const,sourceSegments:1,alignedSourceSegments:1,fallbackSourceSegments:0,outputSegments:2,alignedWords:2,labeledWords:1,unknownWords:1,ambiguousWords:1,weakWords:0,uncoveredWords:0,splitSourceSegments:1},private:'SECRET SPEAKER'};
+ const result=diagnosticReport({...j,wordSpeakerStats,speakerSegments:[{start:0,end:1,text:'SECRET TRANSCRIPT',speaker:'SECRET LABEL'}]});
+ expect(result.wordSpeakerAssignment).toMatchObject({alignedWords:2,labeledWords:1,unknownWords:1});
+ expect(JSON.stringify(result)).not.toContain('SECRET');
+});
