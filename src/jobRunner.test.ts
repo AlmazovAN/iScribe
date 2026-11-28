@@ -1029,3 +1029,49 @@ it('PIPE-10 falls back on unavailable alignment without changing original ASR or
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'pipeline-stage',pipelineStage:'alignment',pipelineState:'skipped',pipelineReason:'alignment-unavailable'})]));
  await store.remove(id);
 });
+
+it('PIPE-11 pins word-speaker results and reuses the same global clusters on reload with flags off',async()=>{
+ const {fake,store,decode}=setup();
+ fake.transcribe.mockResolvedValue([{start:3,end:4,text:'один два'}]);
+ fake.diarize.mockResolvedValue([{start:0,end:3.5,speaker:'A'},{start:3.5,end:60,speaker:'B'}]);
+ const alignSpeech=vi.fn(async(audio:Float32Array,segments:readonly AlignmentSegment[],language:'ru'|'en'):Promise<AlignmentReport>=>({
+  revision:1,contract:ALIGNMENT_CONTRACT,language,samples:audio.length,segmentCount:segments.length,
+  rows:segments.map((s,index)=>({index,words:[
+   {from:0,to:4,startSample:Math.round(s.start*16000)+1600,endSample:Math.round(s.start*16000)+4800,score:.8},
+   {from:5,to:8,startSample:Math.round(s.start*16000)+9600,endSample:Math.round(s.start*16000)+14400,score:.8}
+  ]}))
+ }));
+ const manager={...fake,alignSpeech};
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,alignmentEnabled:true,wordSpeakerEnabled:true,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture source'],'word-speakers.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const first=(await store.get(id,false))!;
+ expect(first.stage).toBe('done');expect(first.segments).toHaveLength(3);expect(first.speakerSegments?.map(s=>s.speaker)).toEqual(['A','B','B','B']);
+ expect(first.speakerSegments?.slice(0,2).map(s=>s.text).join('')).toBe('один два');
+ expect(first.wordSpeakerStats).toMatchObject({alignedWords:6,labeledWords:6,outputSegments:4,splitSourceSegments:1});
+ expect(alignSpeech).toHaveBeenCalledOnce();expect(fake.diarize).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ const resumedStore=new JobStore(),resumed=new JobRunner({store:resumedStore,manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('done');expect(saved.speakerSegments).toEqual(first.speakerSegments);expect(saved.wordSpeakerStats).toEqual(first.wordSpeakerStats);
+ expect(fake.diarize).toHaveBeenCalledOnce();expect(alignSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'checkpoint-artifact',artifactStage:'diarization',artifactState:'reused'})]));
+ // Missing pinned RAW must not launch an independent speaker pass.
+ const original=resumedStore.getArtifact.bind(resumedStore);
+ vi.spyOn(resumedStore,'getArtifact').mockImplementation((id,key)=>key.startsWith('diarization-raw-v1:')?Promise.resolve(undefined):original(id,key));
+ resumed.enqueue(id);await finished(resumed);
+ const failed=(await store.get(id,false))!;
+ expect(failed.stage).toBe('partial');expect(failed.segments).toEqual(first.segments);expect(failed.speakerSegments).toEqual(first.speakerSegments);expect(fake.diarize).toHaveBeenCalledOnce();
+ await store.remove(id);
+});
+it('PIPE-11 keeps segment assignment if the optional alignment has no accepted words',async()=>{
+ const {fake,store,decode}=setup();
+ const alignSpeech=vi.fn(async(audio:Float32Array,segments:readonly AlignmentSegment[],language:'ru'|'en'):Promise<AlignmentReport>=>({revision:1,contract:ALIGNMENT_CONTRACT,language,samples:audio.length,segmentCount:segments.length,rows:[]}));
+ const runner=new JobRunner({store,manager:{...fake,alignSpeech} as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,alignmentEnabled:true,wordSpeakerEnabled:true,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture source'],'word-fallback.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('done');expect(saved.wordSpeakerStats).toBeUndefined();expect(saved.speakerSegments).toHaveLength(3);expect(fake.diarize).toHaveBeenCalledOnce();
+ await store.remove(id);
+});
