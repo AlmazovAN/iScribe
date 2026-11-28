@@ -177,6 +177,12 @@ export class JobStore{
    tx.onabort=()=>reject(tx.error??new Error('Сохранение артефакта прервано.'));
   });
  }
+ async deleteArtifact(id:string,key:string):Promise<void>{
+  const db=await this.open();return new Promise((resolve,reject)=>{
+   const tx=db.transaction(ARTIFACTS,'readwrite');tx.objectStore(ARTIFACTS).delete([id,key]);
+   tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??new Error('Удаление артефакта прервано.'));
+  });
+ }
  async remove(id:string):Promise<void>{
   const db=await this.open();return new Promise((resolve,reject)=>{
    const tx=db.transaction(['jobs','audio',ASR,SPEAKERS,ARTIFACTS],'readwrite');
