@@ -9,7 +9,8 @@ import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
-import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow} from './recognitionProgress';
+import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow,type CheckpointProgress} from './recognitionProgress';
+import {PipelineOrchestrator} from './pipelineOrchestrator';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
@@ -31,6 +32,9 @@ import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
 type StreamSession={audio:StreamedAudio;windows:number;rotations:number;closed:boolean};
 type SplitPart={part:number;totalParts:number};
+type SpeechPlan={windows:AudioWindow[];initial:CheckpointProgress};
+type SpeakerTurns=Awaited<ReturnType<ModelManager['diarize']>>;
+type JobPipeline=PipelineOrchestrator<Float32Array|StreamedAudio,SpeechPlan,SpeakerTurns>;
 export class JobRunner{
  readonly manager:ModelManager;
  private readonly resources:ResourceManager;
@@ -396,6 +400,11 @@ export class JobRunner{
   this.bench(id,b=>({...b,profiler:b.profiler??emptyPerformanceProfile(),runs:b.runs+1,resumedRuns:b.resumedRuns+(resumed?1:0),...(b.runs===0?{firstRunContext:context}:{})}));
   this.traceEvent(id,'job-start','job',{committedWindows:this.job(id).nextWindow});
   this.traceEvent(id,'audio-start','audio');
+  const pipeline:JobPipeline=new PipelineOrchestrator(this.abort!.signal,(event,error)=>{
+   this.traceEvent(id,'pipeline-stage','job',{pipelineStage:event.stage,pipelineState:event.state,pipelineReason:event.reason,elapsedMs:event.elapsedMs,
+    ...(event.state==='failed'||event.state==='cancelled'?{errorKind:event.state==='cancelled'?'cancelled':traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)}:{})});
+  },benchmarkNow);
+  const file=await pipeline.run('preflight',async()=>{
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
   const requested=this.requestedDecoder;
@@ -404,11 +413,13 @@ export class JobRunner{
    this.patch(id,{decoderIdentity:identity});
    this.traceEvent(id,'decoder-selected','audio',{decoderKind:identity.kind,decoderRoute:identity.route});
    await this.persist(id);this.check();
-   const audioStarted=Date.now(),decodeStarted=benchmarkNow();
-  const audio=await this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted));
+   return file;
+  });
+  const audioStarted=Date.now(),decodeStarted=benchmarkNow();
+  const audio=await pipeline.run('decode',()=>this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted)));
   const session=audio instanceof Float32Array?undefined:this.newStreamSession(audio);
   let completed=false;
-  try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,session);completed=true}
+  try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,pipeline,session);completed=true}
   finally{if(session)this.closeStreamSession(id,session,completed?'finish':this.cancelled?'cancel':'error')}
  }
  private newStreamSession(audio:StreamedAudio):StreamSession{return {audio,windows:0,rotations:0,closed:false}}
@@ -600,8 +611,9 @@ export class JobRunner{
    }
   }
  }
- private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,session?:StreamSession){
+ private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,pipeline:JobPipeline,session?:StreamSession){
   const streamed=!(audio instanceof Float32Array);
+  await pipeline.run('pcm-gate',async()=>{
   this.check();
    if(this.job(id).decoderIdentity?.kind==='ffmpeg'&&this.job(id).nextWindow>0&&this.job(id).duration!==undefined&&Math.round(this.job(id).duration!*16000)!==audio.length)
     throw new Error('Длительность PCM не совпадает с сохранённой контрольной точкой. Добавьте аудио как новое задание.');
@@ -611,12 +623,47 @@ export class JobRunner{
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
   this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length,decoderId:streamed?audio.decoderId:undefined,durationDeltaSamples});
   if(!streamed)await this.inspectPcm(id,audio,this.abort!.signal);this.check();
+   return {mode:streamed?'windowed':'full',samples:audio.length};
+  });
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
-   const windows=audioWindows(audio.length,streamed);
-   // A corrupted checkpoint must never masquerade as a completed transcript.
-   const initial=checkpointProgress(windows,this.job(id).nextWindow);
+   const plan=await pipeline.run('segmentation',()=>{
+    const windows=audioWindows(audio.length,streamed);
+    // A corrupted checkpoint must never masquerade as a completed transcript.
+    return {windows,initial:checkpointProgress(windows,this.job(id).nextWindow)};
+   });
+   await pipeline.run('asr',()=>this.runAsr(id,audio,file,params,plan,session));
+  }else{
+   pipeline.skip({stage:'segmentation',reason:'asr-already-committed'});
+   pipeline.skip({stage:'asr',reason:'asr-already-committed'});
+  }
+  if(params.diarize&&audio instanceof Float32Array){
+   const turns=await pipeline.run('diarization',()=>this.runDiarization(id,audio));
+   await pipeline.run('speaker-assignment',()=>this.runSpeakerAssignment(id,turns));
+  }else{
+   const reason=params.diarize?'streaming-speakers-unavailable':'speakers-disabled';
+   pipeline.skip({stage:'diarization',reason});
+   pipeline.skip({stage:'speaker-assignment',reason});
+   this.patch(id,{stage:'done',status:streamed&&params.diarize?'Текст готов · потоковый режим без спикеров':'Текст готов',percent:100});
+  }
+  await pipeline.run('finalize',async()=>{
+  if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
+  this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});
+  // Closing the FIFO slot is part of the successful terminal job commit.
+  this.patch(id,{queueOrder:undefined});
+  await this.persist(id);this.check();
+  });
+  await pipeline.run('export',()=>{
+   this.set({operation:'Формирование TXT'});
+   // A browser download request is not proof of a saved file.
+   try{this.export(id,params.diarize&&!streamed?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'});return 'requested'}
+   catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)});return 'manual'}
+  });
+ }
+ private async runAsr(id:string,audio:Float32Array|StreamedAudio,file:File,params:JobParams,plan:SpeechPlan,session?:StreamSession){
+  const streamed=!(audio instanceof Float32Array);
+  const {windows,initial}=plan;
    this.manager.resourcePolicy=this.resources.policy();
    const preferred=this.backendPolicy.preferred(params.model,params.language,this.resources.selected,collectDeviceHints(),this.manager.targetWasmThreads??1);
    if(this.manager.active!==params.model||(preferred!==undefined&&this.manager.capabilities?.active!==preferred)||this.manager.needsWasmThreadRefresh?.()){
@@ -807,8 +854,8 @@ export class JobRunner{
    }}finally{payloadPool.clear();await pipeline?.dispose()}
    if(!this.job(id).segments.some(s=>s.text.trim()))throw new Error('Распознанного текста нет. Проверьте запись.');
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
-  }
-  if(params.diarize&&!streamed){
+ }
+ private async runDiarization(id:string,audio:Float32Array):Promise<SpeakerTurns>{
    this.set({operation:'Разделение говорящих'});
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
@@ -826,6 +873,9 @@ export class JobRunner{
    this.check();
    this.bench(id,b=>addBenchmarkTiming(b,'speakerMs',benchmarkNow()-speakerMeasured));
    this.traceEvent(id,'speaker-result','speaker',{elapsedMs:Date.now()-speakerStarted,segmentCount:turns.length});
+  return turns;
+ }
+ private runSpeakerAssignment(id:string,turns:SpeakerTurns){
    const segments=this.job(id).segments;
    const alignmentStarted=benchmarkNow();let alignmentQueries=0,alignmentCandidates=0;
    const aligned=alignSpeakers(segments,turns,(queries,candidates)=>{alignmentQueries=queries;alignmentCandidates=candidates}),speakerSegments=aligned.segments;
@@ -835,15 +885,6 @@ export class JobRunner{
    // transcript text or source filename. ASR checkpoints remain untouched.
    this.traceEvent(id,'speaker-alignment','speaker',{segmentCount:stats.segments,unlabeled:stats.unlabeled,ambiguous:stats.ambiguous,uncovered:stats.uncovered,boundaryMatches:stats.boundaryMatches});
    this.patch(id,{speakerSegments,diagnostics:stats,stage:stats.unlabeled?'partial':'done',status:stats.unlabeled?`Текст готов · без спикера: ${stats.unlabeled} из ${stats.segments}`:'Текст и спикеры готовы',percent:100});
-  }else this.patch(id,{stage:'done',status:streamed&&params.diarize?'Текст готов · потоковый режим без спикеров':'Текст готов',percent:100});
-  if(this.job(id).stage==='done')this.patch(id,{failure:undefined});
-  this.traceEvent(id,'job-complete','job',{committedWindows:this.job(id).nextWindow});
-  // Closing the FIFO slot is part of the successful terminal job commit.
-  this.patch(id,{queueOrder:undefined});
-  await this.persist(id);this.check();
-  this.set({operation:'Формирование TXT'});
-  // Browser download APIs cannot reliably report a blocked download.
-  try{this.export(id,params.diarize&&!streamed?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'})}catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)})}
  }
  cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
  async prepare(model:WhisperId,wasmOnly=false){
