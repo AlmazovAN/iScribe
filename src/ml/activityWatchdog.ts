@@ -12,6 +12,10 @@ export class WorkerStalledError extends Error{
  readonly code='worker-failed';
  constructor(){super('ASR Worker не отвечает слишком долго при активной вкладке. Попытка восстановить текущее окно.');this.name='WorkerStalledError'}
 }
+export class WorkerDisposalError extends Error{
+ readonly code='worker-disposal-failed';
+ constructor(){super('Не подтверждено завершение старого Worker. Автоматический повтор остановлен.');this.name='WorkerDisposalError'}
+}
 export class StreamDecodeStalledError extends Error{
  readonly code='stream-decode-stalled';
  constructor(readonly stage:StreamWatchdogStage='decode'){
@@ -54,7 +58,7 @@ export function withActivityWatchdog<T>(work:(heartbeat:()=>void,beginStage:(tim
    if(active&&idleMs>=timeoutMs){
     // Terminate the old worker BEFORE the caller retries. Any late result
     // from the disposed EngineClient cannot be treated as a checkpoint.
-    try{options.onTimeout()}catch{/* Still fail the current attempt. */}
+    try{options.onTimeout()}catch{settle(new WorkerDisposalError());return}
     settle(options.timeoutError?.()??new WorkerStalledError());
    }
   };
