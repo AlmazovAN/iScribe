@@ -350,7 +350,7 @@ export class JobRunner{
    // Legacy counters contain reservations, not proof of actual execution.
    // Do not silently grant an extra attempt to a previously retried
    // unfinished decoder operation when upgrading old records.
-   if(!job.recoveryLedger){
+   if(!job.recoveryLedger?.operations[operation]){
     if(operation==='full-decode'&&(job.fullDecodeRecoveries??0)>0&&job.audioCheck?.status!=='passed'&&job.nextWindow===0)
      throw new RecoveryExhaustedError(operation,'operation');
     if(operation==='stream-window'&&job.streamRecovery?.window===unit&&job.streamRecovery.windowRecoveries>0)
