@@ -1,7 +1,7 @@
 export type AudioDecoderKind='legacy'|'ffmpeg';
 export type DecoderRoute='full'|'windowed';
 export type DecoderIdentity={kind:AudioDecoderKind;route:DecoderRoute;revision:string};
-export type FfmpegFailure='runtime'|'asset'|'initialize'|'worker'|'timeout'|'decode'|'coverage'|'length'|'workerfs'|'probe'|'probe-exit'|'probe-json'|'probe-metadata'|'timeline'|'duration'|'window'|'protocol';
+export type FfmpegFailure='runtime'|'asset'|'initialize'|'worker'|'timeout'|'decode'|'coverage'|'length'|'workerfs'|'probe'|'probe-exit'|'probe-json'|'probe-metadata'|'timeline'|'duration'|'window'|'protocol'|'recovery-rejected';
 export type FfmpegStage='open'|'decode';
 const messages:Record<FfmpegFailure,string>={
  runtime:'Ошибка запуска или обработки.',asset:'Не удалось загрузить локальные ресурсы FFmpeg.',initialize:'Не удалось инициализировать FFmpeg WASM.',worker:'Ошибка Worker.',timeout:'Превышено время декодирования.',
@@ -11,7 +11,8 @@ const messages:Record<FfmpegFailure,string>={
  'probe-exit':'FFprobe завершился с ошибкой.', 'probe-json':'FFprobe не сформировал корректный JSON.',
  'probe-metadata':'FFprobe не подтвердил параметры аудиодорожки.',timeline:'Начало аудиодорожки не совпадает с началом контейнера.',
  duration:'Не удалось подтвердить конец аудиозаписи.',window:'Некорректные границы окна.',
- protocol:'Нарушение последовательности запросов.'
+ protocol:'Нарушение последовательности запросов.',
+ 'recovery-rejected':'Восстановление аудиокадров не прошло контроль ошибок или длительности. PCM не передан в Whisper.'
 };
 const detailCodes=['input-protocol','unsupported-codec','missing-audio','memory','command-option','damaged-frame','invalid-container','io','other'] as const;
 export type FfmpegDetailCode=typeof detailCodes[number];
@@ -39,6 +40,28 @@ export function ffmpegFailureFields(error:unknown){
 export function canRetryFfmpeg(error:unknown,route:DecoderRoute):boolean{
  if(!(error instanceof FfmpegDecoderError)||error.stage!=='decode')return false;
  return error.failure==='worker'||error.failure==='timeout'||(route==='windowed'&&error.failure==='coverage');
+}
+// Allow one full-route recovery only before any committed ASR window.
+export const MAX_FRAME_RECOVERY_ERROR_LINES=20;
+export const MAX_FRAME_RECOVERY_DRIFT_SAMPLES=4000; // 250 ms at 16 kHz.
+export function canRecoverFfmpegFrame(error:unknown):boolean{
+ if(!(error instanceof FfmpegDecoderError)||error.failure!=='decode'||error.stage!=='decode'||!error.diagnostic)return false;
+ const {details,errorLines}=error.diagnostic;
+ return errorLines>0&&errorLines<=MAX_FRAME_RECOVERY_ERROR_LINES&&details.includes('damaged-frame')&&details.every(code=>code==='damaged-frame'||code==='other');
+}
+export function frameRecoveryExpectedSamples(seconds:number|undefined):number|undefined{
+ if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||seconds>3600)return undefined;
+ const samples=Math.round(seconds*16000);
+ return samples>0?samples:undefined;
+}
+export function validateFrameRecovery(expected:number,actual:number,diagnostic:FfmpegDetails|undefined):void{
+ if(!Number.isSafeInteger(expected)||expected<1||expected>57600000||
+    !Number.isSafeInteger(actual)||actual<1||actual>57600000||
+    Math.abs(actual-expected)>MAX_FRAME_RECOVERY_DRIFT_SAMPLES||
+    !diagnostic||diagnostic.errorLines>MAX_FRAME_RECOVERY_ERROR_LINES||
+    diagnostic.details.some(code=>code!=='damaged-frame')||
+    (diagnostic.errorLines>0&&!diagnostic.details.includes('damaged-frame')))
+  throw new FfmpegDecoderError('recovery-rejected','decode',undefined,diagnostic);
 }
 export function decoderIdentity(kind:AudioDecoderKind,route:DecoderRoute):DecoderIdentity{
  return {kind,route,revision:kind==='ffmpeg'?'ffmpeg-core-0.12.10-dec02':'legacy-dec01'};

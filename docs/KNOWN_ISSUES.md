@@ -100,3 +100,6 @@ DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web bui
 
 
 DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real full FFmpeg decode exit 1 twice, root cause unknown. New bounded diagnostic categories and real synthetic MP3 browser test; revised candidate NOT TESTED. Strict decode/PCM policies unchanged.
+
+
+DEC frame recovery candidate: actual full-route failure classified damaged-frame/other twice. One durable timestamp-compensated recovery before any checkpoint, strict default and validation/diagnostic gate; streaming unchanged. Native synthetic damaged MP3 experiment PASS; new browser regression and real recording NOT TESTED. See DEC-06_FRAME_RECOVERY.md.

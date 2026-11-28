@@ -1,0 +1,7 @@
+# Controlled FFmpeg full-route frame recovery
+
+Real standalone main c60d3f0: 739.261975 s, 29,570,479 bytes, twice strict decode exit 1 with damaged-frame and other, two stderr lines, no PCM or Whisper. Exact stderr and cause of malformed frame unknown.
+
+Strict decode remains default. Only full FFmpeg jobs with no committed ASR and valid observed audio duration may reserve one recovery in the existing durable retry budget. Eligibility requires damaged-frame, optionally generic other, <=20 error lines and no unrelated classified failures. Second Worker invocation omits -xerror; no ignore_err, discardcorrupt, legacy fallback or infinite loop. Timestamp-driven aresample compensates timestamp gaps (can insert/trim samples; cannot restore speech). Accept only success status, bounded finite PCM, <=20 error lines exclusively damaged-frame (or no lines), and length within 4000 samples (250 ms) of observed duration. Unknown/memory/IO/other recovery errors or missing duration fail closed. Expected sample count is pinned to the job, persists across resume; no policy switch under committed checkpoints. UI identifies recovery mode; trace records successful recovery and categories. Streamed path remains strict. Duration gate cannot prove recovered speech or detect all internal discontinuities.
+
+Native FFmpeg 7.1.5 experiment: synthetic 0.25 s 16kHz CBR MP3 repeated 6x, 9 side-information bytes damaged, strict exit nonzero, tolerant exit 0 and 31104 samples. Real browser test added; revised local CI and original file NOT TESTED. No hardware acceptance claim.

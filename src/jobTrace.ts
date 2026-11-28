@@ -7,7 +7,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
+ 'decoder-selected'|'decoder-full-retry'|'decoder-frame-recovered'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
  'stream-split-start'|'stream-split-part-ready'|'stream-split-ready'|
@@ -122,6 +122,7 @@ export function diagnosticReport(job:Job){
   },
   decoder:decoderReport(job.decoderIdentity),
   fullDecodeRecoveries:job.fullDecodeRecoveries??0,
+  frameRecoveryExpectedSamples:job.fullFrameRecoveryExpectedSamples??null,
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,

@@ -1,7 +1,8 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
-import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
+import {usesStreamedAudio,validateFile} from './audio';
 import {chooseAudioDecoder,providerForDecoder,openSelectedStream} from './audioDecoderProvider';
-import {resolveJobDecoder,canRetryFfmpeg,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
+import {resolveJobDecoder,canRetryFfmpeg,canRecoverFfmpegFrame,frameRecoveryExpectedSamples,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
+import type {FfmpegFrameRecovery} from './ffmpegDecoder';
 import type {StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
@@ -48,7 +49,7 @@ export class JobRunner{
  private abort:AbortController|null=null;
  private download:(text:string,name:string)=>void;
  private diagnosticDownload:typeof downloadDiagnosticJson;
- private decode?:typeof decodeAudio;
+ private decode?:(file:File,signal?:AbortSignal,recovery?:FfmpegFrameRecovery)=>Promise<Float32Array>;
  private openStream?:typeof openSelectedStream;
  private activeDecoder?:DecoderIdentity;
  private readonly requestedDecoder:AudioDecoderKind;
@@ -66,7 +67,7 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:(file:File,signal?:AbortSignal,recovery?:FfmpegFrameRecovery)=>Promise<Float32Array>;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
@@ -346,11 +347,24 @@ export class JobRunner{
   }
   const decode=this.decode??provider.decode;
   for(;;){
-   try{return await decode(file,signal)}catch(error){
+   const job=this.job(id),expected=job.fullFrameRecoveryExpectedSamples;
+   try{
+    if(expected!==undefined){
+     return await decode(file,signal,{expectedSamples:expected,onRecovered:diagnostic=>{
+      this.traceEvent(id,'decoder-frame-recovered','audio',{streamStage:'decode',decoderDetails:diagnostic.details,decoderErrorLines:diagnostic.errorLines});
+     }});
+    }
+    return await decode(file,signal);
+   }catch(error){
     this.traceEvent(id,'decoder-full-error','audio',{streamStage:'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
     this.check();signal.throwIfAborted();
-    if(!canRetryFfmpeg(error,'full')||(this.job(id).fullDecodeRecoveries??0)>=1)throw error;
-    this.patch(id,{fullDecodeRecoveries:1,status:'Повторное декодирование FFmpeg · попытка 2/2'});
+    const current=this.job(id);
+    if((current.fullDecodeRecoveries??0)>=1)throw error;
+    const frameExpected=identity.kind==='ffmpeg'&&current.nextWindow===0&&!current.asrComplete&&canRecoverFfmpegFrame(error)
+     ?frameRecoveryExpectedSamples(current.duration):undefined;
+    if(frameExpected===undefined&&!canRetryFfmpeg(error,'full'))throw error;
+    this.patch(id,{fullDecodeRecoveries:1,...(frameExpected!==undefined?{fullFrameRecoveryExpectedSamples:frameExpected}:{}),
+     status:frameExpected!==undefined?'FFmpeg: восстановление аудиокадров · попытка 2/2':'Повторное декодирование FFmpeg · попытка 2/2'});
     this.traceEvent(id,'decoder-full-retry','audio',{attempt:2,streamStage:'decode',...ffmpegFailureFields(error)});
     await this.persist(id);this.check();
    }

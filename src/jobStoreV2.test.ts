@@ -153,3 +153,17 @@ it('persists decoder identity and rejects stale full-recovery reservations',asyn
  expect(after.decoderIdentity).toEqual(fixed.decoderIdentity);
  expect(after.fullDecodeRecoveries).toBe(1);
 });
+
+it('pins the recovered full-audio timeline and prevents switching after checkpoint',async()=>{
+ const store=new JobStore(name()),f=file(),j=job(f),identity=decoderIdentity('ffmpeg','full');
+ await store.save({...j,decoderIdentity:identity},f);
+ const fixed={...j,decoderIdentity:identity,fullDecodeRecoveries:1,fullFrameRecoveryExpectedSamples:160000};
+ await store.save(fixed);
+ const reloaded=(await store.get(j.id,false))!;
+ expect(reloaded.fullFrameRecoveryExpectedSamples).toBe(160000);
+ await expect(store.save({...reloaded,fullFrameRecoveryExpectedSamples:undefined})).rejects.toThrow();
+ await expect(store.save({...reloaded,fullFrameRecoveryExpectedSamples:160001})).rejects.toThrow();
+ const k=job(f);
+ await store.save({...k,decoderIdentity:identity,nextWindow:1,segments:[{start:0,end:1,text:'saved'}]},f);
+ await expect(store.save({...k,decoderIdentity:identity,nextWindow:1,segments:[{start:0,end:1,text:'saved'}],fullDecodeRecoveries:1,fullFrameRecoveryExpectedSamples:160000})).rejects.toThrow();
+});
