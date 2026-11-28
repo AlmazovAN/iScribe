@@ -26,6 +26,7 @@ export class PipelineOrchestrator<Audio,Plan,Turns>{
  private cursor=0;
  private active=false;
  private failed=false;
+ private readonly skipped:Partial<Record<PipelineStage,PipelineReason>>={};
  constructor(private readonly signal:AbortSignal,
   private readonly observe:(event:PipelineObservation,error?:unknown)=>void,
   private readonly now:()=>number=()=>performance.now()){}
@@ -35,7 +36,10 @@ export class PipelineOrchestrator<Audio,Plan,Turns>{
  }
  get complete(){return !this.active&&!this.failed&&this.cursor===PIPELINE_STAGES.length}
  async run<S extends PipelineStage>(stage:S,work:()=>PipelineOutputs<Audio,Plan,Turns>[S]|Promise<PipelineOutputs<Audio,Plan,Turns>[S]>):Promise<PipelineOutputs<Audio,Plan,Turns>[S]>{
-  this.assertNext(stage);this.active=true;
+  this.assertNext(stage);
+  if(stage==='asr'&&this.skipped.segmentation||stage==='speaker-assignment'&&this.skipped.diarization)
+   throw new Error('Входной этап был пропущен: '+stage);
+  this.active=true;
   const started=this.now();
   try{
    this.observe({stage,state:'running'});
@@ -57,6 +61,9 @@ export class PipelineOrchestrator<Audio,Plan,Turns>{
  }
  skip(spec:Skip):void{
   this.assertNext(spec.stage);this.signal.throwIfAborted();
+  if(spec.stage==='asr'&&this.skipped.segmentation!==spec.reason||spec.stage==='speaker-assignment'&&this.skipped.diarization!==spec.reason)
+   throw new Error('Причина пропуска не совпадает с зависимым этапом: '+spec.stage);
+  this.skipped[spec.stage]=spec.reason;
   this.cursor++;
   this.observe({stage:spec.stage,state:spec.stage==='asr'?'reused':'skipped',reason:spec.reason});
  }
