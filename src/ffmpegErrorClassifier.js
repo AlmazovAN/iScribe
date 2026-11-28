@@ -14,7 +14,7 @@ function createFfmpegErrorCollector(){
   else if(/unrecognized option|option .*not found|error parsing (global )?options|invalid argument.*option/i.test(s))categories.add('command-option');
   else if(/header missing|invalid frame|error (while )?decoding|error submitting (a )?packet|corrupt(ed)? (input )?(packet|frame)|invalid (audio|mpeg) header|overread|invalid huffman|invalid side information/i.test(s))categories.add('damaged-frame');
   else if(/invalid data found when processing input|could not find codec parameters|moov atom not found|failed to read frame size|end of file/i.test(s))categories.add('invalid-container');
-  else if(/input\\/output error|permission denied|no such file or directory|error reading|error opening input|error writing/i.test(s))categories.add('io');
+  else if(/input[/]output error|permission denied|no such file or directory|error reading|error opening input|error writing/i.test(s))categories.add('io');
   else categories.add('other');
  }
  function snapshot(){return {details:[...categories].sort(),errorLines:lines}}
