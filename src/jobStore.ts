@@ -4,6 +4,7 @@ import {sameDecoder} from './decoderDiagnostics';
 import {assertRecoveryForward} from './recoveryManager';
 import {assertSpeechPlanForward} from './speechSegmentation';
 import {assertQualityForward} from './ml/asrQuality';
+import {assertAlignmentForward} from './ml/forcedAlignment';
 
 // Version 2 adds append-only ASR chunks. The legacy jobs/audio stores remain
 // in the same database; a transaction commits text and nextWindow atomically.
@@ -113,6 +114,7 @@ export class JobStore{
      assertRecoveryForward(old?.recoveryLedger,job.recoveryLedger);
      assertSpeechPlanForward(old,job);
      assertQualityForward(old,job);
+     assertAlignmentForward(old,job,job.segments.length);
      const oldCount=old?(old.storageLayout===2?old.segmentCount??NaN:old.segments?.length??0):0;
      if(!Number.isSafeInteger(oldCount)||oldCount<0||
         job.segments.length<oldCount||(old&&job.nextWindow<old.nextWindow))
