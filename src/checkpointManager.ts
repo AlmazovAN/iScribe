@@ -6,6 +6,7 @@ const HEX=/^[0-9a-f]{64}$/;
 export interface ArtifactStore{
  getArtifact(id:string,key:string):Promise<unknown>;
  putArtifact(id:string,key:string,value:unknown):Promise<void>;
+ deleteArtifact(id:string,key:string):Promise<void>;
 }
 export class CheckpointIntegrityError extends Error{
  readonly code='checkpoint-integrity';
@@ -96,6 +97,24 @@ export class CheckpointManager{
   // Only after every bounded chunk has committed, publish its manifest.
   await this.store.putArtifact(this.id,key,{revision:1,samples:pcm.length,hashes} satisfies PcmManifest);
   this.check();
+ }
+ async loadWindow(profile:string,start:number,end:number):Promise<Float32Array|undefined>{
+  const key=await this.key('window-pcm-v1',[profile,start,end]),value=await this.store.getArtifact(this.id,key);
+  this.check();if(value===undefined)return undefined;
+  const row=value as {revision:1;bytes:ArrayBuffer;hash:string};
+  requireIntegrity(row?.revision===1&&row.bytes instanceof ArrayBuffer&&row.bytes.byteLength===(end-start)*4&&end>start&&end-start<=480000&&typeof row.hash==='string'&&HEX.test(row.hash)&&await sha(row.bytes)===row.hash);
+  this.check();return new Float32Array(row.bytes);
+ }
+ async saveWindow(profile:string,start:number,end:number,pcm:Float32Array):Promise<void>{
+  requireIntegrity(end-start===pcm.length&&pcm.length>0&&pcm.length<=480000);
+  const key=await this.key('window-pcm-v1',[profile,start,end]),bytes=pcm.slice().buffer;
+  const hash=await sha(bytes);this.check();
+  await this.store.putArtifact(this.id,key,{revision:1,bytes,hash});
+  this.check();
+ }
+ async discardWindow(profile:string,start:number,end:number):Promise<void>{
+  const key=await this.key('window-pcm-v1',[profile,start,end]);
+  await this.store.deleteArtifact(this.id,key);
  }
  async pcmInput(pcm:Float32Array):Promise<string>{
   // Window-sized PCM, or bounded hash-of-chunks for full speaker input.
