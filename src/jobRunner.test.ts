@@ -872,3 +872,32 @@ it('PIPE-05 retries a transient speaker Worker failure once without replaying co
  expect(saved.recoveryLedger?.totalRecoveries).toBe(1);
  await store.remove(id);
 });
+
+it('PIPE-06 releases an incompatible ready model before decoding the next file',async()=>{
+ const {fake,store}=setup(),resources=new ResourceManager(null);
+ fake.active='whisper-tiny';
+ const releaseIdle=vi.fn(()=>{fake.active=null;return true});
+ const manager={...fake,get active(){return fake.active},releaseIdle};
+ const decode=vi.fn(async()=>{expect(fake.active).toBeNull();expect(releaseIdle).toHaveBeenCalled();return new Float32Array(60*16000)});
+ const runner=new JobRunner({store,resources,manager:manager as unknown as ModelManager,decode,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture'],'lifecycle.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ expect(decode).toHaveBeenCalledOnce();expect((await store.get(id,false))?.stage).toBe('done');
+ await store.remove(id);
+});
+it('PIPE-06 pauses subsequent queued jobs after a Worker disposal failure',async()=>{
+ const {fake,store}=setup();const decode=vi.fn(async()=>{throw Object.assign(new Error('retire failure'),{code:'worker-disposal-failed'})});
+ // Use the real typed failure; a generic lookalike is not trusted.
+ const {WorkerDisposalError}=await import('./ml/activityWatchdog');
+ decode.mockImplementation(async()=>{throw new WorkerDisposalError()});
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,download:()=>{}});
+ await runner.init();await runner.add([new File(['a'],'one.wav'),new File(['b'],'two.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const [one,two]=runner.snapshot().jobs.slice(-2);
+ runner.enqueue(one.id);runner.enqueue(two.id);await finished(runner);
+ expect(decode).toHaveBeenCalledOnce();expect(fake.transcribe).not.toHaveBeenCalled();
+ expect((await store.get(one.id,false))?.stage).toBe('error');
+ expect((await store.get(two.id,false))?.stage).toBe('queued');
+ expect(runner.snapshot().notice).toContain('Не подтверждено завершение Worker');
+ await store.remove(one.id);await store.remove(two.id);
+});
