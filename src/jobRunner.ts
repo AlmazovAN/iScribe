@@ -30,7 +30,8 @@ import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {IdleModelLease,shouldReleaseBeforeJob} from './performance/resourceLifecycle';
-import {VAD_CONTRACT,SILERO_BLOB,validateVadReport} from './ml/vad';
+import {VAD_CONTRACT,SILERO_BLOB,validateVadReport,type VadReport} from './ml/vad';
+import {buildSpeechWindows,validateSpeechPlan,SEGMENTATION_CONTRACT,type SpeechWindowPlan} from './speechSegmentation';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
@@ -64,6 +65,7 @@ export class JobRunner{
  private readonly requestedDecoder:AudioDecoderKind;
  private readonly checkpointArtifacts:boolean;
  private readonly vadEnabled:boolean;
+ private readonly adaptiveSegmentation:boolean;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -78,7 +80,7 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{vadEnabled?:boolean;checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{adaptiveSegmentation?:boolean;vadEnabled?:boolean;checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
@@ -87,6 +89,7 @@ export class JobRunner{
   // Injected runtimes are not the pinned production decoder/model. Tests may opt in explicitly.
   this.checkpointArtifacts=options.checkpointArtifacts??(!options.decode&&!options.openStream&&!options.manager);
   this.vadEnabled=options.vadEnabled??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('vad')==='silero');
+  this.adaptiveSegmentation=options.adaptiveSegmentation??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('segmentation')==='adaptive');
    // Injected test/alternate runtimes do not claim to be real FFmpeg.
    this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
@@ -474,7 +477,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined||disk.windowPlan!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -735,15 +738,37 @@ export class JobRunner{
   if(!streamed)await this.inspectPcm(id,audio,this.abort!.signal);this.check();
    return {mode:streamed?'windowed':'full',samples:audio.length};
   });
+  const pinned=this.job(id).windowPlan;
+  if(pinned!==undefined&&(!validateSpeechPlan(pinned,audio.length)||streamed||!checkpoints))throw new CheckpointIntegrityError();
+  if(pinned&&audio instanceof Float32Array&&checkpoints&&
+    (pinned.decoderProfile!==this.checkpointProfile(id)||pinned.pcmFingerprint!==await checkpoints.pcmInput(audio)))throw new CheckpointIntegrityError();
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
-   if(!this.vadEnabled)pipeline.skip({stage:'vad',reason:'vad-disabled'});
+   let speech:VadReport|undefined;
+   if(pinned)pipeline.skip({stage:'vad',reason:'segmentation-plan-pinned'});
+   else if(!this.vadEnabled)pipeline.skip({stage:'vad',reason:'vad-disabled'});
    else if(!(audio instanceof Float32Array))pipeline.skip({stage:'vad',reason:'vad-streaming-unavailable'});
-   else await pipeline.run('vad',()=>this.runVad(id,audio,checkpoints));
-   const plan=await pipeline.run('segmentation',()=>{
-    const windows=audioWindows(audio.length,streamed);
-    // A corrupted checkpoint must never masquerade as a completed transcript.
+   else await pipeline.run('vad',()=>this.runVad(id,audio,checkpoints,report=>{speech=report}));
+   const plan=await pipeline.run('segmentation',async()=>{
+    let windows=pinned?.windows??audioWindows(audio.length,streamed);
+    let selected=pinned;
+    const current=this.job(id);
+    // Adaptive plans only start before any durable ASR attempt. Never
+    // reinterpret legacy nextWindow or an outstanding reserved operation.
+    if(!pinned&&this.adaptiveSegmentation&&speech&&audio instanceof Float32Array&&checkpoints&&
+      current.nextWindow===0&&!current.recoveryLedger?.operations.asr){
+     const candidate=buildSpeechWindows(audio.length,speech);
+     if(candidate.adjustedCuts>0){
+      const p:SpeechWindowPlan={revision:1,contract:SEGMENTATION_CONTRACT,samples:audio.length,
+       pcmFingerprint:await checkpoints.pcmInput(audio),decoderProfile:this.checkpointProfile(id),
+       adjustedCuts:candidate.adjustedCuts,windows:candidate.windows};
+      if(!validateSpeechPlan(p,audio.length))throw new CheckpointIntegrityError();
+      // Publish immutable plan before any model initialization or dispatch.
+      await this.commit(id,{windowPlan:p});this.check();selected=p;windows=p.windows;
+     }
+    }
+    this.traceEvent(id,'segmentation-plan','audio',{segmentationMode:selected?'pause-aware':'fixed',totalWindows:windows.length,adjustedCuts:selected?.adjustedCuts??0});
     return {windows,initial:checkpointProgress(windows,this.job(id).nextWindow)};
    });
    await pipeline.run('asr',()=>this.runAsr(id,audio,file,params,plan,session,checkpoints));
@@ -792,7 +817,7 @@ export class JobRunner{
    catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)});return 'manual'}
   });
  }
- private async runVad(id:string,audio:Float32Array,checkpoints?:CheckpointManager):Promise<'observed'|'fallback'|'reused'>{
+ private async runVad(id:string,audio:Float32Array,checkpoints?:CheckpointManager,onReport?:(report:VadReport)=>void):Promise<'observed'|'fallback'|'reused'>{
   this.set({operation:'VAD · обнаружение речевой активности'});
   // Storage/integrity errors are not an excuse to rerun inference.
   const inputs=checkpoints?[this.checkpointProfile(id),await checkpoints.pcmInput(audio),VAD_CONTRACT,SILERO_BLOB]:undefined;
@@ -817,6 +842,7 @@ export class JobRunner{
   }
   if(reused)this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'vad',artifactState:'reused'});
   this.traceEvent(id,'vad-result','audio',{elapsedMs:benchmarkNow()-started,pcmSamples:raw.samples,vadFrames:raw.frames,vadSpeechSamples:raw.speechSamples,vadIntervals:raw.intervals.length});
+  onReport?.(raw);
   return reused?'reused':'observed';
  }
  private async runAsr(id:string,audio:Float32Array|StreamedAudio,file:File,params:JobParams,plan:SpeechPlan,session?:StreamSession,checkpoints?:CheckpointManager){
@@ -927,7 +953,7 @@ export class JobRunner{
      await checkpoints.saveWindow(profile,window.start,window.end,pcm);
      this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'saved',window:index+1});
     }
-    const rawInputs=checkpoints?[profile,window.start,window.end,await checkpoints.pcmInput(pcm),params.model,params.language,'engine-0.1.1-transformers-4.3.1-asr-v1']:undefined;
+    const rawInputs=checkpoints?[profile,window.start,window.end,await checkpoints.pcmInput(pcm),params.model,params.language,'engine-0.1.1-transformers-4.3.1-asr-v1',...(this.job(id).windowPlan?[SEGMENTATION_CONTRACT]:[])]:undefined;
     const raw=checkpoints&&rawInputs?await checkpoints.loadRaw('asr',rawInputs):undefined;
     if(raw!==undefined&&!Array.isArray(raw))throw new CheckpointIntegrityError();
     this.set({operation:'Распознавание'});
