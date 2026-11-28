@@ -1,7 +1,8 @@
 import {expect,it,vi} from 'vitest';
-const ctx=vi.hoisted(()=>({initCount:0,disposeCount:0,cache:true}));
+const ctx=vi.hoisted(()=>({initCount:0,disposeCount:0,cache:true,terminateFails:false,terminateCount:0}));
 vi.mock('./worker?worker',()=>({default:class {
  addEventListener(){/* EngineClient mock does not require worker events. */}
+ terminate(){ctx.terminateCount++;if(ctx.terminateFails)throw new Error('injected Worker termination failure')}
 }}));
 vi.mock('@yourdevice/engine',()=>({EngineClient:class {
  onDownloadProgress:unknown;
@@ -48,4 +49,17 @@ it('releases idle sessions without dropping the model cache or recreating a disp
  expect(manager.releaseIdle()).toBe(false);expect(ctx.disposeCount).toBe(1);
  expect(await manager.cached('whisper-small')).toBe(true);
  await manager.prepare('whisper-small');expect(ctx.initCount).toBe(2);manager.cancel();
+});
+
+it('PIPE-06 refuses model allocation after an unconfirmed retirement, even after cancellation',async()=>{
+ ctx.initCount=0;ctx.disposeCount=0;ctx.terminateCount=0;ctx.cache=true;ctx.terminateFails=false;
+ const manager=new ModelManager();
+ try{
+  await manager.prepare('whisper-small');ctx.terminateFails=true;
+  expect(()=>manager.releaseIdle()).toThrow('Не подтверждено');
+  expect(manager.active).toBeNull();expect(manager.resourceBlocked).toBe(true);
+  await expect(manager.prepare('whisper-tiny')).rejects.toMatchObject({code:'worker-disposal-failed'});
+  manager.cancel();await expect(manager.recover('whisper-small',true)).rejects.toMatchObject({code:'worker-disposal-failed'});
+  expect(ctx.initCount).toBe(1);expect(ctx.terminateCount).toBe(1);
+ }finally{ctx.terminateFails=false}
 });
