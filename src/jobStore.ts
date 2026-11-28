@@ -54,6 +54,7 @@ export class JobStore{
  private open():Promise<IDBDatabase>{
   return this.opening??=(new Promise<IDBDatabase>((resolve,reject)=>{
    const request=indexedDB.open(this.dbName,DB_VERSION);
+   let blocked=false;
    request.onupgradeneeded=()=>{
     const db=request.result;
     if(!db.objectStoreNames.contains('jobs'))db.createObjectStore('jobs',{keyPath:'id'});
@@ -62,9 +63,9 @@ export class JobStore{
     if(!db.objectStoreNames.contains(SPEAKERS))db.createObjectStore(SPEAKERS,{keyPath:'id'});
     if(!db.objectStoreNames.contains(ARTIFACTS))db.createObjectStore(ARTIFACTS,{keyPath:['id','key']});
    };
-   request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this.opening=undefined};resolve(db)};
+   request.onsuccess=()=>{const db=request.result;if(blocked){db.close();return}db.onversionchange=()=>{db.close();this.opening=undefined};resolve(db)};
    request.onerror=()=>{this.opening=undefined;reject(request.error)};
-   request.onblocked=()=>{this.opening=undefined;reject(new Error('Закройте другие вкладки iScribe для обновления локального хранилища.'))};
+   request.onblocked=()=>{blocked=true;this.opening=undefined;reject(new Error('Закройте другие вкладки iScribe для обновления локального хранилища.'))};
   }));
  }
  async list(recover=true):Promise<Job[]>{
@@ -114,7 +115,7 @@ export class JobStore{
      // reservation, even if its ASR checkpoint is still identical.
      if(old?.decoderIdentity&&(!job.decoderIdentity||!sameDecoder(old.decoderIdentity,job.decoderIdentity)))
       throw new Error('Декодер задания изменился. Обновите страницу.');
-     if(old?.sourceFingerprint&&old.sourceFingerprint!==job.sourceFingerprint)
+     if(old?.sourceFingerprint&&(old.sourceFingerprint!==job.sourceFingerprint||old.artifactContract!==job.artifactContract))
       throw new Error('Идентификатор исходного аудио изменился. Добавьте запись как новое задание.');
      if((old?.fullDecodeRecoveries??0)>(job.fullDecodeRecoveries??0))
       throw new Error('Лимит полного декодирования изменился. Обновите страницу.');
