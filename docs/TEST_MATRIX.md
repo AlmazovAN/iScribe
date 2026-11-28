@@ -217,3 +217,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - ORCH-01 ordered execution, dependency skips, failure/cancel, concurrent/duplicate rejection, export request/manual fallback — standalone controller tsc and 7/7 Node PASS, Vitest NOT TESTED.
 - ORCH-02 JobRunner integration: resume and preserve committed ASR, fail before dependent stages, deferred streaming gate, export and FIFO invariants — tests authored, NOT TESTED.
 - ORCH-03 exact stacked release local CI, real device regression and base reconciliation with decoder fix — NOT TESTED.
+
+## PIPE-04 candidate gates
+- CP-01 bounded chunk fingerprint, manifest publication, corruption, profile identity, raw JSON and cancellation — exact manager standalone tsc + 8/8 Node PASS; Vitest NOT TESTED.
+- CP-02 IndexedDB v1/v2->v3 migration, source contract, old reader rejection and job deletion; JobRunner commit failure/replay, invalid RAW and speaker cancellation — tests authored, NOT TESTED.
+- CP-03 real file:// SHA-256, storage quota, resumed stream window 41, rollback rehearsal and exact candidate local CI — NOT TESTED.
