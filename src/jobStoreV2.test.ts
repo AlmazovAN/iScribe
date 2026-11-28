@@ -153,3 +153,55 @@ it('persists decoder identity and rejects stale full-recovery reservations',asyn
  expect(after.decoderIdentity).toEqual(fixed.decoderIdentity);
  expect(after.fullDecodeRecoveries).toBe(1);
 });
+
+it('PIPE-04 upgrades v2 additively, preserving original audio, ASR and speakers',async()=>{
+ const dbName=name(),f=file(),j=job(f),segments=[{start:1,end:2,text:'prior durable text'}];
+ await new Promise<void>((resolve,reject)=>{
+  const request=indexedDB.open(dbName,2);
+  request.onupgradeneeded=()=>{
+   const db=request.result;
+   db.createObjectStore('jobs',{keyPath:'id'});db.createObjectStore('audio');
+   db.createObjectStore('asr-chunks-v2',{keyPath:['id','offset']});db.createObjectStore('speaker-results-v2',{keyPath:'id'});
+  };
+  request.onerror=()=>reject(request.error);
+  request.onsuccess=()=>{
+   const db=request.result,tx=db.transaction(['jobs','audio','asr-chunks-v2','speaker-results-v2'],'readwrite');
+   tx.objectStore('jobs').put({...j,storageLayout:2,segmentCount:1,nextWindow:1,segments:[]});
+   tx.objectStore('audio').put(f,j.id);tx.objectStore('asr-chunks-v2').put({id:j.id,offset:0,segments});
+   tx.objectStore('speaker-results-v2').put({id:j.id,segments:segments.map(s=>({...s,speaker:'A'}))});
+   tx.oncomplete=()=>{db.close();resolve()};tx.onabort=()=>{db.close();reject(tx.error)};
+  };
+ });
+ const store=new JobStore(dbName),before=(await store.get(j.id,false))!;
+ expect(before.nextWindow).toBe(1);expect(before.segments).toEqual(segments);
+ expect(before.speakerSegments?.[0].speaker).toBe('A');
+ expect(await (await store.audio(j.id))?.text()).toBe('stored audio');
+ await store.putArtifact(j.id,'test',{revision:1,bytes:new ArrayBuffer(8)});
+ expect(await new JobStore(dbName).getArtifact(j.id,'test')).toEqual({revision:1,bytes:new ArrayBuffer(8)});
+ // Older hard-coded schema cannot reopen: explicit rollout/rollback constraint.
+ await expect(new Promise((resolve,reject)=>{
+  const request=indexedDB.open(dbName,2);
+  request.onerror=()=>reject(request.error);request.onsuccess=()=>{request.result.close();resolve(undefined)};
+ })).rejects.toMatchObject({name:'VersionError'});
+});
+it('PIPE-04 removes only the selected job artifacts and rejects orphan writes',async()=>{
+ const store=new JobStore(name()),a=job(),b=job();
+ await store.save(a);await store.save(b);
+ await store.putArtifact(a.id,'pcm-a',new ArrayBuffer(4));
+ await store.putArtifact(a.id,'raw-a',{text:'local'});
+ await store.putArtifact(b.id,'raw-a',{text:'other'});
+ await store.deleteArtifact(a.id,'pcm-a');
+ expect(await store.getArtifact(a.id,'pcm-a')).toBeUndefined();
+ await store.remove(a.id);
+ expect(await store.getArtifact(a.id,'raw-a')).toBeUndefined();
+ expect(await store.getArtifact(b.id,'raw-a')).toEqual({text:'other'});
+ await expect(store.putArtifact(a.id,'late','no orphan')).rejects.toThrow();
+});
+it('PIPE-04 prevents stale metadata from resetting source and artifact contract identity',async()=>{
+ const store=new JobStore(name()),j=job();
+ const fixed={...j,sourceFingerprint:'chunks-sha256-v1:identity',artifactContract:'pipe04-v1'};
+ await store.save(fixed);
+ await expect(store.save(j)).rejects.toThrow('Идентификатор');
+ await expect(store.save({...fixed,artifactContract:'another'})).rejects.toThrow('Идентификатор');
+ expect(await store.get(j.id,false)).toMatchObject({sourceFingerprint:fixed.sourceFingerprint,artifactContract:fixed.artifactContract});
+});
