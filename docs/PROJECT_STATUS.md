@@ -150,3 +150,6 @@ RecoveryLedger revision 1 counts durable reservations for full/stream decode, in
 
 ## PIPE-06 candidate
 Resource lifecycle policy adds early release of unused/incompatible models, 120s idle lease, guarded Worker retirement and queue pause on unconfirmed termination. FFmpeg cleanup preserves pending request settlement and Blob URL release. Standalone exact helper tsc + 5/5 Node PASS; full CI and hardware NOT TESTED. See [PIPE-06](PIPE-06_RESOURCE_LIFECYCLE.md).
+
+## PIPE-07 candidate
+Opt-in full-PCM Silero v5.1.2 advisory VAD, pinned upstream revision/blob, stateful frame processing and local RAW map checkpoint. Baseline fixed windows unchanged; long stream VAD deferred. Exact vad.ts tsc + 6/6 synthetic inference Node checks PASS; real model/ORT/build/CI NOT TESTED. See [PIPE-07](PIPE-07_VOICE_ACTIVITY_DETECTION.md).
