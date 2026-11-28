@@ -246,7 +246,7 @@ it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints re
  expect(saved.nextWindow).toBe(1);
  expect(saved.segments).toHaveLength(1);
  expect(saved.audioCheck).toMatchObject({status:'failed'});
- expect(saved.trace?.some(e=>e.code==='audio-check-error')).toBe(true);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'audio-check-error',pcmFailureReason:'invalid-sample',pcmFailureWindow:2,pcmFailureSample:800000})]));
 });
 
 it('remembers WebGPU for safe WASM fallback even when watchdog cancellation clears the active backend',async()=>{
@@ -429,7 +429,7 @@ it('does not reopen a decoder after invalid PCM',async()=>{
  expect(saved.streamRecovery).toBeUndefined();
  expect(openStream).toHaveBeenCalledOnce();
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',streamStage:'pcm-check',errorKind:'invalid-audio'})]));
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',streamStage:'pcm-check',errorKind:'invalid-audio',pcmFailureReason:'invalid-sample',pcmFailureWindow:41,pcmFailureSample:16000000})]));
  await store.remove(job.id);
 });
 
@@ -583,6 +583,8 @@ it('prefetches next streamed window during ASR and commits in original order',as
  const saved=(await store.get(job.id,false))!;
  expect(saved).toMatchObject({stage:'done',nextWindow:3,benchmark:{audioPipeline:{scheduled:2,consumed:2,failed:0,peakQueued:2}}});
  expect(read.mock.calls.map(c=>c[0].start)).toEqual([0,25*16000,50*16000]);
+ expect(saved.trace?.filter(e=>e.code==='stream-pcm-check-end').map(e=>e.pcmQuality?.startSample)).toEqual([0,400000,800000]);
+ expect(saved.trace?.filter(e=>e.code==='stream-pcm-check-end').every(e=>e.pcmQuality?.rms===0)).toBe(true);
  expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
  expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
  await store.remove(job.id);
@@ -717,4 +719,16 @@ it('DEC-04 reopens a FFmpeg window on coverage failure and retains prior ASR che
  expect(openStream).toHaveBeenCalledTimes(2);expect(fake.transcribe).toHaveBeenCalledTimes(1);
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-recovery-start',window:41,decoderKind:'ffmpeg',decoderFailure:'coverage'})]));
  await store.remove(job.id);
+});
+
+it('PIPE-02 publishes numeric quality for full decode, preserving exact silence and normal ASR',async()=>{
+ const {runner,store,fake}=setup();await runner.init();
+ await runner.add([new File(['a'],'pipe02-silence.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,audioCheck:{status:'passed',report:{quality:{revision:1,startSample:0,endSample:960000,zeroSamples:960000,rms:0}}}});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'audio-check-pass',pcmQuality:expect.objectContaining({zeroSamples:960000})})]));
+ await store.remove(id);
 });

@@ -16,13 +16,13 @@ export function validateFfmpegWindow(window:AudioWindow,length:number):void{
   window.end<=window.start||window.end>length||window.end-window.start>FFMPEG_MAX_WINDOW_SAMPLES)
   throw new AudioValidationError(null,null,'invalid-window');
 }
-export function validateFfmpegWindowPcm(buffer:ArrayBuffer,expected:number):Float32Array{
+export function validateFfmpegWindowPcm(buffer:ArrayBuffer,expected:number,startSample=0):Float32Array{
  if(!Number.isSafeInteger(expected)||expected<1||expected>FFMPEG_MAX_WINDOW_SAMPLES||
   buffer.byteLength!==expected*Float32Array.BYTES_PER_ELEMENT)
   throw new AudioValidationError(null,null,'invalid-window');
  const pcm=new Float32Array(buffer);
  for(let i=0;i<pcm.length;i++)if(!Number.isFinite(pcm[i]))
-  throw new AudioValidationError(null,i,'invalid-sample');
+  throw new AudioValidationError(null,startSample+i,'invalid-sample');
  return pcm;
 }
 export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Promise<StreamedAudio>{
@@ -92,7 +92,7 @@ export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Pro
      elapsedMs:performance.now()-started,pcmSamples:reply.buffer.byteLength/4});
     signal?.throwIfAborted();
     if(closed)throw new Error('Потоковый декодер FFmpeg закрыт.');
-    const pcm=validateFfmpegWindowPcm(reply.buffer,window.end-window.start);
+    const pcm=validateFfmpegWindowPcm(reply.buffer,window.end-window.start,window.start);
     onProgress?.();return pcm;
    }finally{reading=false}
   }

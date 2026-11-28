@@ -1,6 +1,7 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
+import {AudioValidationError,type PcmQualityEvidence} from './audioValidation';
 import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute,type FfmpegFailure,type FfmpegStage,type FfmpegDetailCode} from './decoderDiagnostics';
 
 // Structured diagnostic events deliberately omit filenames, transcript text,
@@ -31,6 +32,11 @@ export type TraceEvent={
  startSample?:number;
  endSample?:number;
  pcmSamples?:number;
+ pcmQuality?:PcmQualityEvidence;
+ pcmFailureReason?:AudioValidationError['reason'];
+ pcmFailureWindow?:number;
+ pcmFailureSample?:number;
+ durationDeltaSamples?:number;
  decoderId?:number;
  decoderKind?:AudioDecoderKind;
  decoderRoute?:DecoderRoute;
@@ -59,6 +65,10 @@ export type TraceEvent={
  boundaryMatches?:number;
  errorKind?:TraceErrorKind;
 };
+export function pcmValidationFields(error:unknown):Pick<TraceEvent,'pcmFailureReason'|'pcmFailureWindow'|'pcmFailureSample'>{
+ if(!(error instanceof AudioValidationError))return {};
+ return {pcmFailureReason:error.reason,pcmFailureWindow:error.windowNumber??undefined,pcmFailureSample:error.sampleIndex??undefined};
+}
 export const MAX_TRACE_EVENTS=4096;
 export function appendTrace(events:readonly TraceEvent[]|undefined,event:TraceEvent):TraceEvent[]{
  return [...(events??[]),event].slice(-MAX_TRACE_EVENTS);
@@ -125,7 +135,7 @@ export function diagnosticReport(job:Job){
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,
-  windowInspections:(job.windowInspections??[]).map(r=>({window:r.window,strategy:r.strategy,status:r.status,checkedAt:r.checkedAt,elapsedMs:r.elapsedMs,startSample:r.startSample,endSample:r.endSample,totalWindows:r.totalWindows,completedParts:r.completedParts,errorKind:r.errorKind,failureStage:r.failureStage,report:r.report?{pcmSamples:r.report.pcmSamples,durationSeconds:r.report.durationSeconds,windowCount:r.report.windowCount,quietWindows:r.report.quietWindows,nearClippedWindows:r.report.nearClippedWindows,peakAbsolute:r.report.peakAbsolute}:undefined})),
+  windowInspections:(job.windowInspections??[]).map(r=>({window:r.window,strategy:r.strategy,status:r.status,checkedAt:r.checkedAt,elapsedMs:r.elapsedMs,startSample:r.startSample,endSample:r.endSample,totalWindows:r.totalWindows,completedParts:r.completedParts,errorKind:r.errorKind,failureStage:r.failureStage,report:r.report?{pcmSamples:r.report.pcmSamples,durationSeconds:r.report.durationSeconds,windowCount:r.report.windowCount,quietWindows:r.report.quietWindows,nearClippedWindows:r.report.nearClippedWindows,peakAbsolute:r.report.peakAbsolute,quality:r.report.quality}:undefined})),
   speakerAlignment:job.diagnostics?{
    turns:job.diagnostics.turns,validTurns:job.diagnostics.validTurns??null,
    invalidTurns:job.diagnostics.invalidTurns??null,mergedTurns:job.diagnostics.mergedTurns??null,

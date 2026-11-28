@@ -70,3 +70,35 @@ it('rejects malformed model timestamps instead of persisting them as ASR progres
  expect(()=>absoluteSegments([{start:3,end:35,text:'corrupt'}],window)).toThrow('временные метки');
  expect(absoluteSegments([{start:26,end:27,text:'valid'}],window)).toHaveLength(1);
 });
+
+it('PIPE-02 counts source samples only once across overlapping ASR windows',async()=>{
+ const pcm=new Float32Array(60*16000);
+ pcm[400000]=1.25;pcm[479999]=-1;pcm[480000]=0.5;
+ const report=await inspectDecodedPcm(pcm);
+ expect(report.quality).toMatchObject({revision:1,startSample:0,endSample:960000,zeroSamples:959997,nearFullScaleSamples:2,overRangeSamples:1,longestZeroRun:479999,maxAdjacentDelta:1.5});
+ expect(report.quality?.rms).toBeCloseTo(Math.sqrt((1.25**2+1+0.25)/960000),12);
+ expect(report.quality?.dcOffset).toBeCloseTo(0.75/960000,12);
+ expect(report.nearClippedWindows).toBe(2); // overlapping window count, intentionally not unique samples
+});
+it('PIPE-02 allows exact silence, very quiet samples and finite out-of-range values without mutating audio',async()=>{
+ const pcm=new Float32Array([0,0,0.0000001,-0.0000001,1.1]);
+ const before=pcm.slice();
+ const report=await inspectDecodedPcm(pcm);
+ expect(report.quality).toMatchObject({zeroSamples:2,longestZeroRun:2,nearFullScaleSamples:1,overRangeSamples:1});
+ expect(pcm).toEqual(before);
+ const silence=await inspectDecodedPcm(new Float32Array(16000));
+ expect(silence.quality).toMatchObject({zeroSamples:16000,longestZeroRun:16000,rms:0,dcOffset:0,maxAdjacentDelta:0});
+ expect(silence.quietWindows).toBe(1);
+});
+it('PIPE-02 validates exact coverage and reports absolute source sample coordinates',async()=>{
+ const pcm=new Float32Array([0,0.1,NaN]);
+ await expect(inspectDecodedPcm(pcm,{startSample:16000000,windowNumber:41,expectedSamples:3})).rejects.toMatchObject({reason:'invalid-sample',windowNumber:41,sampleIndex:16000002});
+ await expect(inspectDecodedPcm(new Float32Array(2),{startSample:400000,windowNumber:2,expectedSamples:3})).rejects.toMatchObject({reason:'invalid-window',windowNumber:2});
+ await expect(inspectDecodedPcm(new Float32Array(3),{startSample:-1})).rejects.toMatchObject({reason:'invalid-window'});
+ const ok=await inspectDecodedPcm(new Float32Array(3),{startSample:400000,windowNumber:2,expectedSamples:3});
+ expect(ok.quality).toMatchObject({startSample:400000,endSample:400003});
+});
+it('PIPE-02 cancellation on the final progress callback is not a successful check',async()=>{
+ const controller=new AbortController();
+ await expect(inspectDecodedPcm(new Float32Array(16),{signal:controller.signal,onProgress:()=>controller.abort()})).rejects.toMatchObject({name:'AbortError'});
+});

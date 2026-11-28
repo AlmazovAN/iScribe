@@ -1,10 +1,10 @@
 import type {StreamedAudio,StreamReadEvent} from '../streamedAudio';
 import type {AudioWindow} from '../recognitionProgress';
-import {inspectDecodedPcm,AudioValidationError} from '../audioValidation';
+import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from '../audioValidation';
 import {StreamDecodeStalledError,withActivityWatchdog} from '../ml/activityWatchdog';
 import type {StreamStage} from '../jobTrace';
 import {benchmarkNow} from '../benchmark';
-export type PreparedStreamWindow={decoderId:number;pcm:Float32Array;decodeMs:number;validationMs:number;events:StreamReadEvent[]};
+export type PreparedStreamWindow={decoderId:number;pcm:Float32Array;decodeMs:number;validationMs:number;report:AudioInspectionReport;events:StreamReadEvent[]};
 export type PrefetchTimeouts={decode:number;resample:number;pcm:number};
 // A speculative read never writes IndexedDB, modifies status or reserves a
 // recovery budget. The consumer publishes its diagnostics at the checkpoint
@@ -28,10 +28,10 @@ export async function prepareStreamWindow(audio:StreamedAudio,window:AudioWindow
  signal.throwIfAborted();
  if(!(pcm instanceof Float32Array)||pcm.length!==window.end-window.start)throw new AudioValidationError(index+1,null,'invalid-window');
  const validationStarted=benchmarkNow();
- await withActivityWatchdog(beat=>inspectDecodedPcm(pcm,{signal,onProgress:beat}),{
+ const report=await withActivityWatchdog(beat=>inspectDecodedPcm(pcm,{signal,onProgress:beat,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start}),{
   timeoutMs:timeouts.pcm,pollMs:Math.min(1000,Math.max(5,timeouts.pcm/4)),signal,
   onTimeout:()=>audio.close(),timeoutError:()=>new StreamDecodeStalledError('pcm-check')
  });
  signal.throwIfAborted();
- return {decoderId:audio.decoderId,pcm,decodeMs,validationMs:benchmarkNow()-validationStarted,events};
+ return {decoderId:audio.decoderId,pcm,decodeMs,validationMs:benchmarkNow()-validationStarted,report,events};
 }
