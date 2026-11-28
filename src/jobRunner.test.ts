@@ -22,12 +22,16 @@ it('persists full ASR before speakers and keeps TXT available when speakers fail
  runner.enqueue(id);await finished(runner);
  const j=runner.snapshot().jobs.find(j=>j.id===id)!;expect(j.stage).toBe('partial');expect(j.asrComplete).toBe(true);expect(download).toHaveBeenCalled();
  expect((await new JobStore().list()).find(j=>j.id===id)!.segments).toHaveLength(3);
+ expect(j.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'pipeline-stage',pipelineStage:'diarization',pipelineState:'failed'})]));
+ expect(j.trace?.some(e=>e.pipelineStage==='speaker-assignment')).toBe(false);
 });
 it('resumes at the committed window and never re-runs ASR when only speakers need retry',async()=>{
  const {runner,fake,store}=setup();const file=new File(['a'],'resume.wav');const j=createJob(file,{model:'whisper-small',language:'en',diarize:true});
  await store.save({...j,stage:'recognizing',nextWindow:1,segments:[{start:3,end:4,text:'saved'}]},file);await runner.init();runner.enqueue(j.id);await finished(runner);
  expect(fake.transcribe).toHaveBeenCalledTimes(2);expect(fake.transcribe.mock.calls[0]).toHaveLength(4);
  fake.transcribe.mockClear();runner.enqueue(j.id);await finished(runner);expect(fake.transcribe).not.toHaveBeenCalled();expect(fake.diarize).toHaveBeenCalledTimes(2);
+ const resumed=(await store.get(j.id,false))!;
+ expect(resumed.trace?.filter(e=>e.pipelineStage==='asr').at(-1)).toMatchObject({pipelineState:'reused',pipelineReason:'asr-already-committed'});
 });
 it('serializes files and freezes language/model for each queued job',async()=>{
  const {runner,fake}=setup();await runner.init();const p={model:'whisper-tiny' as const,language:'ru' as const,diarize:false};
@@ -220,7 +224,13 @@ it('commits trace of each ASR window and exposes a redacted downloadable diagnos
  const persisted=(await store.list(false)).find(j=>j.id===id)!;
  expect(persisted.trace?.filter(e=>e.code==='window-result')).toHaveLength(3);
  expect(persisted.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
- expect(persisted.trace?.at(-1)?.code).toBe('job-complete');
+ const stages=persisted.trace?.filter(e=>e.code==='pipeline-stage'&&e.pipelineState!=='running');
+ expect(stages?.map(e=>[e.pipelineStage,e.pipelineState])).toEqual([
+  ['preflight','completed'],['decode','completed'],['pcm-gate','completed'],['segmentation','completed'],['asr','completed'],
+  ['diarization','skipped'],['speaker-assignment','skipped'],['finalize','completed'],['export','requested']
+ ]);
+ expect(persisted.trace?.findIndex(e=>e.code==='job-complete')).toBeLessThan(persisted.trace!.findIndex(e=>e.pipelineStage==='export'));
+ expect(persisted.trace?.at(-1)).toMatchObject({code:'pipeline-stage',pipelineStage:'export',pipelineState:'requested'});
  runner.exportDiagnostics(id);
  expect(diagnosticDownload).toHaveBeenCalledOnce();
  const [report,filename]=diagnosticDownload.mock.calls[0];
@@ -246,7 +256,8 @@ it('refuses to run ASR when PCM contains nonfinite samples; prior checkpoints re
  expect(saved.nextWindow).toBe(1);
  expect(saved.segments).toHaveLength(1);
  expect(saved.audioCheck).toMatchObject({status:'failed'});
- expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'audio-check-error',pcmFailureReason:'invalid-sample',pcmFailureWindow:2,pcmFailureSample:800000})]));
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'audio-check-error',pcmFailureReason:'invalid-sample',pcmFailureWindow:2,pcmFailureSample:800000}),expect.objectContaining({code:'pipeline-stage',pipelineStage:'pcm-gate',pipelineState:'failed'})]));
+ expect(saved.trace?.some(e=>e.pipelineStage==='asr')).toBe(false);
 });
 
 it('remembers WebGPU for safe WASM fallback even when watchdog cancellation clears the active backend',async()=>{
@@ -585,6 +596,7 @@ it('prefetches next streamed window during ASR and commits in original order',as
  expect(read.mock.calls.map(c=>c[0].start)).toEqual([0,25*16000,50*16000]);
  expect(saved.trace?.filter(e=>e.code==='stream-pcm-check-end').map(e=>e.pcmQuality?.startSample)).toEqual([0,400000,800000]);
  expect(saved.trace?.filter(e=>e.code==='stream-pcm-check-end').every(e=>e.pcmQuality?.rms===0)).toBe(true);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'pipeline-stage',pipelineStage:'pcm-gate',pipelineState:'deferred',pipelineReason:'per-window-validation'})]));
  expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(saved.segments).toHaveLength(3);
  expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
  await store.remove(job.id);
