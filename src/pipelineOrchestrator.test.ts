@@ -12,6 +12,8 @@ async function prepare(p:Pipeline,mode:'full'|'windowed'='full'){
  expect(file.size).toBe(1);
  const audio=await p.run('decode',()=>new Float32Array(2));
  await p.run('pcm-gate',()=>({mode,samples:audio.length}));
+ if(mode==='windowed')p.skip({stage:'vad',reason:'vad-streaming-unavailable'});
+ else await p.run('vad',()=> 'observed');
 }
 async function asr(p:Pipeline){
  const plan=await p.run('segmentation',()=>({windows:1}));
@@ -83,4 +85,14 @@ describe('PIPE-03 stage control',()=>{
   expect(()=>p.skip({stage:'speaker-assignment',reason:'streaming-speakers-unavailable'})).toThrow('Причина пропуска');
   await expect(p.run('speaker-assignment',()=>{})).rejects.toThrow('Входной этап');
  });
+});
+
+it('PIPE-07 records explicit VAD fallback without blocking fixed segmentation',async()=>{
+ const {pipeline:p,events}=setup();
+ await p.run('preflight',()=>new File(['a'],'sample.wav'));
+ await p.run('decode',()=>new Float32Array(2));
+ await p.run('pcm-gate',()=>({mode:'full',samples:2}));
+ await p.run('vad',()=> 'fallback');
+ await asr(p);
+ expect(events).toEqual(expect.arrayContaining([expect.objectContaining({stage:'vad',state:'skipped',reason:'vad-unavailable'}),expect.objectContaining({stage:'asr',state:'completed'})]));
 });

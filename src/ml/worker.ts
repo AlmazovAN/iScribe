@@ -1,5 +1,6 @@
 import {compressedWasmFetch,validatedModelFetch,observedWhisperHttpFetch,offlineModelFetch} from './runtimeFetch';
 import {env} from '@huggingface/transformers';
+import {SileroPass} from './sileroVad';
 import {clampWasmRequest,localWasmThreadEnvironment,resolveWasmThreads} from '../performance/wasmThreads';
 import {preloadDiarizationModels,runSpeakerPass} from '@yourdevice/engine/worker';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
@@ -69,4 +70,43 @@ addEventListener('message',(event:MessageEvent<unknown>)=>{
   .then(()=>postMessage({type:'iscribe:preload-complete',requestId}))
   .catch((error:unknown)=>postMessage({type:'iscribe:preload-error',requestId,message:error instanceof Error?error.message:String(error)}))
   .finally(()=>{preloading=false});
+});
+
+// The VAD host uses a dedicated instance of this existing bundled Worker.
+// No new worker asset or extra ONNX runtime version.
+let vadPass:SileroPass|undefined,vadBusy=false,vadId:string|undefined;
+addEventListener('message',(event:MessageEvent<unknown>)=>{
+ const d=event.data;
+ if(!d||typeof d!=='object'||!('type' in d)||!('requestId' in d)||typeof d.requestId!=='string')return;
+ if(d.type!=='iscribe:vad-start'&&d.type!=='iscribe:vad-block')return;
+ const requestId=d.requestId;
+ if(vadBusy){postMessage({type:'iscribe:vad-error',requestId});return}
+ vadBusy=true;
+ void (async()=>{
+  if(d.type==='iscribe:vad-start'){
+   if(vadPass||vadId!==undefined||!('samples' in d)||typeof d.samples!=='number')throw new Error('Invalid VAD start');
+   vadId=requestId;
+   vadPass=await SileroPass.create(d.samples,async()=>{
+    if(!wasm)throw new Error('Missing local WASM runtime');
+    // Standalone receives the verified embedded binary from the parent.
+    // Web production uses the existing compressed-runtime transport.
+    if(import.meta.env.MODE!=='standalone'){
+     const response=await env.fetch(new URL(wasmUrl,import.meta.url).href);
+     if(!response.ok)throw new Error('Local WASM unavailable');
+     wasm.wasmBinary=await response.arrayBuffer();
+    }
+   });
+   postMessage({type:'iscribe:vad-ready',requestId});return;
+  }
+  if(!vadPass||vadId!==requestId||!('audio' in d)||!(d.audio instanceof Float32Array)||!('final' in d)||typeof d.final!=='boolean')throw new Error('Invalid VAD block');
+  await vadPass.push(d.audio,()=>postMessage({type:'iscribe:vad-progress',requestId}));
+  if(d.final){
+   const report=await vadPass.finish();
+   await vadPass.release();vadPass=undefined;
+   postMessage({type:'iscribe:vad-result',requestId,report});
+  }else postMessage({type:'iscribe:vad-next',requestId});
+ })().catch(()=>{
+  // Do not export arbitrary runtime errors or source content.
+  postMessage({type:'iscribe:vad-error',requestId});
+ }).finally(()=>{vadBusy=false});
 });

@@ -30,6 +30,7 @@ import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
 import {IdleModelLease,shouldReleaseBeforeJob} from './performance/resourceLifecycle';
+import {VAD_CONTRACT,SILERO_BLOB,validateVadReport} from './ml/vad';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
@@ -62,6 +63,7 @@ export class JobRunner{
  private activeDecoder?:DecoderIdentity;
  private readonly requestedDecoder:AudioDecoderKind;
  private readonly checkpointArtifacts:boolean;
+ private readonly vadEnabled:boolean;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -76,7 +78,7 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{vadEnabled?:boolean;checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
@@ -84,6 +86,7 @@ export class JobRunner{
   this.openStream=options.openStream;
   // Injected runtimes are not the pinned production decoder/model. Tests may opt in explicitly.
   this.checkpointArtifacts=options.checkpointArtifacts??(!options.decode&&!options.openStream&&!options.manager);
+  this.vadEnabled=options.vadEnabled??(!options.manager&&typeof location!=='undefined'&&new URLSearchParams(location.search).get('vad')==='silero');
    // Injected test/alternate runtimes do not claim to be real FFmpeg.
    this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
@@ -735,6 +738,9 @@ export class JobRunner{
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
   if(!this.job(id).asrComplete){
+   if(!this.vadEnabled)pipeline.skip({stage:'vad',reason:'vad-disabled'});
+   else if(!(audio instanceof Float32Array))pipeline.skip({stage:'vad',reason:'vad-streaming-unavailable'});
+   else await pipeline.run('vad',()=>this.runVad(id,audio,checkpoints));
    const plan=await pipeline.run('segmentation',()=>{
     const windows=audioWindows(audio.length,streamed);
     // A corrupted checkpoint must never masquerade as a completed transcript.
@@ -742,6 +748,7 @@ export class JobRunner{
    });
    await pipeline.run('asr',()=>this.runAsr(id,audio,file,params,plan,session,checkpoints));
   }else{
+   pipeline.skip({stage:'vad',reason:'asr-already-committed'});
    pipeline.skip({stage:'segmentation',reason:'asr-already-committed'});
    pipeline.skip({stage:'asr',reason:'asr-already-committed'});
   }
@@ -784,6 +791,33 @@ export class JobRunner{
    try{this.export(id,params.diarize&&!streamed?'speakers':'plain');this.set({notice:'Автоскачивание TXT запрошено. Если файл не появился, используйте кнопки справа от записи.'});return 'requested'}
    catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)});return 'manual'}
   });
+ }
+ private async runVad(id:string,audio:Float32Array,checkpoints?:CheckpointManager):Promise<'observed'|'fallback'|'reused'>{
+  this.set({operation:'VAD · обнаружение речевой активности'});
+  // Storage/integrity errors are not an excuse to rerun inference.
+  const inputs=checkpoints?[this.checkpointProfile(id),await checkpoints.pcmInput(audio),VAD_CONTRACT,SILERO_BLOB]:undefined;
+  let raw=checkpoints&&inputs?await checkpoints.loadRaw('vad',inputs):undefined;
+  const reused=raw!==undefined;
+  const started=benchmarkNow();
+  if(!reused){
+   try{raw=await this.manager.detectSpeech(audio,this.abort!.signal)}
+   catch(error){
+    this.check();this.abort!.signal.throwIfAborted();
+    if(error instanceof WorkerDisposalError||this.manager.resourceBlocked)throw new WorkerDisposalError();
+    this.traceEvent(id,'vad-fallback','audio',{elapsedMs:benchmarkNow()-started,errorKind:traceErrorKind(error)});
+    return 'fallback';
+   }
+   if(checkpoints&&inputs){await checkpoints.saveRaw('vad',inputs,raw);this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'vad',artifactState:'saved'})}
+  }
+  this.check();
+  if(!validateVadReport(raw,audio.length)){
+   // Preserve the returned map for diagnosis; never suppress audio based on it.
+   this.traceEvent(id,'vad-fallback','audio',{elapsedMs:benchmarkNow()-started,errorKind:'inference'});
+   return 'fallback';
+  }
+  if(reused)this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'vad',artifactState:'reused'});
+  this.traceEvent(id,'vad-result','audio',{elapsedMs:benchmarkNow()-started,pcmSamples:raw.samples,vadFrames:raw.frames,vadSpeechSamples:raw.speechSamples,vadIntervals:raw.intervals.length});
+  return reused?'reused':'observed';
  }
  private async runAsr(id:string,audio:Float32Array|StreamedAudio,file:File,params:JobParams,plan:SpeechPlan,session?:StreamSession,checkpoints?:CheckpointManager){
   const streamed=!(audio instanceof Float32Array);

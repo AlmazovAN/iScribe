@@ -6,6 +6,7 @@ import type {ResourcePolicy} from '../performance/types';
 import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,type WasmThreadConfiguration} from '../performance/wasmThreads';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {WorkerRetirement} from '../performance/resourceLifecycle';
+import {VAD_BLOCK,VAD_MAX_SAMPLES} from './vad';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
 function createEngineWorker(retirement:WorkerRetirement):Worker{
@@ -249,6 +250,53 @@ export class ModelManager{
    return result;
   }catch(error){if(generation===this.generation)this.phase('error');throw error}
   finally{if(generation===this.generation)this.busy=false}
+ }
+ // Experimental full-PCM pass. Reuse the auxiliary Worker ownership and
+ // cancellation path; never overlap VAD with an initialized Whisper session.
+ async detectSpeech(audio:Float32Array,signal:AbortSignal):Promise<unknown>{
+  this.retirement.assertUsable();signal.throwIfAborted();
+  if(this.busy||!Number.isSafeInteger(audio.length)||audio.length<1||audio.length>VAD_MAX_SAMPLES)throw new Error('VAD unavailable');
+  this.disposeAsr();this.busy=true;const generation=++this.generation;
+  this.phase('initializing',null,null);
+  let worker:Worker|null=null,accepting=true;
+  const requestId='vad-'+generation;
+  try{
+   worker=createEngineWorker(this.retirement);this.speakerWorker=worker;
+   const owned=worker;
+   const result=await withActivityWatchdog(heartbeat=>new Promise<unknown>((resolve,reject)=>{
+    this.rejectPreload=reject;
+    let offset=0,awaiting:'ready'|'next'|'result'='ready';
+    const sendBlock=()=>{
+     signal.throwIfAborted();
+     const block=audio.slice(offset,offset+VAD_BLOCK);
+     offset+=block.length;const final=offset===audio.length;
+     awaiting=final?'result':'next';
+     owned.postMessage({type:'iscribe:vad-block',requestId,audio:block,final},[block.buffer]);
+    };
+    owned.addEventListener('error',()=>reject(new Error('VAD Worker unavailable')));
+    owned.addEventListener('messageerror',()=>reject(new Error('VAD Worker protocol')));
+    owned.addEventListener('message',(event:MessageEvent<unknown>)=>{
+     const d=event.data;
+     if(!accepting||generation!==this.generation||signal.aborted||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d))return;
+     try{
+      if(d.type==='iscribe:vad-progress'){heartbeat();return}
+      if(d.type==='iscribe:vad-error')throw new Error('VAD inference unavailable');
+      if(d.type==='iscribe:vad-ready'&&awaiting==='ready'||d.type==='iscribe:vad-next'&&awaiting==='next'){heartbeat();sendBlock();return}
+      if(d.type==='iscribe:vad-result'&&awaiting==='result'&&'report' in d){accepting=false;heartbeat();resolve(d.report);return}
+      throw new Error('VAD Worker protocol');
+     }catch(error){accepting=false;reject(error)}
+    });
+    owned.postMessage({type:'iscribe:vad-start',requestId,samples:audio.length});
+   }),{signal,timeoutMs:this.initIdleMs,pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),onTimeout:()=>{accepting=false;this.retirement.terminate(owned)}});
+   signal.throwIfAborted();if(generation!==this.generation)throw new Error('Отменено.');
+   this.phase('idle',null,null);return result;
+  }finally{
+   accepting=false;
+   try{this.retirement.terminate(worker)}finally{
+    if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}
+    if(generation===this.generation){this.busy=false;this.phase(this.resourceBlocked?'error':'idle',null,null)}
+   }
+  }
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
   this.retirement.assertUsable();

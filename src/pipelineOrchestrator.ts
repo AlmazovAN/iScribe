@@ -1,9 +1,9 @@
 // A run-local stage controller. JobRunner remains the sole owner of queue,
 // cancellation, models, retry budgets and durable JobStore checkpoints.
-export const PIPELINE_STAGES=['preflight','decode','pcm-gate','segmentation','asr','diarization','speaker-assignment','finalize','export'] as const;
+export const PIPELINE_STAGES=['preflight','decode','pcm-gate','vad','segmentation','asr','diarization','speaker-assignment','finalize','export'] as const;
 export type PipelineStage=typeof PIPELINE_STAGES[number];
 export type PipelineState='running'|'completed'|'deferred'|'skipped'|'reused'|'failed'|'cancelled'|'requested'|'manual';
-export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable';
+export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable'|'vad-disabled'|'vad-streaming-unavailable'|'vad-unavailable';
 export type PipelineObservation={stage:PipelineStage;state:PipelineState;reason?:PipelineReason;elapsedMs?:number};
 export type PcmGateResult={mode:'full'|'windowed';samples:number};
 export type ExportOutcome='requested'|'manual';
@@ -11,6 +11,7 @@ export type PipelineOutputs<Audio,Plan,Turns>={
  preflight:File;
  decode:Audio;
  'pcm-gate':PcmGateResult;
+ vad:'observed'|'fallback'|'reused';
  segmentation:Plan;
  asr:void;
  diarization:Turns;
@@ -19,6 +20,7 @@ export type PipelineOutputs<Audio,Plan,Turns>={
  export:ExportOutcome;
 };
 type Skip=
+ |{stage:'vad';reason:'vad-disabled'|'vad-streaming-unavailable'|'asr-already-committed'}
  |{stage:'segmentation'|'asr';reason:'asr-already-committed'}
  |{stage:'diarization'|'speaker-assignment';reason:'speakers-disabled'|'streaming-speakers-unavailable'};
 
@@ -49,6 +51,7 @@ export class PipelineOrchestrator<Audio,Plan,Turns>{
    // after return is checked by its caller, which owns disposal.
    let state:PipelineState='completed',reason:PipelineReason|undefined;
    if(stage==='pcm-gate'&&(value as PcmGateResult).mode==='windowed'){state='deferred';reason='per-window-validation'}
+   if(stage==='vad'){if(value==='fallback'){state='skipped';reason='vad-unavailable'}else if(value==='reused')state='reused'}
    if(stage==='export')state=value==='requested'?'requested':'manual';
    this.cursor++;
    this.observe({stage,state,reason,elapsedMs:Math.max(0,this.now()-started)});

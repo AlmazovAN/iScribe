@@ -232,3 +232,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - LIFE-01 model release decisions, idle lease expiry/cancel, idempotent retirement, failure latch — exact helper standalone tsc + 5/5 Node PASS; Vitest NOT TESTED.
 - LIFE-02 model and decoder ownership/cleanup, early release, queue pause and preservation, abort and recovery — integration tests authored, NOT TESTED.
 - LIFE-03 exact release candidate local CI, 10-file real-device RAM/VRAM regression, cache/idle latency, #76 reconciliation — NOT TESTED.
+
+## PIPE-07 candidate gates
+- VAD-01 framing/context, state carry, padding/merge, invalid results and map bounds — exact helper tsc + 6/6 Node synthetic checks PASS, Vitest NOT TESTED.
+- VAD-02 pinned model load/cache/runtime, stage fallback/cancel, RAW reuse, original ASR windows intact — tests authored, actual ONNX/browser/project NOT TESTED.
+- VAD-03 local mandatory CI, RU/EN labeled speech recall and quiet speech, boundary errors, memory/time, streaming compatibility and #76 reconciliation — NOT TESTED.
