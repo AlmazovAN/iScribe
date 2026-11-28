@@ -23,7 +23,7 @@ async function initializeCore({coreURL,wasmURL,wasmBlob}){
 }
 self.onmessage=async({data:{file,coreURL,wasmURL,wasmBlob,maxSamples}})=>{
  let core;
- const errors=createFfmpegErrorCollector();
+ const errors=globalThis.createFfmpegErrorCollector();
  try{
   core=await initializeCore({coreURL,wasmURL,wasmBlob});
   core.setLogger(errors.observe);

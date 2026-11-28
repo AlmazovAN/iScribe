@@ -14,7 +14,7 @@ function removeOutput(){
 function decode(start,count,id,allowShort=false){
  const warm=Math.max(0,start-RATE),skip=start-warm;
  let lastProgress=0;
- const errors=createFfmpegErrorCollector();
+ const errors=globalThis.createFfmpegErrorCollector();
  core.setLogger(errors.observe);
  core.setProgress(event=>{
   const time=Number(event.time);
@@ -46,7 +46,7 @@ function decode(start,count,id,allowShort=false){
 function probeMetadata(){
  const output='/probe.json',fs=core.FS;
  let hadError=false,status;
- const errors=createFfmpegErrorCollector();
+ const errors=globalThis.createFfmpegErrorCollector();
  if(fs.analyzePath(output).exists)fs.unlink(output);
  core.setLogger(event=>{errors.observe(event);if(event.type==='stderr'&&event.message?.trim())hadError=true;});
  try{

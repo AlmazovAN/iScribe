@@ -1,6 +1,6 @@
 // Runs in the decoder worker only. Raw FFmpeg stderr is never transferred.
 // Closed categories, not excerpts: no filename, metadata or audio content.
-function createFfmpegErrorCollector(){
+globalThis.createFfmpegErrorCollector=function(){
  const categories=new Set();
  let lines=0;
  function observe(event){
@@ -19,4 +19,4 @@ function createFfmpegErrorCollector(){
  }
  function snapshot(){return {details:[...categories].sort(),errorLines:lines}}
  return {observe,snapshot};
-}
+};
