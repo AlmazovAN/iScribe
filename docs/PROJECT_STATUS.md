@@ -138,3 +138,6 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 
 ## PIPE-02 candidate
 Shared PCM gate now exposes numeric quality evidence and absolute source positions in normal/streamed/prefetched paths. No change to PCM, retry policy or storage schema. Six isolated logic checks PASS; exact candidate local CI and real hardware NOT TESTED. See [PIPE-02](PIPE-02_AUDIO_QUALITY_GATE.md).
+
+## PIPE-03 candidate
+JobRunner now executes nine existing operations via a typed run-local controller. ASR/speaker methods separated, stage lifecycle reported, existing atomic checkpoints retained. Standalone controller tsc + 7/7 Node smoke PASS; full CI and real hardware NOT TESTED. See [PIPE-03](PIPE-03_PIPELINE_ORCHESTRATOR.md).

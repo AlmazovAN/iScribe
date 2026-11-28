@@ -102,3 +102,5 @@ DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web bui
 DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real full FFmpeg decode exit 1 twice, root cause unknown. New bounded diagnostic categories and real synthetic MP3 browser test; revised candidate NOT TESTED. Strict decode/PCM policies unchanged.
 
 PIPE-02: finite PCM and advisory signal statistics cannot establish absence of compressed frame damage, speech loss or discontinuity between independent windows. Actual validation cost and real audio acceptance remain pending. PIPE-01/#76 remain unaccepted.
+
+PIPE-03: stage trace observations are not independent durable checkpoints; abrupt closure can lose latest stage events. Streaming decode-open/PCM deferred does not prove all windows valid. VAD, forced alignment and streaming speaker support remain unimplemented; stage persistence is PIPE-04. Full project gates pending.
