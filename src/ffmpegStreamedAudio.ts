@@ -4,6 +4,8 @@ import {ffmpegWorkerAssets} from './ffmpegDecoder';
 import {allocateStreamDecoderId,type StreamedAudio,type StreamReadObserver} from './streamedAudio';
 import type {AudioWindow} from './recognitionProgress';
 import workerSource from './ffmpegStreamWorker.js?raw';
+import {WorkerRetirement} from './performance/resourceLifecycle';
+import {WorkerDisposalError} from './ml/activityWatchdog';
 import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails,type FfmpegStage} from './decoderDiagnostics';
 
 export const FFMPEG_MAX_WINDOW_SAMPLES=30*PCM_SAMPLE_RATE;
@@ -33,14 +35,19 @@ export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Pro
  let worker:Worker;
  try{worker=new Worker(source)}catch(error){URL.revokeObjectURL(source);throw error}
  let closed=false,reading=false,nextId=0,pending:Pending|undefined;
- const closeWith=(error:unknown)=>{
-  if(closed)return;
-  closed=true;signal?.removeEventListener('abort',abort);
-  worker.onmessage=null;worker.onerror=null;worker.onmessageerror=null;
-  worker.terminate();URL.revokeObjectURL(source);
-  const request=pending;pending=undefined;request?.reject(error);
+ const retirement=new WorkerRetirement();
+ let disposalError:WorkerDisposalError|undefined;
+ const closeWith=(error:unknown,propagate=false)=>{
+  if(!closed){
+   closed=true;signal?.removeEventListener('abort',abort);
+   worker.onmessage=null;worker.onerror=null;worker.onmessageerror=null;
+   const request=pending;pending=undefined;
+   try{retirement.terminate(worker)}catch{disposalError=new WorkerDisposalError()}
+   finally{URL.revokeObjectURL(source);request?.reject(disposalError??error)}
+  }
+  if(propagate&&disposalError)throw disposalError;
  };
- const close=()=>closeWith(new Error('Потоковый декодер FFmpeg закрыт.'));
+ const close=()=>closeWith(new Error('Потоковый декодер FFmpeg закрыт.'),true);
  const abort=()=>closeWith(signal?.reason??new DOMException('Отменено','AbortError'));
  worker.onerror=()=>closeWith(new FfmpegDecoderError('worker',pending?.stage??'open'));
  worker.onmessageerror=()=>closeWith(new FfmpegDecoderError('protocol',pending?.stage??'open'));
@@ -97,5 +104,5 @@ export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Pro
    }finally{reading=false}
   }
   return {length,read,close,decoderId};
- }catch(error){closeWith(error);throw error}
+ }catch(error){closeWith(error,true);throw error}
 }
