@@ -972,6 +972,7 @@ export class JobRunner{
       this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
       this.check();
       this.backendPolicy.invalidate(params.model,params.language,attemptBackend);
+      if(this.manager.resourceBlocked)throw new WorkerDisposalError();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       if(traceErrorKind(error)==='worker'||(typeof error==='object'&&error!==null&&'code' in error&&(error.code==='gpu-device-lost'||error.code==='webgpu-device-lost')))this.resources.restrictAfterRecovery();
       const next=this.reserveAttempt(id,'asr',index+1),wasmOnly=preferWasmAfterFailure(attemptBackend);
@@ -1032,7 +1033,7 @@ export class JobRunner{
   for(;;){
    const attempt=this.reserveAttempt(id,'diarization');await this.persist(id);this.check();
    try{const turns=await this.runDiarizationAttempt(id,audio);this.finishAttempt(id,'diarization');return turns}
-   catch(error){this.check();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();this.manager.forceSingleWasmThread=true;}
+   catch(error){this.check();if(this.manager.resourceBlocked)throw new WorkerDisposalError();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();this.manager.forceSingleWasmThread=true;}
   }
  }
  private async runDiarizationAttempt(id:string,audio:Float32Array):Promise<SpeakerTurns>{
