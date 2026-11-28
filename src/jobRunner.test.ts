@@ -226,7 +226,7 @@ it('commits trace of each ASR window and exposes a redacted downloadable diagnos
  expect(persisted.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
  const stages=persisted.trace?.filter(e=>e.code==='pipeline-stage'&&e.pipelineState!=='running');
  expect(stages?.map(e=>[e.pipelineStage,e.pipelineState])).toEqual([
-  ['preflight','completed'],['decode','completed'],['pcm-gate','completed'],['vad','skipped'],['segmentation','completed'],['asr','completed'],
+  ['preflight','completed'],['decode','completed'],['pcm-gate','completed'],['vad','skipped'],['segmentation','completed'],['asr','completed'],['alignment','skipped'],
   ['diarization','skipped'],['speaker-assignment','skipped'],['finalize','completed'],['export','requested']
  ]);
  expect(persisted.trace?.findIndex(e=>e.code==='job-complete')).toBeLessThan(persisted.trace!.findIndex(e=>e.pipelineStage==='export'));
