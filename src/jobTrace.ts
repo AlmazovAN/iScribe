@@ -28,6 +28,7 @@ export type TraceEvent={
  code:TraceCode;
  artifactStage?:'pcm'|'window-pcm'|'asr'|'diarization';
  artifactState?:'saved'|'reused'|'cleanup-failed';
+ artifactIntegrityFailure?:boolean;
  pipelineStage?:PipelineStage;
  pipelineState?:PipelineState;
  pipelineReason?:PipelineReason;
@@ -93,6 +94,7 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
   const value=error as {code?:unknown;name?:unknown};
   if(value.name==='WorkerStalledError'||value.name==='StreamDecodeStalledError')return 'timeout';
   if(value.code==='audio-validation-failed')return 'invalid-audio';
+  if(value.code==='checkpoint-integrity')return 'storage';
   if(value.code==='worker-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
