@@ -1,6 +1,7 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
+import type {PipelineStage,PipelineState,PipelineReason} from './pipelineOrchestrator';
 import {AudioValidationError,type PcmQualityEvidence} from './audioValidation';
 import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute,type FfmpegFailure,type FfmpegStage,type FfmpegDetailCode} from './decoderDiagnostics';
 
@@ -8,6 +9,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
+ 'pipeline-stage'|
  'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
@@ -24,6 +26,9 @@ export type TraceEvent={
  at:number;
  phase:TracePhase;
  code:TraceCode;
+ pipelineStage?:PipelineStage;
+ pipelineState?:PipelineState;
+ pipelineReason?:PipelineReason;
  elapsedMs?:number;
  backend?:TraceBackend;
  window?:number;
