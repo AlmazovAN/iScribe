@@ -153,3 +153,6 @@ Resource lifecycle policy adds early release of unused/incompatible models, 120s
 
 ## PIPE-07 candidate
 Opt-in full-PCM Silero v5.1.2 advisory VAD, pinned upstream revision/blob, stateful frame processing and local RAW map checkpoint. Baseline fixed windows unchanged; long stream VAD deferred. Exact vad.ts tsc + 6/6 synthetic inference Node checks PASS; real model/ORT/build/CI NOT TESTED. See [PIPE-07](PIPE-07_VOICE_ACTIVITY_DETECTION.md).
+
+## PIPE-08 candidate
+Opt-in pause-aware full-PCM segmentation, 30s max with unchanged 5s overlap and full source coverage. Immutable plan pinned before ASR; legacy jobs and streaming remain fixed. Actual plan used in UI and diagnostics. Exact planner/VAD tsc + 6/6 Node smoke including 1000 generated maps PASS; real VAD/full CI/quality NOT TESTED. See [PIPE-08](PIPE-08_SPEECH_SEGMENTATION.md).
