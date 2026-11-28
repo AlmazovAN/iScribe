@@ -7,6 +7,7 @@ import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,typ
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
 import {WorkerRetirement} from '../performance/resourceLifecycle';
 import {VAD_BLOCK,VAD_MAX_SAMPLES} from './vad';
+import {ALIGNMENT_CONTRACT,ALIGNMENT_MAX_SEGMENTS,ALIGNMENT_MAX_TOKENS,segmentCrop,type AlignmentLanguage,type AlignmentSegment,type AlignmentReport,type AlignmentRow,type WordSpan} from './forcedAlignment';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
 function createEngineWorker(retirement:WorkerRetirement):Worker{
@@ -290,6 +291,71 @@ export class ModelManager{
    }),{signal,timeoutMs:this.initIdleMs,pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),onTimeout:()=>{accepting=false;this.retirement.terminate(owned)}});
    signal.throwIfAborted();if(generation!==this.generation)throw new Error('Отменено.');
    this.phase('idle',null,null);return result;
+  }finally{
+   accepting=false;
+   try{this.retirement.terminate(worker)}finally{
+    if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}
+    if(generation===this.generation){this.busy=false;this.phase(this.resourceBlocked?'error':'idle',null,null)}
+   }
+  }
+ }
+ // Experimental word-timing pass. One auxiliary Worker, one PCM slice,
+ // and one outstanding request; never run concurrently with Whisper.
+ async alignSpeech(audio:Float32Array,segments:readonly AlignmentSegment[],language:AlignmentLanguage,signal:AbortSignal):Promise<AlignmentReport>{
+  this.retirement.assertUsable();signal.throwIfAborted();
+  if(this.busy||!(audio instanceof Float32Array)||!audio.length||audio.length>3600*16000||segments.length>ALIGNMENT_MAX_SEGMENTS)throw new Error('Alignment unavailable');
+  const rows:AlignmentRow[]=[];
+  const report=():AlignmentReport=>({revision:1,contract:ALIGNMENT_CONTRACT,language,samples:audio.length,segmentCount:segments.length,rows});
+  const crops=segments.map(s=>s.text.length<=4096?segmentCrop(s,audio.length):null);
+  if(!crops.some(Boolean))return report();
+  this.disposeAsr();this.busy=true;const generation=++this.generation;
+  this.phase('initializing',null,null);
+  let worker:Worker|null=null,accepting=true;
+  const requestId='align-'+generation;
+  try{
+   worker=createEngineWorker(this.retirement);this.speakerWorker=worker;
+   const owned=worker;
+   const result=await withActivityWatchdog((heartbeat,beginStage)=>new Promise<AlignmentReport>((resolve,reject)=>{
+    this.rejectPreload=reject;
+    let index=0,awaiting:'ready'|'segment'|'finish'='ready',current=-1,processedSamples=0,wordCount=0;
+    const finish=()=>{awaiting='finish';owned.postMessage({type:'iscribe:align-finish',requestId})};
+    const send=()=>{
+     signal.throwIfAborted();
+     while(index<crops.length){
+      const i=index++,crop=crops[i];
+      if(!crop)continue;
+      if(processedSamples+crop.end-crop.start>audio.length*2||wordCount>=50000){finish();return}
+      const block=audio.slice(crop.start,crop.end);processedSamples+=block.length;
+      awaiting='segment';current=i;
+      owned.postMessage({type:'iscribe:align-segment',requestId,index:i,startSample:crop.start,text:segments[i].text,audio:block},[block.buffer]);return;
+     }
+     finish();
+    };
+    owned.addEventListener('error',()=>{accepting=false;reject(new Error('Alignment Worker unavailable'))});
+    owned.addEventListener('messageerror',()=>{accepting=false;reject(new Error('Alignment Worker protocol'))});
+    owned.addEventListener('message',(event:MessageEvent<unknown>)=>{
+     const d=event.data;
+     if(!accepting||generation!==this.generation||signal.aborted||!d||typeof d!=='object'||!('requestId' in d)||d.requestId!==requestId||!('type' in d))return;
+     try{
+      if(d.type==='iscribe:align-progress'&&awaiting==='ready'){heartbeat();return}
+      if(d.type==='iscribe:align-error')throw new Error('Alignment inference unavailable');
+      if(d.type==='iscribe:align-ready'&&awaiting==='ready'){beginStage(5*60*1000);send();return}
+      if(d.type==='iscribe:align-result'&&awaiting==='segment'&&'index' in d&&d.index===current&&'words' in d){
+       if(d.words!==null){
+        if(!Array.isArray(d.words)||!d.words.length||d.words.length>ALIGNMENT_MAX_TOKENS||wordCount+d.words.length>50512)throw new Error('Invalid alignment result');
+        rows.push({index:current,words:d.words as WordSpan[]});wordCount+=d.words.length;
+       }
+       heartbeat();this.onProgress('Уточнение таймкодов: '+(current+1)+' / '+segments.length,(current+1)/segments.length*100);
+       send();return;
+      }
+      if(d.type==='iscribe:align-finished'&&awaiting==='finish'){accepting=false;heartbeat();resolve(report());return}
+      throw new Error('Alignment Worker protocol');
+     }catch(error){accepting=false;reject(error)}
+    });
+    owned.postMessage({type:'iscribe:align-start',requestId,language});
+   }),{signal,timeoutMs:this.initIdleMs,pollMs:Math.min(1000,Math.max(5,this.initIdleMs/4)),onTimeout:()=>{accepting=false;this.retirement.terminate(owned)}});
+   signal.throwIfAborted();if(generation!==this.generation)throw new Error('Отменено.');
+   return result;
   }finally{
    accepting=false;
    try{this.retirement.terminate(worker)}finally{

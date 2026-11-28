@@ -1,9 +1,9 @@
 // A run-local stage controller. JobRunner remains the sole owner of queue,
 // cancellation, models, retry budgets and durable JobStore checkpoints.
-export const PIPELINE_STAGES=['preflight','decode','pcm-gate','vad','segmentation','asr','diarization','speaker-assignment','finalize','export'] as const;
+export const PIPELINE_STAGES=['preflight','decode','pcm-gate','vad','segmentation','asr','alignment','diarization','speaker-assignment','finalize','export'] as const;
 export type PipelineStage=typeof PIPELINE_STAGES[number];
 export type PipelineState='running'|'completed'|'deferred'|'skipped'|'reused'|'failed'|'cancelled'|'requested'|'manual';
-export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable'|'vad-disabled'|'vad-streaming-unavailable'|'vad-unavailable'|'segmentation-plan-pinned';
+export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable'|'vad-disabled'|'vad-streaming-unavailable'|'vad-unavailable'|'segmentation-plan-pinned'|'alignment-disabled'|'alignment-streaming-unavailable'|'alignment-checkpoint-unavailable'|'alignment-unavailable';
 export type PipelineObservation={stage:PipelineStage;state:PipelineState;reason?:PipelineReason;elapsedMs?:number};
 export type PcmGateResult={mode:'full'|'windowed';samples:number};
 export type ExportOutcome='requested'|'manual';
@@ -14,12 +14,14 @@ export type PipelineOutputs<Audio,Plan,Turns>={
  vad:'observed'|'fallback'|'reused';
  segmentation:Plan;
  asr:void;
+ alignment:'observed'|'fallback'|'reused';
  diarization:Turns;
  'speaker-assignment':void;
  finalize:void;
  export:ExportOutcome;
 };
 type Skip=
+ |{stage:'alignment';reason:'alignment-disabled'|'alignment-streaming-unavailable'|'alignment-checkpoint-unavailable'}
  |{stage:'vad';reason:'vad-disabled'|'vad-streaming-unavailable'|'asr-already-committed'|'segmentation-plan-pinned'}
  |{stage:'segmentation'|'asr';reason:'asr-already-committed'}
  |{stage:'diarization'|'speaker-assignment';reason:'speakers-disabled'|'streaming-speakers-unavailable'};
@@ -52,6 +54,7 @@ export class PipelineOrchestrator<Audio,Plan,Turns>{
    let state:PipelineState='completed',reason:PipelineReason|undefined;
    if(stage==='pcm-gate'&&(value as PcmGateResult).mode==='windowed'){state='deferred';reason='per-window-validation'}
    if(stage==='vad'){if(value==='fallback'){state='skipped';reason='vad-unavailable'}else if(value==='reused')state='reused'}
+   if(stage==='alignment'){if(value==='fallback'){state='skipped';reason='alignment-unavailable'}else if(value==='reused')state='reused'}
    if(stage==='export')state=value==='requested'?'requested':'manual';
    this.cursor++;
    this.observe({stage,state,reason,elapsedMs:Math.max(0,this.now()-started)});

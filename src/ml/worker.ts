@@ -1,6 +1,8 @@
 import {compressedWasmFetch,validatedModelFetch,observedWhisperHttpFetch,offlineModelFetch} from './runtimeFetch';
 import {env} from '@huggingface/transformers';
 import {SileroPass} from './sileroVad';
+import {Wav2VecAlignment} from './wav2vecAlignment';
+import {ALIGNMENT_MAX_SAMPLES} from './forcedAlignment';
 import {clampWasmRequest,localWasmThreadEnvironment,resolveWasmThreads} from '../performance/wasmThreads';
 import {preloadDiarizationModels,runSpeakerPass} from '@yourdevice/engine/worker';
 import wasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
@@ -109,4 +111,33 @@ addEventListener('message',(event:MessageEvent<unknown>)=>{
   // Do not export arbitrary runtime errors or source content.
   postMessage({type:'iscribe:vad-error',requestId});
  }).finally(()=>{vadBusy=false});
+});
+
+// Dedicated instance of the same bundled Worker; one model and one slice at a time.
+let alignPass:Wav2VecAlignment|undefined,alignBusy=false,alignId:string|undefined;
+addEventListener('message',(event:MessageEvent<unknown>)=>{
+ const d=event.data;
+ if(!d||typeof d!=='object'||!('type' in d)||!('requestId' in d)||typeof d.requestId!=='string')return;
+ if(d.type!=='iscribe:align-start'&&d.type!=='iscribe:align-segment'&&d.type!=='iscribe:align-finish')return;
+ const requestId=d.requestId;
+ if(alignBusy){postMessage({type:'iscribe:align-error',requestId});return}
+ alignBusy=true;
+ void (async()=>{
+  if(d.type==='iscribe:align-start'){
+   if(alignId!==undefined||!('language' in d)||(d.language!=='ru'&&d.language!=='en')||!wasm)throw new Error('Invalid alignment start');
+   alignId=requestId;wasm.numThreads=1;wasm.proxy=false;
+   alignPass=await Wav2VecAlignment.create(d.language,()=>postMessage({type:'iscribe:align-progress',requestId}));
+   postMessage({type:'iscribe:align-ready',requestId});return;
+  }
+  if(!alignPass||alignId!==requestId)throw new Error('Invalid alignment session');
+  if(d.type==='iscribe:align-finish'){
+   await alignPass.release();alignPass=undefined;
+   postMessage({type:'iscribe:align-finished',requestId});return;
+  }
+  if(!('audio' in d)||!(d.audio instanceof Float32Array)||d.audio.length>ALIGNMENT_MAX_SAMPLES||
+   !('text' in d)||typeof d.text!=='string'||d.text.length>4096||!('startSample' in d)||typeof d.startSample!=='number'||
+   !('index' in d)||typeof d.index!=='number'||!Number.isSafeInteger(d.index)||d.index<0)throw new Error('Invalid alignment slice');
+  const words=await alignPass.align(d.audio,d.text,d.startSample);
+  postMessage({type:'iscribe:align-result',requestId,index:d.index,words});
+ })().catch(()=>postMessage({type:'iscribe:align-error',requestId})).finally(()=>{alignBusy=false});
 });

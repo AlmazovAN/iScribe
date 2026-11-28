@@ -47,3 +47,12 @@ it('retains a complete 154-window diagnostic sequence within the bounded journal
  expect(trace[0]).toMatchObject({window:1,code:'stream-read-start'});
  expect(trace.at(-1)).toMatchObject({window:154,code:'checkpoint-committed'});
 });
+
+it('PIPE-10 exports only alignment counts, not identities or words, in diagnostic JSON',()=>{
+ const j=createJob(new File(['hidden audio'],'private.wav'),{model:'whisper-small',language:'ru',diarize:false});
+ const alignmentCheckpoint={revision:1 as const,contract:'ctc-v1-q8-stride320-min035-word-offsets' as const,language:'ru' as const,samples:16000,segmentCount:1,decoderProfile:'PRIVATE PROFILE',pcmFingerprint:'a'.repeat(64),transcriptFingerprint:'b'.repeat(64),alignedSegments:1,alignedWords:1};
+ const report=diagnosticReport({...j,alignmentCheckpoint,segments:[{start:0,end:1,text:'PRIVATE WORD'}]});
+ expect(report.wordAlignment).toEqual({alignedSegments:1,unalignedSegments:0,alignedWords:1});
+ expect(JSON.stringify(report)).not.toContain('PRIVATE');
+ expect(JSON.stringify(report)).not.toContain(alignmentCheckpoint.pcmFingerprint);
+});
