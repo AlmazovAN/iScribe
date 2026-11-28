@@ -144,3 +144,6 @@ JobRunner now executes nine existing operations via a typed run-local controller
 
 ## PIPE-04 candidate
 CheckpointManager stores full PCM, temporary stream window PCM, RAW ASR and RAW speaker intervals independently in additive IndexedDB v3; existing durable text transaction retained. Exact manager tsc + Node Web Crypto 8/8 PASS; full CI, real migration and hardware NOT TESTED. Old v2 binaries cannot reopen upgraded DB. See [PIPE-04](PIPE-04_CHECKPOINT_MANAGER.md).
+
+## PIPE-05 candidate
+RecoveryLedger revision 1 counts durable reservations for full/stream decode, initial stream open, ASR and diarization. Two attempts per unfinished operation, global 10 recoveries, existing tighter decoder caps retained; compatible RAW can be reused at exhaustion. Standalone exact manager tsc and 8/8 Node PASS; full CI and actual hardware NOT TESTED. See [PIPE-05](PIPE-05_RECOVERY_MANAGER.md).
