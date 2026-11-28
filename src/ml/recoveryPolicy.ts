@@ -10,7 +10,7 @@ const TRANSIENT=/\b(worker(?:\s+\w+){0,3}\s+(?:failed|crashed|terminated|exited)
 export function isRetryableAsrError(error:unknown):boolean {
  if(!error||typeof error!=='object')return false;
  const {code,message,name}=(error as CodedError&{name?:unknown});
- if(name==='AbortError'||name==='QuotaExceededError'||name==='NetworkError'||code==='aborted'||code==='storage-failed'||code==='checkpoint-integrity'||code==='audio-validation-failed'||code==='recovery-exhausted')return false;
+ if(name==='AbortError'||name==='QuotaExceededError'||name==='NetworkError'||code==='aborted'||code==='storage-failed'||code==='checkpoint-integrity'||code==='audio-validation-failed'||code==='recovery-exhausted'||code==='worker-disposal-failed')return false;
  const text=typeof message==='string'?message:'';
  if(NON_RETRYABLE.test(text))return false;
  if(code==='worker-failed'||code==='transcribe-failed'||code==='gpu-device-lost'||code==='webgpu-device-lost')return true;
