@@ -88,12 +88,12 @@ export function createHardwareEvidence(
  const sourceDuration=validNumber(job.duration);
  const invalid=job.segments.filter(s=>!Number.isFinite(s.start)||!Number.isFinite(s.end)||
   s.start<0||s.end<s.start||typeof s.text!=='string').length;
- const matchesCheckpoint=!!stored&&stored.nextWindow===job.nextWindow&&stored.asrComplete===job.asrComplete;
+ const matchesCheckpoint=!!stored&&stored.nextWindow===job.nextWindow&&stored.asrComplete===job.asrComplete&&JSON.stringify(stored.windowPlan)===JSON.stringify(job.windowPlan);
  const matchesTranscript=!!stored&&transcriptMatches(job,stored);
  const hasAudio=!!source;
  const sizeMatch=!!source&&source.size===job.size;
  const isReference=job.params.model==='whisper-small'&&job.params.language==='ru'&&
-  sourceDuration!==null&&Math.abs(sourceDuration-871)<=2&&expected===35;
+  job.windowPlan===undefined&&sourceDuration!==null&&Math.abs(sourceDuration-871)<=2&&expected===35;
  const durable=matchesCheckpoint&&matchesTranscript&&hasAudio&&sizeMatch;
  const completed=durable&&job.asrComplete&&job.nextWindow===expected&&
   job.segments.some(s=>s.text.trim())&&invalid===0;
