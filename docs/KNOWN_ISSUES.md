@@ -114,3 +114,5 @@ PIPE-06: successful terminate request is not proof of RAM/VRAM returned to OS. B
 PIPE-07: VAD is opt-in and advisory, no audio suppression; actual Silero weights, CORS/cache, ORT standalone/web initialization and RU/EN speech recall NOT TESTED. Model fetch and npm blocked by DNS in development. Thresholds provisional, no streaming VAD or per-frame durable recurrent state. Do not use empty speech map to drop audio.
 
 PIPE-08: adaptive mode opt-in, no speech exclusion, variable window count and added PCM hashing/plan transaction. No real Silero, WER, boundary quality or hardware acceptance yet. Identical midpoint ownership does not prove equivalent ASR predictions. Streamed input stays fixed. Pinned plan requires compatible source/PCM; no automatic geometry reset.
+
+PIPE-09: quality thresholds provisional, advisory not proof of hallucinations, whole-window near-zero signal only; repetition heuristics may flag correct speech. Engine generation options/batching not verified, real WER and overhead pending. No automatic deletion or inference retry on quality warning. Older committed windows not retrospectively checked.
