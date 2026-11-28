@@ -1,5 +1,5 @@
 import type {Job} from './jobs';
-import {validLedger,type RecoveryOperation} from './recoveryManager';
+import {recoveryReport,type RecoveryOperation} from './recoveryManager';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
 import type {PipelineStage,PipelineState,PipelineReason} from './pipelineOrchestrator';
@@ -98,7 +98,7 @@ export function traceErrorKind(error:unknown):TraceErrorKind{
   if(value.name==='WorkerStalledError'||value.name==='StreamDecodeStalledError')return 'timeout';
   if(value.code==='audio-validation-failed')return 'invalid-audio';
   if(value.code==='checkpoint-integrity')return 'storage';
-  if(value.code==='worker-failed')return 'worker';
+  if(value.code==='worker-failed'||value.code==='worker-disposal-failed')return 'worker';
   if(value.code==='transcribe-failed')return 'inference';
   if(value.name==='AbortError')return 'cancelled';
   if(value.name==='QuotaExceededError'||value.code==='storage-failed')return 'storage';
@@ -144,7 +144,7 @@ export function diagnosticReport(job:Job){
   },
   decoder:decoderReport(job.decoderIdentity),
   fullDecodeRecoveries:job.fullDecodeRecoveries??0,
-  recoveryLedger:validLedger(job.recoveryLedger)?job.recoveryLedger:null,
+  recoveryLedger:recoveryReport(job.recoveryLedger),
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
   audioCheck:job.audioCheck?.status==='passed'?job.audioCheck:job.audioCheck?.status==='failed'?{status:'failed',checkedAt:job.audioCheck.checkedAt}:null,
