@@ -89,3 +89,15 @@ it('PIPE-09 preserves quality summary atomically and refuses stale counters',asy
  expect((await store.get(j.id,false))?.nextWindow).toBe(1);
  await store.remove(j.id);
 });
+
+it('PIPE-10 preserves alignment checkpoint and rejects rollback',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'aligned.wav'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save({...job,duration:1,sourceFingerprint:'source',artifactContract:'pipe04-v1',nextWindow:1,asrComplete:true,segments:[{start:0,end:1,text:'слово'}]},file);
+ const saved=(await store.get(job.id,false))!;
+ const alignmentCheckpoint={revision:1 as const,contract:'ctc-v1-q8-stride320-min035-word-offsets' as const,language:'ru' as const,samples:16000,segmentCount:1,decoderProfile:'test',pcmFingerprint:'a'.repeat(64),transcriptFingerprint:'b'.repeat(64),alignedSegments:1,alignedWords:1};
+ await store.save({...saved,alignmentCheckpoint});
+ expect((await new JobStore().get(job.id,false))?.alignmentCheckpoint).toEqual(alignmentCheckpoint);
+ await expect(store.save(saved)).rejects.toThrow('Нельзя изменить');
+ await expect(store.save({...saved,alignmentCheckpoint:{...alignmentCheckpoint,alignedWords:2}})).rejects.toThrow('Нельзя изменить');
+ await store.remove(job.id);
+});
