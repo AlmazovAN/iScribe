@@ -18,6 +18,7 @@ async function prepare(p:Pipeline,mode:'full'|'windowed'='full'){
 async function asr(p:Pipeline){
  const plan=await p.run('segmentation',()=>({windows:1}));
  await p.run('asr',()=>{expect(plan.windows).toBe(1)});
+ await p.run('alignment',()=> 'observed');
 }
 describe('PIPE-03 stage control',()=>{
  it('runs all real stages in dependency order and records a download request, not a saved file',async()=>{
@@ -81,6 +82,7 @@ describe('PIPE-03 stage control',()=>{
   p.skip({stage:'segmentation',reason:'asr-already-committed'});
   await expect(p.run('asr',()=>{})).rejects.toThrow('Входной этап');
   p.skip({stage:'asr',reason:'asr-already-committed'});
+  p.skip({stage:'alignment',reason:'alignment-disabled'});
   p.skip({stage:'diarization',reason:'speakers-disabled'});
   expect(()=>p.skip({stage:'speaker-assignment',reason:'streaming-speakers-unavailable'})).toThrow('Причина пропуска');
   await expect(p.run('speaker-assignment',()=>{})).rejects.toThrow('Входной этап');
