@@ -8,7 +8,7 @@ import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from 
 import {JobStore} from './jobStore';
 import {createJob,audioWindows,absoluteSegments,recoverJob,type Job,type JobParams} from './jobs';
 import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
-import {appendTrace,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
+import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow} from './recognitionProgress';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
@@ -137,14 +137,14 @@ export class JobRunner{
    const report=await inspectDecodedPcm(pcm,{signal,onProgress});
    this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
    this.patch(id,{audioCheck:{status:'passed',checkedAt:Date.now(),report}});
-   this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount});
+   this.traceEvent(id,'audio-check-pass','audio',{pcmSamples:report.pcmSamples,totalWindows:report.windowCount,pcmQuality:report.quality});
    await this.persist(id);
    return report;
   }catch(error){
    if(!this.cancelled){
     const problem=error instanceof AudioValidationError?error.message:'Проверка PCM не завершена. Повторите проверку или проверьте декодирование.';
     this.patch(id,{audioCheck:{status:'failed',checkedAt:Date.now(),problem}});
-    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+    this.traceEvent(id,'audio-check-error','audio',{errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     try{await this.persist(id)}catch{/* Preserve the original failure and existing checkpoint. */}
    }
    throw error;
@@ -341,13 +341,13 @@ export class JobRunner{
   const provider=providerForDecoder(identity.kind);
   if(identity.route==='windowed'){
    try{return await this.openGuardedStream(file,signal)}catch(error){
-    this.traceEvent(id,'decoder-open-error','audio',{streamStage:'open',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});throw error;
+    this.traceEvent(id,'decoder-open-error','audio',{streamStage:'open',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});throw error;
    }
   }
   const decode=this.decode??provider.decode;
   for(;;){
    try{return await decode(file,signal)}catch(error){
-    this.traceEvent(id,'decoder-full-error','audio',{streamStage:'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+    this.traceEvent(id,'decoder-full-error','audio',{streamStage:'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     this.check();signal.throwIfAborted();
     if(!canRetryFfmpeg(error,'full')||(this.job(id).fullDecodeRecoveries??0)>=1)throw error;
     this.patch(id,{fullDecodeRecoveries:1,status:'Повторное декодирование FFmpeg · попытка 2/2'});
@@ -418,7 +418,7 @@ export class JobRunner{
   const fields={decoderId:session.audio.decoderId,decoderWindows:session.windows,rotationCount:session.rotations,closeReason:reason,committedWindows:this.job(id).nextWindow,jsHeapBytes:traceHeapBytes()};
   try{session.audio.close()}
   catch(error){
-   this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+   this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
    // Do not open another decoder after a disposal failure. On terminal
    // cleanup retain the original job error or successfully committed text.
    if(reason==='rotation'||reason==='recovery')throw error;
@@ -495,7 +495,7 @@ export class JobRunner{
    // An already-started metadata transaction must settle before another
    // attempt can write a newer snapshot. Storage failure is not retryable.
    if(pendingTrace)await pendingTrace;
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage:error instanceof AudioValidationError?'pcm-check':streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),jsHeapBytes:traceHeapBytes()});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:error instanceof AudioValidationError?'pcm-check':streamStage,elapsedMs:benchmarkNow()-decodeStarted,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),jsHeapBytes:traceHeapBytes()});
    throw error;
   }finally{accepting=false}
   if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
@@ -509,16 +509,16 @@ export class JobRunner{
   const validationStarted=benchmarkNow();
   let report:AudioInspectionReport;
   try{
-   report=await withActivityWatchdog(heartbeat=>inspectDecodedPcm(pcm,{signal,onProgress:heartbeat}),{
+   report=await withActivityWatchdog(heartbeat=>inspectDecodedPcm(pcm,{signal,onProgress:heartbeat,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start}),{
     timeoutMs:this.streamPcmIdleMs,pollMs:Math.min(1000,Math.max(5,this.streamPcmIdleMs/4)),
     signal,onTimeout:()=>audio.close(),timeoutError:()=>new StreamDecodeStalledError('pcm-check')
    });
   }catch(error){
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
    throw error;
   }
   if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-validationStarted));
-  this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,pcmSamples:pcm.length});
+  this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',elapsedMs:benchmarkNow()-validationStarted,pcmSamples:pcm.length,pcmQuality:report.quality});
   return {pcm,report};
  }
  // Split is an alternative read strategy, not six ASR attempts. The original
@@ -545,16 +545,16 @@ export class JobRunner{
   const started=benchmarkNow();
   let report:AudioInspectionReport;
   try{
-   report=await withActivityWatchdog(heartbeat=>inspectDecodedPcm(pcm,{signal,onProgress:heartbeat}),{
+   report=await withActivityWatchdog(heartbeat=>inspectDecodedPcm(pcm,{signal,onProgress:heartbeat,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start}),{
     timeoutMs:this.streamPcmIdleMs,pollMs:Math.min(1000,Math.max(5,this.streamPcmIdleMs/4)),signal,
     onTimeout:()=>audio.close(),timeoutError:()=>new StreamDecodeStalledError('pcm-check')
    });
   }catch(error){
-   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+   this.traceEvent(id,'window-error','audio',{...fields,streamStage:'pcm-check',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
    throw error;
   }
   this.check();if(!inspection)this.bench(id,b=>addBenchmarkTiming(b,'pcmCheckMs',benchmarkNow()-started));
-  this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length,elapsedMs:benchmarkNow()-started});
+  this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length,elapsedMs:benchmarkNow()-started,pcmQuality:report.quality});
   this.traceEvent(id,'stream-split-ready','audio',{...fields,pcmSamples:pcm.length});
   await this.persist(id);this.check();
   return {pcm,report};
@@ -567,7 +567,7 @@ export class JobRunner{
    this.check();
    try{
     if(priorFailure){const error=priorFailure.error;priorFailure=undefined;
-     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:error instanceof AudioValidationError?'pcm-check':'decode',errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+     this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:error instanceof AudioValidationError?'pcm-check':'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
      throw error;
     }
     const result=attempt===3?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
@@ -578,7 +578,7 @@ export class JobRunner{
     const budget=attempt===3?null:reserveStreamRecovery(error,index+1,this.job(id).streamRecovery);
     if(!budget){
      if(error instanceof StreamDecodeStalledError||canRetryFfmpeg(error,'windowed')||attempt===3){
-      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...ffmpegFailureFields(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
+      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
      }
      throw error;
     }
@@ -586,7 +586,7 @@ export class JobRunner{
     // Reserve durably before opening another decoder, even after a reload.
     this.patch(id,{streamRecovery:budget,status:'Восстановление декодера · окно '+(index+1)+'/'+total+' · попытка '+nextAttempt+'/3'});
     this.set({operation:nextAttempt===3?'Резервное декодирование частями':'Восстановление потокового декодера'});
-    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:nextAttempt,decoderId:session.audio.decoderId,strategy:nextAttempt===3?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});
+    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:nextAttempt,decoderId:session.audio.decoderId,strategy:nextAttempt===3?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     await this.persist(id);this.check();
     try{
      await this.replaceStream(id,session,file,'recovery');
@@ -605,9 +605,11 @@ export class JobRunner{
   this.check();
    if(this.job(id).decoderIdentity?.kind==='ffmpeg'&&this.job(id).nextWindow>0&&this.job(id).duration!==undefined&&Math.round(this.job(id).duration!*16000)!==audio.length)
     throw new Error('Длительность PCM не совпадает с сохранённой контрольной точкой. Добавьте аудио как новое задание.');
-   this.patch(id,{duration:audio.length/16000});
+   const priorDuration=this.job(id).duration;
+  const durationDeltaSamples=typeof priorDuration==='number'&&Number.isFinite(priorDuration)&&priorDuration>0&&Number.isSafeInteger(Math.round(priorDuration*16000))?audio.length-Math.round(priorDuration*16000):undefined;
+  this.patch(id,{duration:audio.length/16000});
   this.bench(id,b=>addBenchmarkTiming(b,'decodeMs',benchmarkNow()-decodeStarted));
-  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length,decoderId:streamed?audio.decoderId:undefined});
+  this.traceEvent(id,'audio-ready','audio',{elapsedMs:Date.now()-audioStarted,pcmSamples:audio.length,decoderId:streamed?audio.decoderId:undefined,durationDeltaSamples});
   if(!streamed)await this.inspectPcm(id,audio,this.abort!.signal);this.check();
   this.set({operation:'Подготовка модели'});
   const params={...this.job(id).params};
@@ -693,7 +695,7 @@ export class JobRunner{
         }
        }
        this.traceEvent(id,'stream-pcm-check-start','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length});
-       this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length,elapsedMs:prepared.validationMs});
+       this.traceEvent(id,'stream-pcm-check-end','audio',{...fields,streamStage:'pcm-check',pcmSamples:pcm.length,elapsedMs:prepared.validationMs,pcmQuality:prepared.report.quality});
        this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...addBenchmarkTiming(addBenchmarkTiming(b,'decodeMs',prepared.decodeMs),'pcmCheckMs',prepared.validationMs),audioPipeline:{...prev,preparedMs:prev.preparedMs+prepared.decodeMs+prepared.validationMs}}});
       }else{
        // Retire all lookahead on decoder failure. Reserve recovery only now,
@@ -815,7 +817,7 @@ export class JobRunner{
    this.manager.resourcePolicy=this.resources.policy();
    const speakerStarted=Date.now();let turns:Awaited<ReturnType<ModelManager['diarize']>>;
    const speakerMeasured=benchmarkNow();
-   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error),...ffmpegFailureFields(error)});throw error}
+   try{turns=await this.manager.diarize(audio)}catch(error){this.traceEvent(id,'speaker-error','speaker',{elapsedMs:Date.now()-speakerStarted,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});throw error}
    finally{
     this.perf(id,'speakerPass',benchmarkNow()-speakerMeasured);
     const pass=this.manager.lastSpeakerPass;
