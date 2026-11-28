@@ -212,3 +212,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - PCM-01 unique sample metrics across overlap; quiet/out-of-range finite audio unchanged; final callback cancellation — isolated logic partial PASS, Vitest NOT TESTED.
 - PCM-02 absolute index and exact coverage; full and stream failure retain checkpoints; prefetch evidence published at consumption — isolated logic partial PASS, integration NOT TESTED.
 - PCM-03 real recording decode quality, memory/time regression and local full gates — NOT TESTED.
+
+## PIPE-03 candidate gates
+- ORCH-01 ordered execution, dependency skips, failure/cancel, concurrent/duplicate rejection, export request/manual fallback — standalone controller tsc and 7/7 Node PASS, Vitest NOT TESTED.
+- ORCH-02 JobRunner integration: resume and preserve committed ASR, fail before dependent stages, deferred streaming gate, export and FIFO invariants — tests authored, NOT TESTED.
+- ORCH-03 exact stacked release local CI, real device regression and base reconciliation with decoder fix — NOT TESTED.
