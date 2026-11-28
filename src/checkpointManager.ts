@@ -126,7 +126,12 @@ export class CheckpointManager{
   }
   this.check();return textHash(JSON.stringify([pcm.length,CHUNK_BYTES,hashes]));
  }
- async loadRaw(stage:'asr'|'diarization'|'vad',inputs:readonly unknown[]):Promise<unknown|undefined>{
+ async transcriptInput(segments:readonly {start:number;end:number;text:string}[]):Promise<string>{
+  this.check();
+  requireIntegrity(segments.length<=10000&&segments.reduce((n,s)=>n+s.text.length,0)<=4*1024*1024);
+  return textHash(JSON.stringify(segments.map(s=>[s.start,s.end,s.text])));
+ }
+ async loadRaw(stage:'asr'|'diarization'|'vad'|'alignment',inputs:readonly unknown[]):Promise<unknown|undefined>{
   const key=await this.key(stage+'-raw-v1',inputs),value=await this.store.getArtifact(this.id,key);
   this.check();
   if(value===undefined)return undefined;
@@ -134,7 +139,7 @@ export class CheckpointManager{
   requireIntegrity(raw?.revision===1&&typeof raw.json==='string'&&typeof raw.hash==='string'&&HEX.test(raw.hash)&&await textHash(raw.json)===raw.hash);
   this.check();return parseRaw(raw.json);
  }
- async saveRaw(stage:'asr'|'diarization'|'vad',inputs:readonly unknown[],value:unknown):Promise<void>{
+ async saveRaw(stage:'asr'|'diarization'|'vad'|'alignment',inputs:readonly unknown[],value:unknown):Promise<void>{
   const key=await this.key(stage+'-raw-v1',inputs),json=rawJson(value);
   const hash=await textHash(json);
   // A raw result returned by inference is saved before downstream validation.
