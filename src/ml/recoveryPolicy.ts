@@ -1,5 +1,5 @@
 import {StreamDecodeStalledError} from './activityWatchdog';
-import {canRetryFfmpeg} from '../decoderDiagnostics';
+import {canRetryFfmpeg,FfmpegDecoderError} from '../decoderDiagnostics';
 // Retry only inference/worker failures, never user cancellation, local storage
 // errors or model/decode/download failures. One initial attempt plus one retry.
 import {MAX_OPERATION_ATTEMPTS} from '../recoveryManager';
@@ -33,8 +33,13 @@ export const STREAM_SUBWINDOW_SAMPLES=5*16000;
 export const DEFAULT_STREAM_ROTATE_WINDOWS=20;
 export const MAX_STREAM_JOB_RECOVERIES=5;
 export type StreamRecoveryState={window:number;windowRecoveries:number;totalRecoveries:number};
+function retryableDecoderFailure(error:unknown,route:'full'|'windowed'):boolean{
+ if(error instanceof FfmpegDecoderError&&error.diagnostic?.details.some(d=>d==='memory'||d==='unsupported-codec'||d==='missing-audio'||d==='command-option'||d==='input-protocol'||d==='invalid-container'||d==='io'))return false;
+ return canRetryFfmpeg(error,route);
+}
+export function isRetryableFullDecodeError(error:unknown):boolean{return retryableDecoderFailure(error,'full')}
 export function isRetryableStreamError(error:unknown):boolean{
- return error instanceof StreamDecodeStalledError&&(error.stage==='decode'||error.stage==='resample')||canRetryFfmpeg(error,'windowed');
+ return error instanceof StreamDecodeStalledError&&(error.stage==='decode'||error.stage==='resample')||retryableDecoderFailure(error,'windowed');
 }
 export function reserveStreamRecovery(error:unknown,window:number,previous?:StreamRecoveryState):StreamRecoveryState|null{
  return isRetryableStreamError(error)?advanceStreamRecovery(window,previous):null;
