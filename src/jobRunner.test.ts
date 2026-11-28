@@ -226,7 +226,7 @@ it('commits trace of each ASR window and exposes a redacted downloadable diagnos
  expect(persisted.trace?.filter(e=>e.code==='checkpoint-committed')).toHaveLength(3);
  const stages=persisted.trace?.filter(e=>e.code==='pipeline-stage'&&e.pipelineState!=='running');
  expect(stages?.map(e=>[e.pipelineStage,e.pipelineState])).toEqual([
-  ['preflight','completed'],['decode','completed'],['pcm-gate','completed'],['segmentation','completed'],['asr','completed'],
+  ['preflight','completed'],['decode','completed'],['pcm-gate','completed'],['vad','skipped'],['segmentation','completed'],['asr','completed'],
   ['diarization','skipped'],['speaker-assignment','skipped'],['finalize','completed'],['export','requested']
  ]);
  expect(persisted.trace?.findIndex(e=>e.code==='job-complete')).toBeLessThan(persisted.trace!.findIndex(e=>e.pipelineStage==='export'));
@@ -900,4 +900,30 @@ it('PIPE-06 pauses subsequent queued jobs after a Worker disposal failure',async
  expect((await store.get(two.id,false))?.stage).toBe('queued');
  expect(runner.snapshot().notice).toContain('Не подтверждено завершение Worker');
  await store.remove(one.id);await store.remove(two.id);
+});
+
+it('PIPE-07 advisory VAD never suppresses ASR, even when the map reports no speech',async()=>{
+ const {fake,store,decode}=setup();
+ const detectSpeech=vi.fn(async(audio:Float32Array)=>({revision:1,samples:audio.length,frames:Math.ceil(audio.length/512),speechSamples:0,intervals:[]}));
+ const manager={...fake,detectSpeech};
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,decode,download:()=>{},vadEnabled:true});
+ await runner.init();await runner.add([new File(['fixture'],'vad-advisory.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(detectSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved).toMatchObject({stage:'done',nextWindow:3});
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'vad-result',vadSpeechSamples:0,vadFrames:1875}),expect.objectContaining({code:'pipeline-stage',pipelineStage:'vad',pipelineState:'completed'})]));
+ await store.remove(id);
+});
+it('PIPE-07 unavailable VAD falls back once, with original ASR windows intact',async()=>{
+ const {fake,store,decode}=setup(),detectSpeech=vi.fn(async()=>{throw new Error('injected model unavailable')});
+ const runner=new JobRunner({store,manager:{...fake,detectSpeech} as unknown as ModelManager,decode,download:()=>{},vadEnabled:true});
+ await runner.init();await runner.add([new File(['fixture'],'vad-fallback.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(detectSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'vad-fallback'}),expect.objectContaining({code:'pipeline-stage',pipelineStage:'vad',pipelineState:'skipped',pipelineReason:'vad-unavailable'})]));
+ await store.remove(id);
 });
