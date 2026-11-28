@@ -763,12 +763,14 @@ it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without d
  runner.enqueue(id);await finished(runner);
  expect((await store.get(id,false))!).toMatchObject({stage:'error',nextWindow:0,segments:[]});
  expect(fake.transcribe).toHaveBeenCalledTimes(2);expect(decode).toHaveBeenCalledTimes(1);
+ expect((await store.get(id,false))?.asrQuality).toBeUndefined();
  expect((await store.get(id,false))?.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:2,done:false});
  const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
  await resumed.init();resumed.enqueue(id);await finished(resumed);
  const result=(await store.get(id,false))!;
  expect(result).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
  expect(result.segments).toHaveLength(3);
+ expect(result.asrQuality).toMatchObject({examinedWindows:3,warningWindows:3,silentTextWindows:3});
  expect(fake.transcribe).toHaveBeenCalledTimes(4);expect(decode).toHaveBeenCalledTimes(1);
  expect(result.trace).toEqual(expect.arrayContaining([
   expect.objectContaining({code:'checkpoint-artifact',artifactStage:'pcm',artifactState:'reused'}),
@@ -788,6 +790,9 @@ it('PIPE-04 preserves invalid RAW timestamps and does not repeat inference on re
  runner.enqueue(id);await finished(runner);
  expect(await store.get(id,false)).toMatchObject({stage:'error',nextWindow:0,segments:[]});
  expect(fake.transcribe).toHaveBeenCalledTimes(1);expect(decode).toHaveBeenCalledTimes(1);
+ const saved=(await store.get(id,false))!;
+ expect(saved.asrQuality).toBeUndefined();
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'asr-quality',asrQuality:expect.objectContaining({invalidSegments:1}),errorKind:'inference'})]));
  await store.remove(id);
 });
 it('PIPE-04 resumes raw speaker intervals after cancellation before assignment',async()=>{
@@ -965,5 +970,19 @@ it('PIPE-08 fails before ASR when adaptive plan publication fails',async()=>{
  runner.enqueue(id);await finished(runner);
  const saved=(await store.get(id,false))!;
  expect(saved.stage).toBe('error');expect(saved.nextWindow).toBe(0);expect(saved.windowPlan).toBeUndefined();expect(fake.transcribe).not.toHaveBeenCalled();
+ await store.remove(id);
+});
+
+it('PIPE-09 reports repeated text without deleting it or triggering inference retries',async()=>{
+ const {runner,store,fake}=setup();
+ await runner.init();await runner.add([new File(['fixture'],'quality.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ const repeated='один два три один два три один два три';
+ fake.transcribe.mockResolvedValueOnce([{start:3,end:4,text:repeated}]);
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('done');expect(saved.segments[0].text).toBe(repeated);
+ expect(saved.asrQuality).toMatchObject({examinedWindows:3,warningWindows:3,repeatWindows:1,silentTextWindows:3});
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(fake.recover).not.toHaveBeenCalled();
  await store.remove(id);
 });
