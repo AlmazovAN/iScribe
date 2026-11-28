@@ -1193,6 +1193,7 @@ export class JobRunner{
   return turns;
  }
  private async runSpeakerAssignment(id:string,turns:SpeakerTurns,duration:number,words?:AlignmentReport){
+   this.check();
    const job=this.job(id),segments=job.segments;
    if(!Array.isArray(turns)||turns.length>100000)throw new CheckpointIntegrityError();
    const alignmentStarted=benchmarkNow();let alignmentQueries=0,alignmentCandidates=0;
