@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import {FfmpegDecoderError,canRetryFfmpeg,decoderIdentity,resolveJobDecoder,ffmpegFailure,ffmpegFailureFields,decoderReport} from './decoderDiagnostics';
+import {FfmpegDecoderError,canRetryFfmpeg,decoderIdentity,resolveJobDecoder,ffmpegFailure,ffmpegFailureFields,decoderReport,safeFfmpegDetails} from './decoderDiagnostics';
 import {reserveStreamRecovery} from './ml/recoveryPolicy';
 import {diagnosticReport,traceErrorKind} from './jobTrace';
 import {createJob} from './jobs';
@@ -48,5 +48,14 @@ describe('DEC-03: bounded decoder recovery and provenance',()=>{
   expect(report.fullDecodeRecoveries).toBe(1);
   expect(JSON.stringify(report)).not.toContain('PRIVATE RAW ERROR');
   expect(JSON.stringify(report)).not.toContain('secret.mp3');
+ });
+});
+
+it('allows only known decoder stderr categories and bounded numeric counters',()=>{
+ const diagnostic=safeFfmpegDetails(['damaged-frame','PRIVATE PATH','damaged-frame'],2);
+ expect(diagnostic).toEqual({details:['damaged-frame'],errorLines:2});
+ expect(safeFfmpegDetails(['io'],10001)).toBeUndefined();
+ expect(ffmpegFailureFields(new FfmpegDecoderError('decode','decode',1,diagnostic))).toMatchObject({
+  decoderDetails:['damaged-frame'],decoderErrorLines:2,decoderExitCode:1
  });
 });

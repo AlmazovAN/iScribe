@@ -4,12 +4,12 @@ import {ffmpegWorkerAssets} from './ffmpegDecoder';
 import {allocateStreamDecoderId,type StreamedAudio,type StreamReadObserver} from './streamedAudio';
 import type {AudioWindow} from './recognitionProgress';
 import workerSource from './ffmpegStreamWorker.js?raw';
-import {FfmpegDecoderError,ffmpegFailure,safeExitCode,type FfmpegStage} from './decoderDiagnostics';
+import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails,type FfmpegStage} from './decoderDiagnostics';
 
 export const FFMPEG_MAX_WINDOW_SAMPLES=30*PCM_SAMPLE_RATE;
 type Opened={id:number;kind:'opened';length:number;sourceRate:number};
 type Pcm={id:number;kind:'pcm';buffer:ArrayBuffer};
-type Reply=Opened|Pcm|{id:number;kind:'error';code:string;exitCode?:number}|{id:number;kind:'progress';time:number};
+type Reply=Opened|Pcm|{id:number;kind:'error';code:string;exitCode?:number;details?:unknown;errorLines?:unknown}|{id:number;kind:'progress';time:number};
 type Pending={id:number;stage:FfmpegStage;resolve:(reply:Opened|Pcm)=>void;reject:(error:unknown)=>void;onProgress?:()=>void;lastProgress:number};
 export function validateFfmpegWindow(window:AudioWindow,length:number):void{
  if(!Number.isSafeInteger(window.start)||!Number.isSafeInteger(window.end)||window.start<0||
@@ -55,7 +55,7 @@ export async function openFfmpegStreamedAudio(file:File,signal?:AbortSignal):Pro
   }
   pending=undefined;
   if(response.kind==='error'){
-   const error=new FfmpegDecoderError(ffmpegFailure(response.code),request.stage,safeExitCode(response.exitCode));
+   const error=new FfmpegDecoderError(ffmpegFailure(response.code),request.stage,safeExitCode(response.exitCode),safeFfmpegDetails(response.details,response.errorLines));
    request.reject(error);closeWith(error);
   }else if(response.kind==='opened'||response.kind==='pcm')request.resolve(response);
   else{const error=new FfmpegDecoderError('protocol',request.stage);request.reject(error);closeWith(error)}
