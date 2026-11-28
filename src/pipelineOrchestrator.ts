@@ -3,7 +3,7 @@
 export const PIPELINE_STAGES=['preflight','decode','pcm-gate','vad','segmentation','asr','diarization','speaker-assignment','finalize','export'] as const;
 export type PipelineStage=typeof PIPELINE_STAGES[number];
 export type PipelineState='running'|'completed'|'deferred'|'skipped'|'reused'|'failed'|'cancelled'|'requested'|'manual';
-export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable'|'vad-disabled'|'vad-streaming-unavailable'|'vad-unavailable';
+export type PipelineReason='per-window-validation'|'asr-already-committed'|'speakers-disabled'|'streaming-speakers-unavailable'|'vad-disabled'|'vad-streaming-unavailable'|'vad-unavailable'|'segmentation-plan-pinned';
 export type PipelineObservation={stage:PipelineStage;state:PipelineState;reason?:PipelineReason;elapsedMs?:number};
 export type PcmGateResult={mode:'full'|'windowed';samples:number};
 export type ExportOutcome='requested'|'manual';
@@ -20,7 +20,7 @@ export type PipelineOutputs<Audio,Plan,Turns>={
  export:ExportOutcome;
 };
 type Skip=
- |{stage:'vad';reason:'vad-disabled'|'vad-streaming-unavailable'|'asr-already-committed'}
+ |{stage:'vad';reason:'vad-disabled'|'vad-streaming-unavailable'|'asr-already-committed'|'segmentation-plan-pinned'}
  |{stage:'segmentation'|'asr';reason:'asr-already-committed'}
  |{stage:'diarization'|'speaker-assignment';reason:'speakers-disabled'|'streaming-speakers-unavailable'};
 

@@ -10,7 +10,7 @@ import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute
 // raw exception messages, audio buffers and browser/device identifiers.
 export type TracePhase='job'|'audio'|'model'|'asr'|'checkpoint'|'speaker';
 export type TraceCode=
- 'pipeline-stage'|'checkpoint-artifact'|'vad-result'|'vad-fallback'|'recovery-reserved'|'recovery-exhausted'|
+ 'pipeline-stage'|'checkpoint-artifact'|'vad-result'|'vad-fallback'|'segmentation-plan'|'recovery-reserved'|'recovery-exhausted'|
  'decoder-selected'|'decoder-full-retry'|'decoder-full-error'|'decoder-open-error'|'job-start'|'audio-start'|'audio-ready'|'audio-check-start'|'audio-check-pass'|'audio-check-error'|'model-start'|'model-ready'|
  'window-inspection-start'|'window-inspection-pass'|'window-inspection-error'|'window-inspection-cancelled'|
  'stream-rotation-start'|'stream-rotation-ready'|'stream-rotation-error'|'stream-session-closed'|'stream-session-close-error'|
@@ -28,6 +28,8 @@ export type TraceEvent={
  phase:TracePhase;
  code:TraceCode;
  artifactStage?:'pcm'|'window-pcm'|'asr'|'diarization'|'vad';
+ segmentationMode?:'fixed'|'pause-aware';
+ adjustedCuts?:number;
  vadFrames?:number;
  vadSpeechSamples?:number;
  vadIntervals?:number;
@@ -141,7 +143,8 @@ export function diagnosticReport(job:Job){
    fileSizeBytes:job.size,
    durationSeconds:job.duration??null,
    committedWindows:job.nextWindow,
-   totalWindows:expectedWindows(job.duration),
+   totalWindows:expectedWindows(job.duration,job.windowPlan),
+   segmentationMode:job.windowPlan?'pause-aware':'fixed',
    asrComplete:job.asrComplete,
    backend:traceBackend(job.backend)
   },

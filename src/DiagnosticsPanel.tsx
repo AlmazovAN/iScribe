@@ -4,7 +4,7 @@ import type {Job} from './jobs';
 export function DiagnosticsPanel({job,jobs,onSelect,onLog}:{
  job:Job|undefined;jobs:Job[];onSelect:(id:string)=>void;onLog:(id:string)=>void;
 }){
- const total=expectedWindows(job?.duration);
+ const total=expectedWindows(job?.duration,job?.windowPlan);
  const current=job&&total!==null?Math.min(total,Math.max(1,job.nextWindow+1)):null;
  return <section className="panel diagnostics-panel" aria-label="Диагностика">
   <h2>Диагностика</h2>

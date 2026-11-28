@@ -237,3 +237,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - VAD-01 framing/context, state carry, padding/merge, invalid results and map bounds — exact helper tsc + 6/6 Node synthetic checks PASS, Vitest NOT TESTED.
 - VAD-02 pinned model load/cache/runtime, stage fallback/cancel, RAW reuse, original ASR windows intact — tests authored, actual ONNX/browser/project NOT TESTED.
 - VAD-03 local mandatory CI, RU/EN labeled speech recall and quiet speech, boundary errors, memory/time, streaming compatibility and #76 reconciliation — NOT TESTED.
+
+## PIPE-08 candidate gates
+- SEG-01 geometry, exact overlap/full coverage, deterministic 1000 generated maps, legacy lock and corrupt plan rejection — exact planner/VAD strict tsc + 6/6 Node groups PASS; Vitest NOT TESTED.
+- SEG-02 immutable IndexedDB plan, publish before ASR, resume exact geometry after interruption with flags off, progress/diagnostics and boundary ownership — tests authored, NOT TESTED in full project.
+- SEG-03 real VAD/quiet speech, paired WER/boundary/RTF tests, local mandatory CI and #76 reconciliation — NOT TESTED.

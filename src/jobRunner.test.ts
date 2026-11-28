@@ -927,3 +927,43 @@ it('PIPE-07 unavailable VAD falls back once, with original ASR windows intact',a
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'vad-fallback'}),expect.objectContaining({code:'pipeline-stage',pipelineStage:'vad',pipelineState:'skipped',pipelineReason:'vad-unavailable'})]));
  await store.remove(id);
 });
+
+it('PIPE-08 pins adaptive windows before inference and resumes the same plan with flags off',async()=>{
+ const {fake,store,decode}=setup(),file=new File(['fixture'],'adaptive-resume.wav');
+ const detectSpeech=vi.fn(async(audio:Float32Array)=>({revision:1,samples:audio.length,frames:Math.ceil(audio.length/512),speechSamples:audio.length-40000,intervals:[{start:0,end:384000},{start:424000,end:audio.length}]}));
+ const manager={...fake,detectSpeech};
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,vadEnabled:true,adaptiveSegmentation:true,download:()=>{}});
+ await runner.init();await runner.add([file],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ let called=0;
+ fake.transcribe.mockImplementation(async()=>{
+  called++;
+  const saved=(await store.get(id,false))!;
+  expect(saved.windowPlan?.windows.map(w=>[w.start/16000,w.end/16000])).toEqual([[0,28.75],[23.75,53.75],[48.75,60]]);
+  if(called===2)throw new Error('injected nonretryable failure');
+  return [{start:3,end:4,text:'текст'}];
+ });
+ runner.enqueue(id);await finished(runner);
+ const interrupted=(await store.get(id,false))!;
+ expect(interrupted.stage).toBe('error');expect(interrupted.nextWindow).toBe(1);expect(interrupted.windowPlan?.adjustedCuts).toBe(1);
+ const resumed=new JobRunner({store:new JobStore(),manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('done');expect(saved.nextWindow).toBe(3);expect(saved.segments.map(s=>s.start)).toEqual([3,26.75,51.75]);
+ expect(saved.windowPlan).toEqual(interrupted.windowPlan);expect(detectSpeech).toHaveBeenCalledOnce();expect(decode).toHaveBeenCalledOnce();
+ expect(called).toBe(4);
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'segmentation-plan',segmentationMode:'pause-aware',adjustedCuts:1}),expect.objectContaining({code:'pipeline-stage',pipelineStage:'vad',pipelineState:'skipped',pipelineReason:'segmentation-plan-pinned'})]));
+ await store.remove(id);
+});
+it('PIPE-08 fails before ASR when adaptive plan publication fails',async()=>{
+ const {fake,store,decode}=setup();
+ const detectSpeech=vi.fn(async(audio:Float32Array)=>({revision:1,samples:audio.length,frames:Math.ceil(audio.length/512),speechSamples:audio.length-40000,intervals:[{start:0,end:384000},{start:424000,end:audio.length}]}));
+ const runner=new JobRunner({store,manager:{...fake,detectSpeech} as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,vadEnabled:true,adaptiveSegmentation:true,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture'],'plan-fail.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id,save=store.save.bind(store);
+ vi.spyOn(store,'save').mockImplementation(async(j,file)=>{if(j.id===id&&j.windowPlan)throw new Error('injected plan write failure');return save(j,file)});
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('error');expect(saved.nextWindow).toBe(0);expect(saved.windowPlan).toBeUndefined();expect(fake.transcribe).not.toHaveBeenCalled();
+ await store.remove(id);
+});

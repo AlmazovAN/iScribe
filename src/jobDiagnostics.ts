@@ -1,4 +1,5 @@
 import type {Job,JobStage} from './jobs';
+import {validateSpeechPlan,type SpeechWindowPlan} from './speechSegmentation';
 
 // A pagehide observation does not distinguish reload, navigation or closing the tab.
 export type PageExitEvent='pagehide';
@@ -18,12 +19,17 @@ export type JobFailure={
 export type PageExitMarker={jobId:string;event:PageExitEvent;at:number};
 const KEY='iscribe-page-exit-v1';
 
-export function committedSeconds(job:Pick<Job,'duration'|'nextWindow'>,windows=job.nextWindow):number{
+export function committedSeconds(job:Pick<Job,'duration'|'nextWindow'|'windowPlan'>,windows=job.nextWindow):number{
  if(!Number.isFinite(windows)||windows<=0)return 0;
+ if(job.windowPlan!==undefined){
+  if(!validateSpeechPlan(job.windowPlan,Math.round((job.duration??0)*16000))||!Number.isSafeInteger(windows)||windows>job.windowPlan.windows.length)return 0;
+  return job.windowPlan.windows[windows-1].end/16000;
+ }
  const end=30+(Math.floor(windows)-1)*25;
  return job.duration!==undefined&&Number.isFinite(job.duration)&&job.duration>0?Math.min(end,job.duration):end;
 }
-export function expectedWindows(duration:number|undefined):number|null{
+export function expectedWindows(duration:number|undefined,plan?:SpeechWindowPlan):number|null{
+ if(plan!==undefined)return validateSpeechPlan(plan,Math.round((duration??0)*16000))?plan.windows.length:null;
  if(duration===undefined||!Number.isFinite(duration)||duration<=0)return null;
  return Math.max(1,Math.ceil((duration-30)/25)+1);
 }
@@ -34,7 +40,7 @@ export function createFailureDiagnostic(
  const count=Math.max(0,Math.floor(completedWindows));
  return {reason,at,stage:job.stage,message,
   backend:backend&&backend!=='Не инициализировано'?backend:null,
-  completedWindows:count,totalWindows:expectedWindows(job.duration),
+  completedWindows:count,totalWindows:expectedWindows(job.duration,job.windowPlan),
   checkpointSeconds:committedSeconds(job,count),
   durationSeconds:job.duration!==undefined&&Number.isFinite(job.duration)&&job.duration>0?job.duration:null,
   observedExit};
