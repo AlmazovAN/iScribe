@@ -12,7 +12,8 @@ import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow,type CheckpointProgress} from './recognitionProgress';
 import {PipelineOrchestrator} from './pipelineOrchestrator';
 import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError,ARTIFACT_CONTRACT} from './checkpointManager';
-import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
+import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,isRetryableStreamError,advanceStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
+import {initialLedger,reserveOperation,finishOperation,RecoveryExhaustedError,type RecoveryOperation} from './recoveryManager';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
@@ -343,24 +344,68 @@ export class JobRunner{
    this.set({notice:'Запуск очереди отложен. Если причина в хранилище, очередь могла не сохраниться — не закрывайте страницу до устранения ошибки. '+message(error)});
   }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
  }
+ private reserveAttempt(id:string,operation:RecoveryOperation,unit=0){
+  const job=this.job(id);
+  try{
+   // Legacy counters contain reservations, not proof of actual execution.
+   // Do not silently grant an extra attempt to a previously retried
+   // unfinished decoder operation when upgrading old records.
+   if(!job.recoveryLedger){
+    if(operation==='full-decode'&&(job.fullDecodeRecoveries??0)>0&&job.audioCheck?.status!=='passed'&&job.nextWindow===0)
+     throw new RecoveryExhaustedError(operation,'operation');
+    if(operation==='stream-window'&&job.streamRecovery?.window===unit&&job.streamRecovery.windowRecoveries>0)
+     throw new RecoveryExhaustedError(operation,'operation');
+   }
+   const ledger=job.recoveryLedger??initialLedger((job.fullDecodeRecoveries??0)+(job.streamRecovery?.totalRecoveries??0));
+   const next=reserveOperation(ledger,operation,unit);
+   const attempts=next.operations[operation]!.attempts;
+   const patch:Partial<Job>={recoveryLedger:next};
+   if(operation==='full-decode'&&attempts===2){
+    if((job.fullDecodeRecoveries??0)>=1)throw new RecoveryExhaustedError(operation,'operation');
+    patch.fullDecodeRecoveries=1;
+   }
+   if(operation==='stream-window'&&attempts===2){
+    const budget=advanceStreamRecovery(unit,job.streamRecovery);
+    if(!budget)throw new RecoveryExhaustedError(operation,'operation');
+    patch.streamRecovery=budget;
+   }
+   this.patch(id,patch);
+   this.traceEvent(id,'recovery-reserved','checkpoint',{recoveryOperation:operation,window:unit||undefined,attempt:attempts,recoveryCount:next.totalRecoveries});
+   return attempts;
+  }catch(error){
+   if(error instanceof RecoveryExhaustedError)this.traceEvent(id,'recovery-exhausted','checkpoint',{recoveryOperation:operation,window:unit||undefined,recoveryLimit:error.limit,recoveryCount:job.recoveryLedger?.totalRecoveries});
+   throw error;
+  }
+ }
+ private finishAttempt(id:string,operation:RecoveryOperation,unit=0){
+  this.patch(id,{recoveryLedger:finishOperation(this.job(id).recoveryLedger!,operation,unit)});
+ }
  private async readAudio(id:string,file:File){
   const signal=this.abort!.signal;
   const identity=this.activeDecoder!;
   const provider=providerForDecoder(identity.kind);
   if(identity.route==='windowed'){
-   try{return await this.openGuardedStream(file,signal)}catch(error){
+   this.reserveAttempt(id,'stream-open');await this.persist(id);this.check();
+   try{
+    const audio=await this.openGuardedStream(file,signal);
+    this.finishAttempt(id,'stream-open');return audio;
+   }catch(error){
     this.traceEvent(id,'decoder-open-error','audio',{streamStage:'open',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});throw error;
    }
   }
   const decode=this.decode??provider.decode;
   for(;;){
-   try{return await decode(file,signal)}catch(error){
-    this.traceEvent(id,'decoder-full-error','audio',{streamStage:'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
+   const attempt=this.reserveAttempt(id,'full-decode');
+   await this.persist(id);this.check();
+   try{
+    const audio=await decode(file,signal);this.check();
+    this.finishAttempt(id,'full-decode');return audio;
+   }catch(error){
+    this.traceEvent(id,'decoder-full-error','audio',{attempt,streamStage:'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     this.check();signal.throwIfAborted();
-    if(!canRetryFfmpeg(error,'full')||(this.job(id).fullDecodeRecoveries??0)>=1)throw error;
-    this.patch(id,{fullDecodeRecoveries:1,status:'Повторное декодирование FFmpeg · попытка 2/2'});
+    if(!canRetryFfmpeg(error,'full')||attempt>=MAX_ASR_WINDOW_ATTEMPTS)throw error;
+    this.patch(id,{status:'Повторное декодирование FFmpeg · попытка 2/2'});
     this.traceEvent(id,'decoder-full-retry','audio',{attempt:2,streamStage:'decode',...ffmpegFailureFields(error)});
-    await this.persist(id);this.check();
    }
   }
  }
@@ -395,7 +440,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined||disk.recoveryLedger!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -567,14 +612,14 @@ export class JobRunner{
  private async readSplitStreamWindow(id:string,audio:StreamedAudio,window:AudioWindow,index:number,total:number,inspection=false){
   const length=window.end-window.start;
   const totalParts=Math.ceil(length/STREAM_SUBWINDOW_SAMPLES);
-  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow,attempt:inspection?1:3,decoderId:audio.decoderId,strategy:'split' as const,totalParts};
+  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow,attempt:inspection?1:2,decoderId:audio.decoderId,strategy:'split' as const,totalParts};
   const pcm=new Float32Array(length);
   this.traceEvent(id,'stream-split-start','audio',fields);await this.persist(id);this.check();
   for(let part=1;part<=totalParts;part++){
    this.check();
    const start=window.start+(part-1)*STREAM_SUBWINDOW_SAMPLES,end=Math.min(start+STREAM_SUBWINDOW_SAMPLES,window.end);
    const subwindow={start,end,first:window.first&&part===1,last:window.last&&part===totalParts};
-   const result=await this.readCheckedStreamWindow(id,audio,subwindow,index,total,inspection,inspection?1:3,{part,totalParts});
+   const result=await this.readCheckedStreamWindow(id,audio,subwindow,index,total,inspection,inspection?1:2,{part,totalParts});
    this.check();pcm.set(result.pcm,start-window.start);
    this.traceEvent(id,'stream-split-part-ready','audio',{...fields,startSample:start,endSample:end,part,pcmSamples:result.pcm.length});
    await this.persist(id);
@@ -601,9 +646,10 @@ export class JobRunner{
   return {pcm,report};
  }
  private async readRecoverableStreamWindow(id:string,session:StreamSession,file:File,window:AudioWindow,index:number,total:number,priorFailure?:{error:unknown}){
-  const fields={window:index+1,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow};
-  const previous=this.job(id).streamRecovery;
-   let attempt=previous?.window===index+1?Math.min(3,previous.windowRecoveries+1):1;
+  const unit=index+1;
+  const fields={window:unit,totalWindows:total,startSample:window.start,endSample:window.end,committedWindows:this.job(id).nextWindow};
+  let attempt=this.reserveAttempt(id,'stream-window',unit),split=false;
+  await this.persist(id);this.check();
   for(;;){
    this.check();
    try{
@@ -611,31 +657,30 @@ export class JobRunner{
      this.traceEvent(id,'window-error','audio',{...fields,attempt,decoderId:session.audio.decoderId,streamStage:error instanceof StreamDecodeStalledError?error.stage:error instanceof AudioValidationError?'pcm-check':'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
      throw error;
     }
-    const result=attempt===3?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
-    if(attempt>1)this.traceEvent(id,'stream-recovered','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',recoveryCount:this.job(id).streamRecovery?.totalRecoveries});
+    const result=split?await this.readSplitStreamWindow(id,session.audio,window,index,total):await this.readCheckedStreamWindow(id,session.audio,window,index,total,false,attempt);
+    this.finishAttempt(id,'stream-window',unit);
+    if(attempt>1)this.traceEvent(id,'stream-recovered','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:split?'split':'whole',recoveryCount:this.job(id).streamRecovery?.totalRecoveries});
     return result;
    }catch(error){
     this.check();
-    const budget=attempt===3?null:reserveStreamRecovery(error,index+1,this.job(id).streamRecovery);
-    if(!budget){
-     if(error instanceof StreamDecodeStalledError||canRetryFfmpeg(error,'windowed')||attempt===3){
-      this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
-     }
+    if(attempt>=MAX_ASR_WINDOW_ATTEMPTS||!isRetryableStreamError(error)){
+     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:split?'split':'whole',streamStage:error instanceof StreamDecodeStalledError?error.stage:undefined,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),recoveryCount:this.job(id).streamRecovery?.totalRecoveries??0});
      throw error;
     }
-    const nextAttempt=budget.windowRecoveries+1;
-    // Reserve durably before opening another decoder, even after a reload.
-    this.patch(id,{streamRecovery:budget,status:'Восстановление декодера · окно '+(index+1)+'/'+total+' · попытка '+nextAttempt+'/3'});
-    this.set({operation:nextAttempt===3?'Резервное декодирование частями':'Восстановление потокового декодера'});
-    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt:nextAttempt,decoderId:session.audio.decoderId,strategy:nextAttempt===3?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
+    // Choose ONE strategy for the single recovery. No third attempt.
+    split=error instanceof StreamDecodeStalledError&&error.stage==='resample';
+    attempt=this.reserveAttempt(id,'stream-window',unit);
+    const budget=this.job(id).streamRecovery!;
+    this.patch(id,{status:'Восстановление декодера · окно '+unit+'/'+total+' · попытка '+attempt+'/2'});
+    this.set({operation:split?'Резервное декодирование частями':'Восстановление потокового декодера'});
+    this.traceEvent(id,'stream-recovery-start','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:split?'split':'whole',recoveryCount:budget.totalRecoveries,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     await this.persist(id);this.check();
     try{
      await this.replaceStream(id,session,file,'recovery');
-     attempt=nextAttempt;
-     this.traceEvent(id,'stream-reopen-ready','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:attempt===3?'split':'whole',recoveryCount:budget.totalRecoveries});
+     this.traceEvent(id,'stream-reopen-ready','audio',{...fields,attempt,decoderId:session.audio.decoderId,strategy:split?'split':'whole',recoveryCount:budget.totalRecoveries});
      await this.persist(id);this.check();
     }catch(openError){
-     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt:nextAttempt,streamStage:'open',errorKind:traceErrorKind(openError),...ffmpegFailureFields(openError),recoveryCount:budget.totalRecoveries});
+     this.traceEvent(id,'stream-recovery-stop','audio',{...fields,attempt,streamStage:'open',errorKind:traceErrorKind(openError),...ffmpegFailureFields(openError),recoveryCount:budget.totalRecoveries});
      throw openError;
     }
    }
@@ -784,7 +829,10 @@ export class JobRunner{
        const prepared=prefetched.result.value;
        if(prepared.decoderId!==session.audio.decoderId)throw new Error('Устаревший буфер декодера.');
        this.resources.observePrefetch(prefetched.ready,waitMs);
+       this.reserveAttempt(id,'stream-window',index+1);
+       await this.persist(id);this.check();
        pcm=prepared.pcm;
+       this.finishAttempt(id,'stream-window',index+1);
        const fields={window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,decoderId:prepared.decoderId,attempt:1,committedWindows:this.job(id).nextWindow,strategy:'whole' as const};
        this.traceEvent(id,'stream-read-start','audio',{...fields,streamStage:'decode'});
        for(const event of prepared.events){
@@ -818,8 +866,12 @@ export class JobRunner{
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
     let result:TranscriptSegment[]|undefined=raw as TranscriptSegment[]|undefined,successfulAttemptMs=0;
     if(raw!==undefined)this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'asr',artifactState:'reused',window:index+1});
-    if(raw===undefined)for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
+    let reservedAttempt:number|undefined;
+    if(raw===undefined)for(;;){
      this.check();
+     const resumedAttempt=reservedAttempt===undefined;
+     const attempt=reservedAttempt??this.reserveAttempt(id,'asr',index+1);
+     reservedAttempt=undefined;
      this.traceEvent(id,'window-attempt','asr',{window:index+1,totalWindows:windows.length,attempt,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
      // Start only read-only lookahead; it cannot commit or reserve retries.
      // Overlap preparation with the mandatory metadata transaction as well as ASR.
@@ -838,6 +890,15 @@ export class JobRunner{
      // Save the in-flight window metadata before invoking the Worker.
      // A tab crash can then be diagnosed without claiming a committed result.
      await this.timedMetadata(id);this.check();
+     // A reservation that survived a reload is still consumed. A second
+     // inference after interruption uses a fresh reduced-pressure Worker.
+     if(resumedAttempt&&attempt>1){
+      this.manager.forceSingleWasmThread=true;this.resources.restrictAfterRecovery();
+      const recoveryStarted=benchmarkNow();
+      const prepared=await this.manager.recover(params.model,true).finally(()=>this.perf(id,'workerRecovery',benchmarkNow()-recoveryStarted));this.check();
+      this.bench(id,b=>({...b,workerRecoveries:b.workerRecoveries+1}));
+      this.set({backend:prepared.backend});this.patch(id,{backend:prepared.backend});
+     }
      if(prefetchScheduledAt!==undefined){
       const leadMs=Math.max(0,benchmarkNow()-prefetchScheduledAt);
       this.bench(id,b=>{const prev=b.audioPipeline??emptyPipeline();return {...b,audioPipeline:{...prev,earlyDispatches:(prev.earlyDispatches??0)+1,preDispatchLeadMs:(prev.preDispatchLeadMs??0)+leadMs}}});
@@ -879,7 +940,8 @@ export class JobRunner{
       this.backendPolicy.invalidate(params.model,params.language,attemptBackend);
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       if(traceErrorKind(error)==='worker'||(typeof error==='object'&&error!==null&&'code' in error&&(error.code==='gpu-device-lost'||error.code==='webgpu-device-lost')))this.resources.restrictAfterRecovery();
-      const next=attempt+1,wasmOnly=preferWasmAfterFailure(attemptBackend);
+      const next=this.reserveAttempt(id,'asr',index+1),wasmOnly=preferWasmAfterFailure(attemptBackend);
+      reservedAttempt=next;
       // A retry never increases compute pressure, and the rest of this run
       // stays at one WASM thread even when the user selects maximum.
       if(wasmOnly)this.manager.forceSingleWasmThread=true;
@@ -887,6 +949,7 @@ export class JobRunner{
       this.patch(id,{status:`Ошибка окна ${index+1}/${windows.length} · восстановление Worker · попытка ${next}/${MAX_ASR_WINDOW_ATTEMPTS} · ${checkpointLabel(checkpointProgress(windows,index))}`,error:message(error)});
       // Throw on failed reinit instead of silently continuing on an unknown
       // backend. Explicit cancellation aborts before starting another window.
+      await this.persist(id);this.check();
       const recoveryStarted=benchmarkNow();
       const prepared=await this.manager.recover(params.model,wasmOnly).finally(()=>this.perf(id,'workerRecovery',benchmarkNow()-recoveryStarted));this.check();
       this.bench(id,b=>({...b,workerRecoveries:b.workerRecoveries+1}));
@@ -912,7 +975,10 @@ export class JobRunner{
      this.storageUi(id,'deferredMetadataWrites');this.check();
     }
     const checkpointStarted=benchmarkNow();
-    await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
+    const ledger=this.job(id).recoveryLedger;
+    const record=ledger?.operations.asr;
+    const recoveryLedger=ledger&&record?.unit===index+1&&!record.done?finishOperation(ledger,'asr',index+1):ledger;
+    await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after),recoveryLedger},segments);
     if(checkpoints&&profile&&session){
      try{await checkpoints.discardWindow(profile,window.start,window.end)}
      catch{this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'cleanup-failed',window:index+1,errorKind:'storage'})}
@@ -929,6 +995,13 @@ export class JobRunner{
    await this.commit(id,{asrComplete:true,percent:100,status:'Текст готов и сохранён'});this.check();
  }
  private async runDiarization(id:string,audio:Float32Array):Promise<SpeakerTurns>{
+  for(;;){
+   const attempt=this.reserveAttempt(id,'diarization');await this.persist(id);this.check();
+   try{const turns=await this.runDiarizationAttempt(id,audio);this.finishAttempt(id,'diarization');return turns}
+   catch(error){this.check();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();}
+  }
+ }
+ private async runDiarizationAttempt(id:string,audio:Float32Array):Promise<SpeakerTurns>{
    this.set({operation:'Разделение говорящих'});
    this.traceEvent(id,'speaker-start','speaker');
    this.patch(id,{stage:'speakers',status:'Разделение говорящих. Текст уже доступен.',percent:null});await this.persist(id);this.check();
