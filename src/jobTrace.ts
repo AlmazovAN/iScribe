@@ -1,6 +1,7 @@
 import type {Job} from './jobs';
 import {qualitySummary,type AsrWindowQuality} from './ml/asrQuality';
 import {validateAlignmentCheckpoint} from './ml/forcedAlignment';
+import {wordSpeakerSummary} from './ml/speakers';
 import {recoveryReport,type RecoveryOperation} from './recoveryManager';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
@@ -158,6 +159,7 @@ export function diagnosticReport(job:Job){
   fullDecodeRecoveries:job.fullDecodeRecoveries??0,
   recoveryLedger:recoveryReport(job.recoveryLedger),
   asrQuality:qualitySummary(job.asrQuality),
+  wordSpeakerAssignment:wordSpeakerSummary(job.wordSpeakerStats),
   wordAlignment:validateAlignmentCheckpoint(job.alignmentCheckpoint)?{alignedSegments:job.alignmentCheckpoint.alignedSegments,unalignedSegments:job.alignmentCheckpoint.segmentCount-job.alignmentCheckpoint.alignedSegments,alignedWords:job.alignmentCheckpoint.alignedWords}:null,
   streamRecovery:job.streamRecovery?{window:job.streamRecovery.window,windowRecoveries:job.streamRecovery.windowRecoveries,totalRecoveries:job.streamRecovery.totalRecoveries}:null,
   lastFailure:failure,
