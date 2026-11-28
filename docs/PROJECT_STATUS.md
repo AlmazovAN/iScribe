@@ -147,3 +147,6 @@ CheckpointManager stores full PCM, temporary stream window PCM, RAW ASR and RAW 
 
 ## PIPE-05 candidate
 RecoveryLedger revision 1 counts durable reservations for full/stream decode, initial stream open, ASR and diarization. Two attempts per unfinished operation, global 10 recoveries, existing tighter decoder caps retained; compatible RAW can be reused at exhaustion. Standalone exact manager tsc and 8/8 Node PASS; full CI and actual hardware NOT TESTED. See [PIPE-05](PIPE-05_RECOVERY_MANAGER.md).
+
+## PIPE-06 candidate
+Resource lifecycle policy adds early release of unused/incompatible models, 120s idle lease, guarded Worker retirement and queue pause on unconfirmed termination. FFmpeg cleanup preserves pending request settlement and Blob URL release. Standalone exact helper tsc + 5/5 Node PASS; full CI and hardware NOT TESTED. See [PIPE-06](PIPE-06_RESOURCE_LIFECYCLE.md).

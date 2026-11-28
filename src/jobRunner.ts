@@ -14,7 +14,7 @@ import {PipelineOrchestrator} from './pipelineOrchestrator';
 import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError,ARTIFACT_CONTRACT} from './checkpointManager';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,isRetryableFullDecodeError,isRetryableStreamError,advanceStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {initialLedger,reserveOperation,finishOperation,RecoveryExhaustedError,type RecoveryOperation} from './recoveryManager';
-import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
+import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,WorkerDisposalError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
 import {alignSpeakers} from './ml/speakers';
 import {downloadTranscript,formatTranscript} from './formatTranscript';
@@ -29,6 +29,7 @@ import {captureRunContext} from './performance/runContext';
 import {AudioPipeline,emptyPipeline} from './performance/audioPipeline';
 import {prepareStreamWindow,type PreparedStreamWindow} from './performance/prefetchStream';
 import {ResourceManager,waitAtBoundary} from './performance/resourceManager';
+import {IdleModelLease,shouldReleaseBeforeJob} from './performance/resourceLifecycle';
 import {boundaryPauseMs,observeResourcePause,observeWindowPolicy} from './performance/resourcePolicy';
 import type {PerformanceMode,ResourcePolicy} from './performance/types';
 export type RunnerSnapshot={jobs:Job[];busy:boolean;ready:boolean;activeId:string|null;notice:string;backend:string;enginePhase:EnginePhase;operation:string;queueCount:number;speakerDownload:'idle'|'pending'|'loading';performanceMode:PerformanceMode;activeResourcePolicy:ResourcePolicy|null};
@@ -40,6 +41,8 @@ type JobPipeline=PipelineOrchestrator<Float32Array|StreamedAudio,SpeechPlan,Spea
 export class JobRunner{
  readonly manager:ModelManager;
  private readonly resources:ResourceManager;
+ private readonly idleModelLease=new IdleModelLease();
+ private resourceBlocked=false;
  private readonly backendPolicy:BackendPolicy;
  private readonly boundaryWait:typeof waitAtBoundary;
  private store:JobStore;
@@ -290,21 +293,39 @@ export class JobRunner{
    });
   }else await task();
  }
+ private get lifecycleBlocked(){return this.resourceBlocked||this.manager.resourceBlocked}
+ private blockResources(){
+  this.resourceBlocked=true;this.idleModelLease.cancel();
+  this.set({notice:'Не подтверждено завершение Worker. Новые задания остановлены; сохранённый текст доступен. Обновите страницу для нового сеанса.'});
+ }
+ private scheduleIdleRelease(){
+  this.idleModelLease.cancel();
+  if(this.lifecycleBlocked||!this.manager.active||!this.manager.releaseIdle)return;
+  this.idleModelLease.schedule(()=>{
+   if(this.state.busy)return;
+   try{this.manager.releaseIdle()}
+   catch{if(this.manager.resourceBlocked)this.blockResources();else this.set({notice:'Не удалось полностью подтвердить освобождение модели.'})}
+  });
+ }
  private releaseIdleModel(id:string){
   try{
    if(this.manager.releaseIdle?.())this.bench(id,b=>{const memory=b.memory??emptyMemoryObservations();return {...b,memory:{...memory,idleModelReleases:memory.idleModelReleases+1}}});
   }catch{
    this.bench(id,b=>{const memory=b.memory??emptyMemoryObservations();return {...b,memory:{...memory,releaseFailures:memory.releaseFailures+1}}});
-   this.set({notice:'Не удалось полностью подтвердить освобождение модели. Сохранённый текст доступен.'});
+   if(this.manager.resourceBlocked)this.blockResources();
+   else this.set({notice:'Не удалось полностью подтвердить освобождение модели. Сохранённый текст доступен.'});
   }
  }
  private async drain(){
   if(this.state.busy)return;
+  if(this.lifecycleBlocked){this.blockResources();return}
+  this.idleModelLease.cancel();
   this.set({busy:true});
   try{
    await this.ensureQueueSaved();
    this.lease=this.exclusive(async()=>{
     while(this.queue.length||this.state.speakerDownload==='pending'){
+     if(this.lifecycleBlocked){this.blockResources();break}
      await this.ensureQueueSaved();
      if(this.state.speakerDownload==='pending'){
       await this.downloadSpeakers();
@@ -318,11 +339,15 @@ export class JobRunner{
      this.cancelled=false;this.abort=new AbortController();this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();this.set({activeId:id,activeResourcePolicy:null});
      const runStarted=benchmarkNow();let runTimeRecorded=false;
      try{
+      const upcoming=this.job(id);
+      if(shouldReleaseBeforeJob(this.resources.selected,this.manager.active,upcoming.params.model,upcoming.asrComplete))this.releaseIdleModel(id);
+      if(this.lifecycleBlocked)throw new WorkerDisposalError();
       await this.execute(id);
       if(this.queue.length<=1&&shouldReleaseAfterQueue(this.resources.selected,collectDeviceHints().deviceMemoryGiB,this.manager.active))this.releaseIdleModel(id);
       this.bench(id,b=>addBenchmarkTiming(b,'runMs',benchmarkNow()-runStarted));runTimeRecorded=true;
       await this.persist(id);
      }catch(error){
+      if(error instanceof WorkerDisposalError||this.manager.resourceBlocked)this.blockResources();
       this.releaseIdleModel(id);
       this.bench(id,b=>({...addBenchmarkTiming(b,'runMs',runTimeRecorded?0:benchmarkNow()-runStarted),failedRuns:b.failedRuns+1}));
       const job=this.job(id);
@@ -342,7 +367,9 @@ export class JobRunner{
    // or the browser cannot commit queue metadata. Retry from this checkpoint.
    if(this.state.speakerDownload==='pending')this.set({speakerDownload:'idle'});
    this.set({notice:'Запуск очереди отложен. Если причина в хранилище, очередь могла не сохраниться — не закрывайте страницу до устранения ошибки. '+message(error)});
-  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined}
+  }finally{this.asrHeartbeat=null;this.set({busy:false,activeId:null,operation:'',queueCount:this.queue.length});this.abort=null;this.lease=undefined;
+   if(this.lifecycleBlocked)this.blockResources();else this.scheduleIdleRelease()
+  }
  }
  private reserveAttempt(id:string,operation:RecoveryOperation,unit=0){
   const job=this.job(id);
@@ -508,10 +535,11 @@ export class JobRunner{
   const fields={decoderId:session.audio.decoderId,decoderWindows:session.windows,rotationCount:session.rotations,closeReason:reason,committedWindows:this.job(id).nextWindow,jsHeapBytes:traceHeapBytes()};
   try{session.audio.close()}
   catch(error){
+   this.blockResources();
    this.traceEvent(id,'stream-session-close-error','audio',{...fields,errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
    // Do not open another decoder after a disposal failure. On terminal
    // cleanup retain the original job error or successfully committed text.
-   if(reason==='rotation'||reason==='recovery')throw error;
+   if(reason==='rotation'||reason==='recovery')throw new WorkerDisposalError();
    return;
   }
   this.traceEvent(id,'stream-session-closed','audio',fields);
@@ -944,6 +972,7 @@ export class JobRunner{
       this.traceEvent(id,'window-error','asr',{window:index+1,totalWindows:windows.length,attempt,elapsedMs:Date.now()-attemptStarted,errorKind:traceErrorKind(error),backend:traceBackend(attemptBackend)});
       this.check();
       this.backendPolicy.invalidate(params.model,params.language,attemptBackend);
+      if(this.manager.resourceBlocked)throw new WorkerDisposalError();
       if(!shouldRetryAsrWindow(error,attempt))throw error;
       if(traceErrorKind(error)==='worker'||(typeof error==='object'&&error!==null&&'code' in error&&(error.code==='gpu-device-lost'||error.code==='webgpu-device-lost')))this.resources.restrictAfterRecovery();
       const next=this.reserveAttempt(id,'asr',index+1),wasmOnly=preferWasmAfterFailure(attemptBackend);
@@ -1004,7 +1033,7 @@ export class JobRunner{
   for(;;){
    const attempt=this.reserveAttempt(id,'diarization');await this.persist(id);this.check();
    try{const turns=await this.runDiarizationAttempt(id,audio);this.finishAttempt(id,'diarization');return turns}
-   catch(error){this.check();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();this.manager.forceSingleWasmThread=true;}
+   catch(error){this.check();if(this.manager.resourceBlocked)throw new WorkerDisposalError();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();this.manager.forceSingleWasmThread=true;}
   }
  }
  private async runDiarizationAttempt(id:string,audio:Float32Array):Promise<SpeakerTurns>{
@@ -1038,14 +1067,17 @@ export class JobRunner{
    this.traceEvent(id,'speaker-alignment','speaker',{segmentCount:stats.segments,unlabeled:stats.unlabeled,ambiguous:stats.ambiguous,uncovered:stats.uncovered,boundaryMatches:stats.boundaryMatches});
    this.patch(id,{speakerSegments,diagnostics:stats,stage:stats.unlabeled?'partial':'done',status:stats.unlabeled?`Текст готов · без спикера: ${stats.unlabeled} из ${stats.segments}`:'Текст и спикеры готовы',percent:100});
  }
- cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'})}
+ cancel(){if(!this.state.busy)return;const audioCheck=this.state.operation.startsWith('Проверка аудио');this.cancelled=true;this.abort?.abort();if(!audioCheck)this.manager.cancel();if(!audioCheck)this.set({backend:'Не инициализировано'});if(this.manager.resourceBlocked)this.blockResources()}
  async prepare(model:WhisperId,wasmOnly=false){
-  if(this.state.busy)return;this.set({busy:true,operation:'Подготовка модели'});this.cancelled=false;
+  if(this.state.busy)return;
+  if(this.lifecycleBlocked){this.blockResources();return}
+  this.idleModelLease.cancel();this.set({busy:true,operation:'Подготовка модели'});this.cancelled=false;
   this.resources.beginRun();this.manager.forceSingleWasmThread=false;this.manager.resourcePolicy=this.resources.policy();
   try{await this.exclusive(async()=>{const prepared=await this.manager.prepare(model,{wasmOnly});this.set({backend:prepared.backend})})}catch(error){this.set({notice:message(error)})}
-  finally{this.manager.resourcePolicy=null;this.set({busy:false,operation:''});this.continuePending()}
+  finally{this.manager.resourcePolicy=null;this.set({busy:false,operation:''});if(this.lifecycleBlocked)this.blockResources();else{this.scheduleIdleRelease();this.continuePending()}}
  }
  async preloadSpeakers(){
+  if(this.lifecycleBlocked){this.blockResources();return}
   if(this.state.speakerDownload!=='idle')return;
   this.set({speakerDownload:'pending'});
   if(!this.state.busy)await this.drain();
@@ -1060,7 +1092,7 @@ export class JobRunner{
     await this.manager.preloadSpeakers();
     this.set({backend:'Не инициализировано'});
    }
-  }catch(error){if(!this.cancelled)this.set({notice:message(error)})}
+  }catch(error){if(error instanceof WorkerDisposalError||this.manager.resourceBlocked)this.blockResources();else if(!this.cancelled)this.set({notice:message(error)})}
   finally{this.manager.resourcePolicy=null;this.set({speakerDownload:'idle',operation:''})}
  }
  exportDiagnostics(id:string){

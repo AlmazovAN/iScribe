@@ -5,16 +5,18 @@ import {SpeakerPassMeter,type SpeakerPassObservation} from '../performance/speak
 import type {ResourcePolicy} from '../performance/types';
 import {localWasmThreadEnvironment,resolveWasmThreads,validWasmConfiguration,type WasmThreadConfiguration} from '../performance/wasmThreads';
 import {MAX_ASR_WINDOW_SAMPLES,withActivityWatchdog,WorkerStalledError} from './activityWatchdog';
+import {WorkerRetirement} from '../performance/resourceLifecycle';
 import {checkWhisperCache,recordWhisperCache,checkSpeakerCache,speakerRepos} from './cache';
 declare const __iscribeWasmBinary:ArrayBuffer;
-function createEngineWorker():Worker{
+function createEngineWorker(retirement:WorkerRetirement):Worker{
+ retirement.assertUsable();
  const worker=new EngineWorker();
  // This message arrives before the engine's init/preload message. Keep the
  // original buffer for replacement workers used by recovery and diarization.
  try{
   if(import.meta.env.MODE==='standalone')worker.postMessage({type:'iscribe:runtime-wasm',binary:__iscribeWasmBinary});
   return worker;
- }catch(error){worker.terminate?.();throw error}
+ }catch(error){retirement.terminate(worker);throw error}
 }
 
 export type WhisperId='whisper-tiny'|'whisper-small'|'whisper-large-v3';
@@ -37,6 +39,8 @@ export class ModelManager{
   this.initIdleMs=options.initIdleMs??DEFAULT_MODEL_INIT_IDLE_MS;
   this.speakerIdleMs=options.speakerIdleMs??DEFAULT_SPEAKER_IDLE_MS;
  }
+ private readonly retirement=new WorkerRetirement();
+ get resourceBlocked():boolean{return this.retirement.blocked}
  private client:EngineClient|null=null;
  private asrWorker:Worker|null=null;
  // Always clear references first and terminate the owned Worker even if
@@ -45,12 +49,12 @@ export class ModelManager{
   const client=this.client,worker=this.asrWorker;
   this.client=null;this.asrWorker=null;this.active=null;this.capabilities=null;
   this.sessionWasmThreads=null;this.wasmThreadConfiguration=null;
-  try{client?.dispose()}finally{worker?.terminate?.()}
+  try{client?.dispose()}finally{this.retirement.terminate(worker)}
  }
  releaseIdle():boolean{
   if(this.busy||(!this.client&&!this.asrWorker))return false;
   ++this.generation;
-  try{this.disposeAsr();return true}finally{this.phase('idle',null,null)}
+  try{this.disposeAsr();return true}finally{this.phase(this.resourceBlocked?'error':'idle',null,null)}
  }
  private busy=false;
  private speakerWorker:Worker|null=null;
@@ -78,6 +82,7 @@ export class ModelManager{
  onProgress:(text:string,percent:number|null)=>void=()=>{};
  async cached(id:WhisperId){return checkWhisperCache(repos[id])}
  async prepare(id:WhisperId,options:{wasmOnly?:boolean;backend?:BackendId}={}):Promise<{cached:boolean,backend:string}>{
+  this.retirement.assertUsable();
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   const required=options.wasmOnly?'wasm':options.backend;
   const targetThreads=this.targetWasmThreads;
@@ -111,7 +116,7 @@ export class ModelManager{
    progress('initializing');
    this.onProgress(cachedBefore?'Инициализация модели из сохранённых файлов…':'Подготовка и проверка файлов модели…',null);
    client=new EngineClient(()=>{
-    const worker=createEngineWorker();this.asrWorker=worker;
+    const worker=createEngineWorker(this.retirement);this.asrWorker=worker;
     worker.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;
      if(generation!==this.generation||expired||!d||typeof d!=='object'||!('type' in d))return;
@@ -168,6 +173,7 @@ export class ModelManager{
   }finally{initHeartbeat=null;if(generation===this.generation){this.busy=false;this.preparingId=null}}
  }
  async recover(id:WhisperId,wasmOnly:boolean):Promise<{cached:boolean,backend:BackendId}>{
+  this.retirement.assertUsable();
   // A failed inference worker must be discarded; ONNX session and pending
   // requests in that worker are not safe to reuse on the next attempt.
   if(this.busy)throw new Error('Невозможно восстановить Worker во время другой операции.');
@@ -183,6 +189,7 @@ export class ModelManager{
   return {segmentation,embedding};
  }
  async preloadSpeakers(){
+  this.retirement.assertUsable();
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.disposeAsr();
   this.busy=true;const generation=++this.generation;
@@ -190,7 +197,7 @@ export class ModelManager{
   let createdWorker:Worker|null=null,stopped=false;
   const requestId='speakers-'+generation;
   try{
-   const worker=createEngineWorker();createdWorker=worker;this.speakerWorker=worker;
+   const worker=createEngineWorker(this.retirement);createdWorker=worker;this.speakerWorker=worker;
    await withActivityWatchdog(heartbeat=>new Promise<void>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker.addEventListener('error',()=>reject(new Error('Worker загрузки моделей говорящих завершился с ошибкой.')));
@@ -210,7 +217,7 @@ export class ModelManager{
     });
     worker.postMessage({type:'iscribe:wasm-threads',requested:this.targetWasmThreads});
     worker.postMessage({type:'iscribe:preload',requestId});
-   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;createdWorker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;this.retirement.terminate(createdWorker);this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    const cached=await this.speakersCached();
    if(!cached.segmentation||!cached.embedding)throw new Error('Не подтверждён полный кеш обеих моделей говорящих. Повторите загрузку; проверьте свободное место браузера.');
@@ -218,11 +225,14 @@ export class ModelManager{
    return cached;
   }catch(error){if(generation===this.generation)this.phase('error',null,null);throw error}
   finally{
-   stopped=true;createdWorker?.terminate();if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
-   if(generation===this.generation)this.busy=false;
+   stopped=true;try{this.retirement.terminate(createdWorker)}finally{
+    if(this.speakerWorker===createdWorker){this.speakerWorker=null;this.rejectPreload=null}
+    if(generation===this.generation){this.busy=false;if(this.resourceBlocked)this.phase('error',null,null)}
+   }
   }
  }
  async transcribe(audio:Float32Array,diarize:boolean,onPartial:(segments:TranscriptSegment[])=>void,language:'ru'|'en'='ru'):Promise<TranscriptSegment[]>{
+  this.retirement.assertUsable();
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   if(!this.client||!this.active)throw new Error('Сначала скачайте и выберите модель.');
   // An unintended whole-recording transfer would duplicate tens/hundreds
@@ -241,6 +251,7 @@ export class ModelManager{
   finally{if(generation===this.generation)this.busy=false}
  }
  async diarize(audio:Float32Array):Promise<SpeakerTurn[]>{
+  this.retirement.assertUsable();
   if(this.busy)throw new Error('Дождитесь текущей операции.');
   this.lastSpeakerPass=null;
   if(!Number.isSafeInteger(audio.length)||audio.length<1||audio.length>3600*16000)throw new Error('Некорректный размер PCM для диаризации.');
@@ -251,7 +262,7 @@ export class ModelManager{
   this.phase('diarizing',null,null);
   let worker:Worker|null=null,stopped=false;
   try{
-   worker=createEngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
+   worker=createEngineWorker(this.retirement);this.speakerWorker=worker;const requestId='speakers-'+generation;
    const turns=await withActivityWatchdog(heartbeat=>new Promise<SpeakerTurn[]>((resolve,reject)=>{
     this.rejectPreload=reject;
     worker!.addEventListener('error',()=>reject(Object.assign(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.'),{code:'worker-failed'})));
@@ -277,20 +288,21 @@ export class ModelManager{
     });
     worker!.postMessage({type:'iscribe:wasm-threads',requested});
     meter.observation.transfer=postSpeakerAudio(worker!,{type:'iscribe:speakers',requestId,audio});
-   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;worker?.terminate();this.rejectPreload?.(new WorkerStalledError())}});
+   }),{timeoutMs:this.speakerIdleMs,pollMs:Math.min(1000,Math.max(5,this.speakerIdleMs/4)),onTimeout:()=>{stopped=true;this.retirement.terminate(worker);this.rejectPreload?.(new WorkerStalledError())}});
    if(generation!==this.generation)throw new Error('Операция отменена.');
    meter.finish(true,performance.now());this.phase('idle',null,null);
    return turns;
   }catch(error){meter.finish(false,performance.now());if(generation===this.generation)this.phase('error',null,null);throw error}
-  finally{stopped=true;worker?.terminate();if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation)this.busy=false}
+  finally{stopped=true;try{this.retirement.terminate(worker)}finally{if(this.speakerWorker===worker){this.speakerWorker=null;this.rejectPreload=null}if(generation===this.generation){this.busy=false;if(this.resourceBlocked)this.phase('error',null,null)}}}
  }
  cancel(){
   if(this.preparingId)this.onWhisperProgress(this.preparingId,{phase:'cancelled'});this.preparingId=null;++this.generation;
   this.rejectPreload?.(new Error('Операция отменена.'));this.rejectPreload=null;
   const speaker=this.speakerWorker;this.speakerWorker=null;
-  try{speaker?.terminate()}finally{
-   try{this.disposeAsr()}catch{/* Owned Worker was terminated; cancellation must settle. */}
-   finally{this.busy=false;this.phase('cancelled',null,null)}
+  try{this.retirement.terminate(speaker)}catch{/* Failure is latched; cancellation must settle. */}
+  finally{
+   try{this.disposeAsr()}catch{/* Termination failure is latched; do not throw from UI cancellation. */}
+   finally{this.busy=false;this.phase(this.resourceBlocked?'error':'cancelled',null,null)}
   }
  }
 }
