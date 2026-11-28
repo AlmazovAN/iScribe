@@ -132,15 +132,15 @@ it('recovers a failed Worker and commits only one copy of the current window',as
  expect(saved.nextWindow).toBe(3);
  expect(saved.segments.map(s=>s.text)).toEqual(['first','second','third']);
 });
-it('stops after three failed inference attempts and keeps earlier checkpoint intact',async()=>{
+it('stops after two failed inference attempts and keeps earlier checkpoint intact',async()=>{
  const {runner,fake,store}=setup();await runner.init();
  await runner.add([new File(['a'],'exhausted.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
  fake.transcribe.mockImplementationOnce(async()=>[{start:3,end:4,text:'saved'}])
   .mockRejectedValue(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
  runner.enqueue(id);await finished(runner);
- expect(fake.transcribe).toHaveBeenCalledTimes(4);
- expect(fake.recover).toHaveBeenCalledTimes(2);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ expect(fake.recover).toHaveBeenCalledTimes(1);
  const saved=(await store.list()).find(j=>j.id===id)!;
  expect(saved.stage).toBe('error');
  expect(saved.nextWindow).toBe(1);
@@ -341,15 +341,16 @@ it.each(['decode','resample'] as const)('stops a stalled streamed window 41 at %
  expect(saved.segments.map(x=>x.text)).toEqual(['saved']);
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'window-error',phase:'audio',window:41,streamStage:stage,errorKind:'timeout'})]));
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(read).toHaveBeenCalledTimes(3);
- expect(openStream).toHaveBeenCalledTimes(3);
- expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(read).toHaveBeenCalledTimes(2);
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
+ expect(saved.recoveryLedger?.operations['stream-window']).toMatchObject({unit:41,attempts:2,done:false});
  expect(close).toHaveBeenCalled();
  // A fresh runner must not reset the persisted retry allowance.
  const resumed=new JobRunner({store,manager:fake as unknown as ModelManager,openStream,streamDecodeIdleMs:100,streamResampleIdleMs:40});
  await resumed.init();resumed.enqueue(job.id);await finished(resumed);
- expect(openStream).toHaveBeenCalledTimes(4);
- expect(read).toHaveBeenCalledTimes(4);
+ expect(openStream).toHaveBeenCalledTimes(3); // opening the stream is not a window read
+ expect(read).toHaveBeenCalledTimes(2);
  expect((await store.get(job.id,false))?.nextWindow).toBe(40);
  await store.remove(job.id);
 });
@@ -452,7 +453,10 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  await store.save({...job,stage:'recognizing',nextWindow:40,segments:[{start:3,end:4,text:'saved'}]},file);
  Object.defineProperty(file,'size',{value:146_500_000});
  vi.spyOn(store,'audio').mockResolvedValue(file);
- const stalled=vi.fn<StreamedAudio['read']>(()=>new Promise(()=>{}));
+ const stalled=vi.fn<StreamedAudio['read']>(async(_window,observe)=>{
+  await observe?.({code:'stream-resample-start',streamStage:'resample',sourceSampleRate:44100});
+  return new Promise<Float32Array>(()=>{});
+ });
  const starts:number[]=[],length=1028*16000;
  const read=vi.fn<StreamedAudio['read']>(async(window,_observe,_beat,strict)=>{
   expect(strict).toBe(true);
@@ -464,12 +468,11 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  });
  const openStream=vi.fn<typeof openStreamedAudio>()
   .mockResolvedValueOnce({length,decoderId:1,read:stalled,close:vi.fn()})
-  .mockResolvedValueOnce({length,decoderId:2,read:stalled,close:vi.fn()})
   .mockImplementationOnce(async()=>{
    const durable=(await store.get(job.id,false))!;
    expect(durable.nextWindow).toBe(40);
-   expect(durable.streamRecovery?.totalRecoveries).toBe(2);
-   return {length,decoderId:3,read,close:vi.fn()};
+   expect(durable.streamRecovery?.totalRecoveries).toBe(1);
+   return {length,decoderId:2,read,close:vi.fn()};
   });
  // Capture the actual PCM given to Whisper; every part must occupy its
  // original sample range, including the short final fragment.
@@ -477,12 +480,12 @@ it.each(['success','short-part','stall-part'] as const)('uses split fallback at 
  fake.transcribe.mockImplementation(async()=>[{start:3,end:4,text:'fallback'}]);
  const original=fake.transcribe;
  const manager={...fake,transcribe:vi.fn(async(pcm:Float32Array)=>{actual.push(pcm);return original()})};
- const runner=new JobRunner({store,manager:manager as unknown as ModelManager,openStream,streamDecodeIdleMs:60});
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,openStream,streamDecodeIdleMs:60,streamResampleIdleMs:60});
  await runner.init();runner.enqueue(job.id);await finished(runner);
  const saved=(await store.get(job.id,false))!;
- expect(openStream).toHaveBeenCalledTimes(3);
- expect(stalled).toHaveBeenCalledTimes(2);
- expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:2,totalRecoveries:2});
+ expect(openStream).toHaveBeenCalledTimes(2);
+ expect(stalled).toHaveBeenCalledTimes(1);
+ expect(saved.streamRecovery).toEqual({window:41,windowRecoveries:1,totalRecoveries:1});
  expect(saved.segments[0].text).toBe('saved');
  if(scenario==='success'){
   expect(starts).toEqual([1000,1005,1010,1015,1020,1025].map(x=>x*16000));
@@ -570,7 +573,7 @@ it('does not open another decoder if watchdog disposal failed',async()=>{
  expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
  expect(openStream).toHaveBeenCalledOnce();expect(close).toHaveBeenCalledOnce();
  expect(fake.transcribe).not.toHaveBeenCalled();
- expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'recovery'})]));
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'stream-session-close-error',closeReason:'error'})]));
  await store.remove(job.id);
 });
 
@@ -751,6 +754,7 @@ it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without d
  await runner.init();
  await runner.add([new File(['fixture source'],'pipe04-replay.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockRejectedValueOnce(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
  const save=store.save.bind(store);let fail=true;
  vi.spyOn(store,'save').mockImplementation(async(job,file)=>{
   if(fail&&job.id===id&&job.nextWindow===1){fail=false;throw new Error('injected transaction failure')}
@@ -758,13 +762,14 @@ it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without d
  });
  runner.enqueue(id);await finished(runner);
  expect((await store.get(id,false))!).toMatchObject({stage:'error',nextWindow:0,segments:[]});
- expect(fake.transcribe).toHaveBeenCalledTimes(1);expect(decode).toHaveBeenCalledTimes(1);
+ expect(fake.transcribe).toHaveBeenCalledTimes(2);expect(decode).toHaveBeenCalledTimes(1);
+ expect((await store.get(id,false))?.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:2,done:false});
  const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
  await resumed.init();resumed.enqueue(id);await finished(resumed);
  const result=(await store.get(id,false))!;
  expect(result).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
  expect(result.segments).toHaveLength(3);
- expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
+ expect(fake.transcribe).toHaveBeenCalledTimes(4);expect(decode).toHaveBeenCalledTimes(1);
  expect(result.trace).toEqual(expect.arrayContaining([
   expect.objectContaining({code:'checkpoint-artifact',artifactStage:'pcm',artifactState:'reused'}),
   expect.objectContaining({code:'checkpoint-artifact',artifactStage:'asr',artifactState:'reused',window:1})
@@ -803,5 +808,67 @@ it('PIPE-04 resumes raw speaker intervals after cancellation before assignment',
  runner.enqueue(id);await finished(runner);
  expect(fake.diarize).toHaveBeenCalledTimes(1);expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
  expect((await store.get(id,false))?.speakerSegments).toHaveLength(3);
+ await store.remove(id);
+});
+
+it('PIPE-05 persists both ASR reservations before dispatch and refuses a third after reopening',async()=>{
+ const {runner,store,fake,decode}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'durable-retry.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ let dispatched=0;
+ fake.transcribe.mockImplementation(async()=>{
+  dispatched++;
+  const durable=(await store.get(id,false))!;
+  expect(durable.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:dispatched,done:false});
+  throw Object.assign(new Error('Worker crashed'),{code:'worker-failed'});
+ });
+ runner.enqueue(id);await finished(runner);
+ expect(dispatched).toBe(2);expect(fake.recover).toHaveBeenCalledOnce();
+ const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ expect(dispatched).toBe(2);expect(fake.recover).toHaveBeenCalledOnce();
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'error',nextWindow:0,segments:[]});
+ expect(saved.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:2,done:false});
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'recovery-exhausted',recoveryOperation:'asr',window:1,recoveryLimit:'operation'})]));
+ await store.remove(id);
+});
+it('PIPE-05 never dispatches inference if the reservation cannot be committed',async()=>{
+ const {runner,store,fake}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'retry-quota.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ const save=store.save.bind(store);
+ vi.spyOn(store,'save').mockImplementation(async(j,file)=>{
+  if(j.id===id&&j.recoveryLedger?.operations.asr?.attempts)throw new Error('injected quota failure');
+  return save(j,file);
+ });
+ runner.enqueue(id);await finished(runner);
+ expect(fake.transcribe).not.toHaveBeenCalled();expect(fake.recover).not.toHaveBeenCalled();
+ expect((await store.get(id,false))?.nextWindow).toBe(0);
+ await store.remove(id);
+});
+it('PIPE-05 bounds full FFmpeg failures across fresh runners',async()=>{
+ const {fake,store}=setup(),decode=vi.fn(async()=>{throw new FfmpegDecoderError('worker','decode')});
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg'});
+ await runner.init();await runner.add([new File(['fixture'],'full-retry.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);expect(decode).toHaveBeenCalledTimes(2);
+ const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg'});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ expect(decode).toHaveBeenCalledTimes(2);expect(fake.transcribe).not.toHaveBeenCalled();
+ expect((await store.get(id,false))?.recoveryLedger?.operations['full-decode']).toMatchObject({attempts:2,done:false});
+ await store.remove(id);
+});
+it('PIPE-05 retries a transient speaker Worker failure once without replaying committed ASR',async()=>{
+ const {runner,store,fake}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'speaker-retry.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.diarize.mockRejectedValueOnce(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(fake.diarize).toHaveBeenCalledTimes(2);
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
+ expect(saved.recoveryLedger?.operations.diarization).toMatchObject({attempts:2,done:true});
+ expect(saved.recoveryLedger?.totalRecoveries).toBe(1);
  await store.remove(id);
 });

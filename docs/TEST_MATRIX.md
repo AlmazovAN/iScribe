@@ -222,3 +222,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - CP-01 bounded chunk fingerprint, manifest publication, corruption, profile identity, raw JSON and cancellation — exact manager standalone tsc + 8/8 Node PASS; Vitest NOT TESTED.
 - CP-02 IndexedDB v1/v2->v3 migration, source contract, old reader rejection and job deletion; JobRunner commit failure/replay, invalid RAW and speaker cancellation — tests authored, NOT TESTED.
 - CP-03 real file:// SHA-256, storage quota, resumed stream window 41, rollback rehearsal and exact candidate local CI — NOT TESTED.
+
+## PIPE-05 candidate gates
+- REC-01 durable attempt/cycle arithmetic, shared retry cap, stale metadata, valid RAW at exhaustion, numeric export — exact standalone tsc + 8/8 Node PASS, Vitest NOT TESTED.
+- REC-02 JobStore and JobRunner fault injection, retry across reload, two-attempt split/whole stream path, reservation failure, Watchdog disposal, diarization and RAW replay — tests authored, NOT TESTED.
+- REC-03 exact release candidate local CI, reconciliation with #76, real-device fault/reload and performance acceptance — NOT TESTED.

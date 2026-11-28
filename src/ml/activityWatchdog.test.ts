@@ -106,3 +106,11 @@ it('ignores late stage transitions, heartbeats and results after a PCM timeout',
  beat();begin(500);done(42);await vi.advanceTimersByTimeAsync(500);
  expect(close).toHaveBeenCalledOnce();
 });
+
+it('PIPE-05 rejects unconfirmed disposal instead of allowing an automatic retry',async()=>{
+ vi.useFakeTimers();
+ const close=vi.fn(()=>{throw new Error('native disposal failed')});
+ const result=withActivityWatchdog(()=>new Promise<void>(()=>{}),{timeoutMs:30,pollMs:5,visibility:null,onTimeout:close});
+ const assertion=expect(result).rejects.toMatchObject({code:'worker-disposal-failed',name:'WorkerDisposalError'});
+ await vi.advanceTimersByTimeAsync(35);await assertion;expect(close).toHaveBeenCalledOnce();
+});

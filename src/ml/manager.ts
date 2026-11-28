@@ -254,8 +254,8 @@ export class ModelManager{
    worker=createEngineWorker();this.speakerWorker=worker;const requestId='speakers-'+generation;
    const turns=await withActivityWatchdog(heartbeat=>new Promise<SpeakerTurn[]>((resolve,reject)=>{
     this.rejectPreload=reject;
-    worker!.addEventListener('error',()=>reject(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.')));
-    worker!.addEventListener('messageerror',()=>reject(new Error('Ошибка сообщения Worker диаризации.')));
+    worker!.addEventListener('error',()=>reject(Object.assign(new Error('Worker диаризации завершился с ошибкой. Текст сохранён.'),{code:'worker-failed'})));
+    worker!.addEventListener('messageerror',()=>reject(Object.assign(new Error('Ошибка сообщения Worker диаризации.'),{code:'worker-failed'})));
     worker!.addEventListener('message',(event:MessageEvent<unknown>)=>{
      const d=event.data;if(stopped||!d||typeof d!=='object'||!('type' in d)||generation!==this.generation)return;
      if(d.type==='iscribe:wasm-thread-config'){
