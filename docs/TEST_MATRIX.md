@@ -207,3 +207,8 @@ DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web bui
 
 
 DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real full FFmpeg decode exit 1 twice, root cause unknown. New bounded diagnostic categories and real synthetic MP3 browser test; revised candidate NOT TESTED. Strict decode/PCM policies unchanged.
+
+## PIPE-02 candidate gates
+- PCM-01 unique sample metrics across overlap; quiet/out-of-range finite audio unchanged; final callback cancellation — isolated logic partial PASS, Vitest NOT TESTED.
+- PCM-02 absolute index and exact coverage; full and stream failure retain checkpoints; prefetch evidence published at consumption — isolated logic partial PASS, integration NOT TESTED.
+- PCM-03 real recording decode quality, memory/time regression and local full gates — NOT TESTED.
