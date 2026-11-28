@@ -3,6 +3,7 @@ import {PCM_SAMPLE_RATE,inspectDecodedPcm} from './audioValidation';
 import workerSource from './ffmpegWorker.js?raw';
 import errorClassifier from './ffmpegErrorClassifier.js?raw';
 import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails} from './decoderDiagnostics';
+import {WorkerRetirement} from './performance/resourceLifecycle';
 
 export const FFMPEG_CORE_ASSET='assets/ffmpeg-core-0.12.10.js';
 export const FFMPEG_WASM_ASSET='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
@@ -39,6 +40,8 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
  const assets=ffmpegWorkerAssets(workerSource);
  const source=URL.createObjectURL(assets.script);
  let worker:Worker|undefined;
+ const retirement=new WorkerRetirement();
+ const terminate=()=>{const owned=worker;worker=undefined;retirement.terminate(owned)};
  try{
   worker=new Worker(source);
   const active=worker;
@@ -66,10 +69,10 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
    catch(error){finish(error);}
   });
   // Release the WASM heap before PCM inspection / Whisper.
-  active.terminate();worker=undefined;
+  terminate();
   signal?.throwIfAborted();
   const pcm=readFfmpegPcm(buffer);
   await inspectDecodedPcm(pcm,{signal});
   return pcm;
- }finally{worker?.terminate();URL.revokeObjectURL(source)}
+ }finally{try{terminate()}finally{URL.revokeObjectURL(source)}}
 }
