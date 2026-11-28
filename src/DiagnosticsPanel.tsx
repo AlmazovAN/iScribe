@@ -1,9 +1,10 @@
 import {expectedWindows} from './jobDiagnostics';
 import type {Job} from './jobs';
 import {qualitySummary} from './ml/asrQuality';
+import {validateAlignmentCheckpoint} from './ml/forcedAlignment';
 
-export function DiagnosticsPanel({job,jobs,onSelect,onLog}:{
- job:Job|undefined;jobs:Job[];onSelect:(id:string)=>void;onLog:(id:string)=>void;
+export function DiagnosticsPanel({job,jobs,onSelect,onLog,onAlignment}:{
+ job:Job|undefined;jobs:Job[];onSelect:(id:string)=>void;onLog:(id:string)=>void;onAlignment?:(id:string)=>void;
 }){
  const total=expectedWindows(job?.duration,job?.windowPlan);
  const current=job&&total!==null?Math.min(total,Math.max(1,job.nextWindow+1)):null;
@@ -16,6 +17,7 @@ export function DiagnosticsPanel({job,jobs,onSelect,onLog}:{
   </select>
   <span className="diagnostics-window" aria-live="polite">Номер окна: {current??'—'} из {total??'—'}</span>
   {quality&&<span className="diagnostics-window" title={'Повторы: '+quality.repeatWindows+'; текст при почти нулевом сигнале: '+quality.silentTextWindows+'; таймкоды: '+quality.timestampWindows}>Контроль ASR: {quality.warningWindows} из {quality.examinedWindows} окон с предупреждениями</span>}
+  {job&&validateAlignmentCheckpoint(job.alignmentCheckpoint)&&<><span className="diagnostics-window">Alignment: {job.alignmentCheckpoint.alignedSegments} из {job.alignmentCheckpoint.segmentCount} сегментов</span>{onAlignment&&<button type="button" title="Локальный файл содержит текст записи" onClick={()=>onAlignment(job.id)}>JSON слов</button>}</>}
   <button type="button" disabled={!job} onClick={()=>{if(job)onLog(job.id)}}>Логирование JSON</button>
  </section>;
 }
