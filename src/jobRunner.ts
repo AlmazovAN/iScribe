@@ -328,7 +328,7 @@ export class JobRunner{
       const job=this.job(id);
       const failure=createFailureDiagnostic(job,this.cancelled?'cancelled':'execution-error',message(error),job.backend??this.state.backend,this.committedWindows.get(id)??job.nextWindow);
       this.traceEvent(id,this.cancelled?'job-cancelled':'job-error','job',{errorKind:this.cancelled?'cancelled':traceErrorKind(error),committedWindows:job.nextWindow,backend:traceBackend(job.backend??this.state.backend)});
-      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure,queueOrder:undefined});
+      this.patch(id,{stage:this.cancelled?'cancelled':job.asrComplete?'partial':'error',status:this.cancelled?'Отменено. Полученный текст сохранён.':job.asrComplete?'Текст готов. Разделение говорящих не завершено.':error instanceof RecoveryExhaustedError?'Лимит восстановления исчерпан. Сохранённый текст доступен.':'Обработка прервана. Можно продолжить.',error:this.cancelled?undefined:message(error),percent:null,failure,queueOrder:undefined});
       try{await this.persist(id)}catch{/* Keep available text in memory and the storage error visible. */}
       if(!this.cancelled&&this.job(id).asrComplete){try{this.export(id,'plain');this.set({notice:'Разделение говорящих не завершено. Автоскачивание готового текста запрошено; ручные кнопки доступны.'})}catch{/* Manual exports remain available. */}}
      }finally{
@@ -379,6 +379,10 @@ export class JobRunner{
  }
  private finishAttempt(id:string,operation:RecoveryOperation,unit=0){
   this.patch(id,{recoveryLedger:finishOperation(this.job(id).recoveryLedger!,operation,unit)});
+ }
+ private confirmReusedAttempt(id:string,operation:RecoveryOperation,unit=0){
+  const previous=this.job(id).recoveryLedger?.operations[operation];
+  if(previous?.unit===unit&&!previous.done)this.finishAttempt(id,operation,unit);
  }
  private async readAudio(id:string,file:File){
   const signal=this.abort!.signal;
@@ -478,7 +482,7 @@ export class JobRunner{
   const audio=await pipeline.run('decode',async()=>{
    if(checkpoints&&this.activeDecoder?.route==='full'){
     const cached=await checkpoints.loadPcm(this.checkpointProfile(id));
-    if(cached){this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'pcm',artifactState:'reused'});return cached}
+    if(cached){this.confirmReusedAttempt(id,'full-decode');this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'pcm',artifactState:'reused'});return cached}
    }
    const decoded=await this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted));
    if(checkpoints&&decoded instanceof Float32Array){
@@ -722,6 +726,7 @@ export class JobRunner{
      const raw=await checkpoints.loadRaw('diarization',inputs);
      if(raw!==undefined){
       if(!Array.isArray(raw))throw new CheckpointIntegrityError();
+      this.confirmReusedAttempt(id,'diarization');
       this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'diarization',artifactState:'reused'});
       return raw as SpeakerTurns;
      }
@@ -817,6 +822,7 @@ export class JobRunner{
     if(cachedWindow){
      const report=await inspectDecodedPcm(cachedWindow,{signal:this.abort!.signal,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start});
      pcm=cachedWindow;
+     this.confirmReusedAttempt(id,'stream-window',index+1);
      this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'reused',window:index+1,pcmQuality:report.quality});
     }else if(session&&pipeline){
      const waitStarted=benchmarkNow(),prefetched=await pipeline.take(index);this.check();
@@ -998,7 +1004,7 @@ export class JobRunner{
   for(;;){
    const attempt=this.reserveAttempt(id,'diarization');await this.persist(id);this.check();
    try{const turns=await this.runDiarizationAttempt(id,audio);this.finishAttempt(id,'diarization');return turns}
-   catch(error){this.check();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();}
+   catch(error){this.check();if(!shouldRetryAsrWindow(error,attempt))throw error;this.resources.restrictAfterRecovery();this.manager.forceSingleWasmThread=true;}
   }
  }
  private async runDiarizationAttempt(id:string,audio:Float32Array):Promise<SpeakerTurns>{
