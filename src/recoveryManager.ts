@@ -18,7 +18,7 @@ export function validLedger(value:unknown):value is RecoveryLedger{
  if(!value||typeof value!=='object')return false;
  const v=value as RecoveryLedger;
  if(v.revision!==1||!integer(v.serial,0)||!integer(v.totalRecoveries,0,MAX_JOB_RECOVERIES)||!v.operations||typeof v.operations!=='object'||Array.isArray(v.operations))return false;
- return Object.entries(v.operations).every(([key,r])=>RECOVERY_OPERATIONS.includes(key as RecoveryOperation)&&r&&integer(r.unit,0)&&integer(r.cycle,1)&&integer(r.attempts,1,MAX_OPERATION_ATTEMPTS)&&typeof r.done==='boolean');
+ return Object.entries(v.operations).every(([key,r])=>RECOVERY_OPERATIONS.includes(key as RecoveryOperation)&&r&&integer(r.unit,0)&&(key==='asr'||key==='stream-window'?r.unit>=1:r.unit===0)&&integer(r.cycle,1)&&integer(r.attempts,1,MAX_OPERATION_ATTEMPTS)&&typeof r.done==='boolean');
 }
 function checked(ledger:RecoveryLedger):RecoveryLedger{
  if(!validLedger(ledger))throw new Error('Некорректный журнал попыток восстановления.');
@@ -29,8 +29,9 @@ export function initialLedger(historicalRetries=0):RecoveryLedger{
 }
 export function reserveOperation(ledger:RecoveryLedger,operation:RecoveryOperation,unit=0):RecoveryLedger{
  checked(ledger);
- if(!integer(unit,0))throw new Error('Некорректный идентификатор операции восстановления.');
+ if(!integer(unit,0)||(operation==='asr'||operation==='stream-window'?unit<1:unit!==0))throw new Error('Некорректный идентификатор операции восстановления.');
  const old=ledger.operations[operation];
+ if(old&&old.unit<unit&&!old.done)throw new Error('Предыдущее окно не завершено.');
  if(old&&old.unit>unit)throw new Error('Нельзя вернуться к предыдущему окну восстановления.');
  // A completed full decode, stream read/open or speaker pass can be needed
  // again by explicit resume/reprocessing. ASR may never replay a committed unit.
@@ -62,6 +63,18 @@ export function assertRecoveryForward(old:RecoveryLedger|undefined,next:Recovery
   if(!before)continue;
   if(!after||after.unit<before.unit||after.unit===before.unit&&(after.cycle<before.cycle||after.cycle===before.cycle&&(after.attempts<before.attempts||before.done&&!after.done)))
    throw new Error('Нельзя сбросить сохранённые попытки восстановления.');
-  if(after.unit===before.unit&&after.cycle>before.cycle&&!before.done)throw new Error('Нельзя начать новый цикл незавершённой операции.');
+  if((after.unit>before.unit||after.unit===before.unit&&after.cycle>before.cycle)&&!before.done)throw new Error('Нельзя начать новый цикл незавершённой операции.');
  }
+}
+
+// Export only closed keys and numeric/boolean values, even if a stored record
+// contains unexpected fields. Do not copy the persisted object wholesale.
+export function recoveryReport(value:unknown):RecoveryLedger|null{
+ if(!validLedger(value))return null;
+ const operations:RecoveryLedger['operations']={};
+ for(const op of RECOVERY_OPERATIONS){
+  const r=value.operations[op];
+  if(r)operations[op]={unit:r.unit,cycle:r.cycle,attempts:r.attempts,done:r.done};
+ }
+ return {revision:1,serial:value.serial,totalRecoveries:value.totalRecoveries,operations};
 }
