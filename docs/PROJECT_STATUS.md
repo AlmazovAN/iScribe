@@ -141,3 +141,6 @@ Shared PCM gate now exposes numeric quality evidence and absolute source positio
 
 ## PIPE-03 candidate
 JobRunner now executes nine existing operations via a typed run-local controller. ASR/speaker methods separated, stage lifecycle reported, existing atomic checkpoints retained. Standalone controller tsc + 7/7 Node smoke PASS; full CI and real hardware NOT TESTED. See [PIPE-03](PIPE-03_PIPELINE_ORCHESTRATOR.md).
+
+## PIPE-04 candidate
+CheckpointManager stores full PCM, temporary stream window PCM, RAW ASR and RAW speaker intervals independently in additive IndexedDB v3; existing durable text transaction retained. Exact manager tsc + Node Web Crypto 8/8 PASS; full CI, real migration and hardware NOT TESTED. Old v2 binaries cannot reopen upgraded DB. See [PIPE-04](PIPE-04_CHECKPOINT_MANAGER.md).

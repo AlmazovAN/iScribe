@@ -744,3 +744,64 @@ it('PIPE-02 publishes numeric quality for full decode, preserving exact silence 
  expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'audio-check-pass',pcmQuality:expect.objectContaining({zeroSamples:960000})})]));
  await store.remove(id);
 });
+
+it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without duplicating text',async()=>{
+ const {fake,store,decode}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await runner.init();
+ await runner.add([new File(['fixture source'],'pipe04-replay.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ const save=store.save.bind(store);let fail=true;
+ vi.spyOn(store,'save').mockImplementation(async(job,file)=>{
+  if(fail&&job.id===id&&job.nextWindow===1){fail=false;throw new Error('injected transaction failure')}
+  return save(job,file);
+ });
+ runner.enqueue(id);await finished(runner);
+ expect((await store.get(id,false))!).toMatchObject({stage:'error',nextWindow:0,segments:[]});
+ expect(fake.transcribe).toHaveBeenCalledTimes(1);expect(decode).toHaveBeenCalledTimes(1);
+ const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ const result=(await store.get(id,false))!;
+ expect(result).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
+ expect(result.segments).toHaveLength(3);
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
+ expect(result.trace).toEqual(expect.arrayContaining([
+  expect.objectContaining({code:'checkpoint-artifact',artifactStage:'pcm',artifactState:'reused'}),
+  expect.objectContaining({code:'checkpoint-artifact',artifactStage:'asr',artifactState:'reused',window:1})
+ ]));
+ await store.remove(id);
+});
+it('PIPE-04 preserves invalid RAW timestamps and does not repeat inference on resume',async()=>{
+ const {fake,store,decode}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await runner.init();
+ await runner.add([new File(['fixture source'],'pipe04-invalid-raw.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockResolvedValueOnce([{start:NaN,end:4,text:'invalid timestamp'}]);
+ runner.enqueue(id);await finished(runner);
+ expect(await store.get(id,false)).toMatchObject({stage:'error',nextWindow:0,segments:[]});
+ runner.enqueue(id);await finished(runner);
+ expect(await store.get(id,false)).toMatchObject({stage:'error',nextWindow:0,segments:[]});
+ expect(fake.transcribe).toHaveBeenCalledTimes(1);expect(decode).toHaveBeenCalledTimes(1);
+ await store.remove(id);
+});
+it('PIPE-04 resumes raw speaker intervals after cancellation before assignment',async()=>{
+ const {fake,store,decode}=setup();
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await runner.init();
+ await runner.add([new File(['fixture source'],'pipe04-speakers.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ const put=store.putArtifact.bind(store);let cancel=true;
+ vi.spyOn(store,'putArtifact').mockImplementation(async(jobId,key,value)=>{
+  await put(jobId,key,value);
+  if(cancel&&jobId===id&&key.startsWith('diarization-raw-v1:')){cancel=false;runner.cancel()}
+ });
+ runner.enqueue(id);await finished(runner);
+ const interrupted=(await store.get(id,false))!;
+ expect(interrupted.asrComplete).toBe(true);expect(interrupted.speakerSegments).toBeUndefined();
+ expect(fake.diarize).toHaveBeenCalledTimes(1);
+ runner.enqueue(id);await finished(runner);
+ expect(fake.diarize).toHaveBeenCalledTimes(1);expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
+ expect((await store.get(id,false))?.speakerSegments).toHaveLength(3);
+ await store.remove(id);
+});

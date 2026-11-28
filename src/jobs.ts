@@ -12,7 +12,7 @@ export type SpeakerDiagnostics={turns:number;unlabeled:number;segments:number;ze
 export type WindowInspectionStrategy='whole'|'split';
 export type WindowInspection={window:number;strategy:WindowInspectionStrategy;status:'passed'|'failed'|'cancelled';checkedAt:number;elapsedMs:number;startSample?:number;endSample?:number;totalWindows?:number;report?:AudioInspectionReport;errorKind?:TraceErrorKind;failureStage?:StreamStage;completedParts:number};
 export type JobStage='waiting'|'queued'|'preparing'|'recognizing'|'speakers'|'done'|'partial'|'interrupted'|'cancelled'|'error';
-export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];streamRecovery?:StreamRecoveryState;decoderIdentity?:DecoderIdentity;fullDecodeRecoveries?:number;audioCheck?:AudioCheck;windowInspections?:WindowInspection[];benchmark?:JobBenchmark;diagnostics?:SpeakerDiagnostics;};
+export type Job={id:string;name:string;size:number;duration?:number;params:JobParams;stage:JobStage;status:string;percent:number|null;segments:TranscriptSegment[];volatileSegments?:TranscriptSegment[];speakerSegments?:TranscriptSegment[];asrComplete:boolean;nextWindow:number;updated:number;queueOrder?:number;backend?:string;failure?:JobFailure;error?:string;trace?:TraceEvent[];streamRecovery?:StreamRecoveryState;decoderIdentity?:DecoderIdentity;sourceFingerprint?:string;artifactContract?:string;fullDecodeRecoveries?:number;audioCheck?:AudioCheck;windowInspections?:WindowInspection[];benchmark?:JobBenchmark;diagnostics?:SpeakerDiagnostics;};
 export const isRunning=(stage:JobStage)=>['preparing','recognizing','speakers'].includes(stage);
 export function recoverJob(job:Job,observedExit:PageExitEvent|null=null):Job{
  // Queued work is durable intent, not an interrupted inference. A legacy
@@ -40,7 +40,7 @@ export function audioWindows(samples:number,streamed=false){
 export function absoluteSegments(segments:TranscriptSegment[],window:ReturnType<typeof audioWindows>[number]){
  const offset=window.start/16000;
  return segments.map(s=>{
-  if(!s||!Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start<0||s.end<s.start||
+  if(!s||typeof s.text!=='string'||!Number.isFinite(s.start)||!Number.isFinite(s.end)||s.start<0||s.end<s.start||
      s.end>(window.end-window.start)/16000+1)
    throw new Error('Некорректные временные метки ASR в текущем окне. Контрольная точка не изменена.');
   return {...s,start:s.start+offset,end:s.end+offset};

@@ -104,3 +104,5 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 PIPE-02: finite PCM and advisory signal statistics cannot establish absence of compressed frame damage, speech loss or discontinuity between independent windows. Actual validation cost and real audio acceptance remain pending. PIPE-01/#76 remain unaccepted.
 
 PIPE-03: stage trace observations are not independent durable checkpoints; abrupt closure can lose latest stage events. Streaming decode-open/PCM deferred does not prove all windows valid. VAD, forced alignment and streaming speaker support remain unimplemented; stage persistence is PIPE-04. Full project gates pending.
+
+PIPE-04: database v3 upgrade is forward-only for older v2 readers; require separate-profile migration rehearsal before deployment. Full PCM cache consumes local quota; orphan stream PCM can remain after abrupt exit until job removal; no immutable model weight hashes, no independent VAD/alignment or full reusable streamed PCM yet. Source uses SHA-256-of-chunk-hashes, not standard whole-file hash. Browser Web Crypto and actual storage/performance gates pending.

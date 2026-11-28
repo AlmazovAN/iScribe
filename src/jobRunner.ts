@@ -11,6 +11,7 @@ import {createFailureDiagnostic,consumePageExit} from './jobDiagnostics';
 import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,traceBackend,traceErrorKind,traceHeapBytes,type StreamStage,type TraceCode,type TracePhase,type TraceEvent} from './jobTrace';
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow,type CheckpointProgress} from './recognitionProgress';
 import {PipelineOrchestrator} from './pipelineOrchestrator';
+import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError,ARTIFACT_CONTRACT} from './checkpointManager';
 import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,reserveStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
@@ -56,6 +57,7 @@ export class JobRunner{
  private openStream?:typeof openSelectedStream;
  private activeDecoder?:DecoderIdentity;
  private readonly requestedDecoder:AudioDecoderKind;
+ private readonly checkpointArtifacts:boolean;
  private initialization:Promise<void>|undefined;
  private lease:Promise<unknown>|undefined;
  private committedWindows=new Map<string,number>();
@@ -70,12 +72,14 @@ export class JobRunner{
  private readonly streamResampleIdleMs:number;
  private readonly streamPcmIdleMs:number;
  private readonly streamRotateWindows:number;
- constructor(options:{decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
+ constructor(options:{checkpointArtifacts?:boolean;decoderPreference?:AudioDecoderKind;backendPolicy?:BackendPolicy;resources?:ResourceManager;boundaryWait?:typeof waitAtBoundary;store?:JobStore;manager?:ModelManager;decode?:typeof decodeAudio;openStream?:typeof openSelectedStream;download?:typeof downloadTranscript;downloadDiagnostic?:typeof downloadDiagnosticJson;asrIdleMs?:number;streamOpenIdleMs?:number;streamDecodeIdleMs?:number;streamResampleIdleMs?:number;streamPcmIdleMs?:number;streamRotateWindows?:number}={}){
   this.backendPolicy=options.backendPolicy??new BackendPolicy();
   this.resources=options.resources??new ResourceManager();this.boundaryWait=options.boundaryWait??waitAtBoundary;
   this.state={...this.state,performanceMode:this.resources.selected};
   this.store=options.store??new JobStore();this.manager=options.manager??new ModelManager();this.decode=options.decode;this.download=options.download??downloadTranscript;this.diagnosticDownload=options.downloadDiagnostic??downloadDiagnosticJson;
   this.openStream=options.openStream;
+  // Injected runtimes are not the pinned production decoder/model. Tests may opt in explicitly.
+  this.checkpointArtifacts=options.checkpointArtifacts??(!options.decode&&!options.openStream&&!options.manager);
    // Injected test/alternate runtimes do not claim to be real FFmpeg.
    this.requestedDecoder=options.decoderPreference??(options.decode||options.openStream?'legacy':chooseAudioDecoder(typeof location==='undefined'?'':location.search).kind);
   this.asrIdleMs=options.asrIdleMs??DEFAULT_ASR_IDLE_MS;
@@ -391,7 +395,7 @@ export class JobRunner{
  private check(){if(this.cancelled)throw new Error('Отменено.')}
  private async execute(id:string){
   const disk=await this.store.get(id);this.check();
-  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined)){
+  if(disk&&(disk.asrComplete||disk.nextWindow>this.job(id).nextWindow||disk.decoderIdentity!==undefined||disk.fullDecodeRecoveries!==undefined||disk.sourceFingerprint!==undefined)){
    this.patch(id,{...disk,stage:'queued'});this.committedWindows.set(id,disk.nextWindow);
   }
   const resumed=this.job(id).nextWindow>0||this.job(id).asrComplete;
@@ -402,8 +406,9 @@ export class JobRunner{
   this.traceEvent(id,'audio-start','audio');
   const pipeline:JobPipeline=new PipelineOrchestrator(this.abort!.signal,(event,error)=>{
    this.traceEvent(id,'pipeline-stage','job',{pipelineStage:event.stage,pipelineState:event.state,pipelineReason:event.reason,elapsedMs:event.elapsedMs,
-    ...(event.state==='failed'||event.state==='cancelled'?{errorKind:event.state==='cancelled'?'cancelled':traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)}:{})});
+    ...(event.state==='failed'||event.state==='cancelled'?{errorKind:event.state==='cancelled'?'cancelled':traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),...(error instanceof CheckpointIntegrityError?{artifactIntegrityFailure:true}:{})}:{})});
   },benchmarkNow);
+  let checkpoints:CheckpointManager|undefined;
   const file=await pipeline.run('preflight',async()=>{
   this.patch(id,{stage:'preparing',status:'Подготовка аудио',percent:null,error:undefined,volatileSegments:undefined});await this.persist(id);this.check();
   const file=await this.store.audio(id);this.check();if(!file)throw new Error('Исходное аудио недоступно. Добавьте файл заново; сохранённый текст можно скачать.');
@@ -412,15 +417,40 @@ export class JobRunner{
    this.activeDecoder=identity;
    this.patch(id,{decoderIdentity:identity});
    this.traceEvent(id,'decoder-selected','audio',{decoderKind:identity.kind,decoderRoute:identity.route});
+   // Historical committed jobs without a fingerprint retain their old path.
+   if(this.checkpointArtifacts&&identity.kind==='ffmpeg'&&(!resumed||this.job(id).sourceFingerprint)){
+    this.set({operation:'Проверка идентичности аудио'});
+    const fingerprint=await sourceFingerprint(file,this.abort!.signal);this.check();
+    const previous=this.job(id).sourceFingerprint;
+    if(previous&&(previous!==fingerprint||this.job(id).artifactContract!==ARTIFACT_CONTRACT))throw new CheckpointIntegrityError();
+    this.patch(id,{sourceFingerprint:fingerprint,artifactContract:ARTIFACT_CONTRACT});
+    checkpoints=new CheckpointManager(this.store,id,fingerprint,this.abort!.signal);
+   }
    await this.persist(id);this.check();
    return file;
   });
   const audioStarted=Date.now(),decodeStarted=benchmarkNow();
-  const audio=await pipeline.run('decode',()=>this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted)));
+  const audio=await pipeline.run('decode',async()=>{
+   if(checkpoints&&this.activeDecoder?.route==='full'){
+    const cached=await checkpoints.loadPcm(this.checkpointProfile(id));
+    if(cached){this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'pcm',artifactState:'reused'});return cached}
+   }
+   const decoded=await this.readAudio(id,file).finally(()=>this.perf(id,usesStreamedAudio(file.size)?'streamOpen':'fullAudioPreparation',benchmarkNow()-decodeStarted));
+   if(checkpoints&&decoded instanceof Float32Array){
+    await checkpoints.savePcm(this.checkpointProfile(id),decoded);
+    this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'pcm',artifactState:'saved'});
+   }
+   return decoded;
+  });
   const session=audio instanceof Float32Array?undefined:this.newStreamSession(audio);
   let completed=false;
-  try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,pipeline,session);completed=true}
+  try{await this.executeAudio(id,audio,audioStarted,decodeStarted,file,pipeline,session,checkpoints);completed=true}
   finally{if(session)this.closeStreamSession(id,session,completed?'finish':this.cancelled?'cancel':'error')}
+ }
+ private checkpointProfile(id:string){
+  // The pending #76 recovery PR pins a separate sample count for recovered PCM.
+  const job=this.job(id) as Job&{fullFrameRecoveryExpectedSamples?:number};
+  return decoderProfile(this.activeDecoder!,job.fullFrameRecoveryExpectedSamples);
  }
  private newStreamSession(audio:StreamedAudio):StreamSession{return {audio,windows:0,rotations:0,closed:false}}
  private closeStreamSession(id:string,session:StreamSession,reason:'rotation'|'recovery'|'finish'|'error'|'cancel'){
@@ -611,7 +641,7 @@ export class JobRunner{
    }
   }
  }
- private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,pipeline:JobPipeline,session?:StreamSession){
+ private async executeAudio(id:string,audio:Float32Array|StreamedAudio,audioStarted:number,decodeStarted:number,file:File,pipeline:JobPipeline,session?:StreamSession,checkpoints?:CheckpointManager){
   const streamed=!(audio instanceof Float32Array);
   await pipeline.run('pcm-gate',async()=>{
   this.check();
@@ -633,13 +663,29 @@ export class JobRunner{
     // A corrupted checkpoint must never masquerade as a completed transcript.
     return {windows,initial:checkpointProgress(windows,this.job(id).nextWindow)};
    });
-   await pipeline.run('asr',()=>this.runAsr(id,audio,file,params,plan,session));
+   await pipeline.run('asr',()=>this.runAsr(id,audio,file,params,plan,session,checkpoints));
   }else{
    pipeline.skip({stage:'segmentation',reason:'asr-already-committed'});
    pipeline.skip({stage:'asr',reason:'asr-already-committed'});
   }
   if(params.diarize&&audio instanceof Float32Array){
-   const turns=await pipeline.run('diarization',()=>this.runDiarization(id,audio));
+   const turns=await pipeline.run('diarization',async()=>{
+    if(!checkpoints)return this.runDiarization(id,audio);
+    const inputs=[this.checkpointProfile(id),await checkpoints.pcmInput(audio),'speaker-engine-0.1.1-wasm-v1'];
+    // Explicit retry after a published speaker assignment remains a real retry.
+    if(this.job(id).speakerSegments===undefined){
+     const raw=await checkpoints.loadRaw('diarization',inputs);
+     if(raw!==undefined){
+      if(!Array.isArray(raw))throw new CheckpointIntegrityError();
+      this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'diarization',artifactState:'reused'});
+      return raw as SpeakerTurns;
+     }
+    }
+    const result=await this.runDiarization(id,audio);
+    await checkpoints.saveRaw('diarization',inputs,result);
+    this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'diarization',artifactState:'saved'});
+    return result;
+   });
    await pipeline.run('speaker-assignment',()=>this.runSpeakerAssignment(id,turns));
   }else{
    const reason=params.diarize?'streaming-speakers-unavailable':'speakers-disabled';
@@ -661,7 +707,7 @@ export class JobRunner{
    catch(error){this.set({notice:'Используйте ручное скачивание TXT. '+message(error)});return 'manual'}
   });
  }
- private async runAsr(id:string,audio:Float32Array|StreamedAudio,file:File,params:JobParams,plan:SpeechPlan,session?:StreamSession){
+ private async runAsr(id:string,audio:Float32Array|StreamedAudio,file:File,params:JobParams,plan:SpeechPlan,session?:StreamSession,checkpoints?:CheckpointManager){
   const streamed=!(audio instanceof Float32Array);
   const {windows,initial}=plan;
    this.manager.resourcePolicy=this.resources.policy();
@@ -719,7 +765,15 @@ export class JobRunner{
     // be appended again, and checkpoints remain unchanged until commit().
     this.traceEvent(id,'window-start','asr',{window:index+1,totalWindows:windows.length,startSample:window.start,endSample:window.end,pcmSamples:window.end-window.start,committedWindows:this.job(id).nextWindow,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
     let pcm:Float32Array;
-    if(session&&pipeline){
+    const profile=checkpoints?this.checkpointProfile(id):undefined;
+    // The first uncommitted window has no speculative reads yet. Later
+    // windows keep the normal prefetch ordering and cannot jump the queue.
+    const cachedWindow=checkpoints&&profile&&session&&index===initial.completedWindows?await checkpoints.loadWindow(profile,window.start,window.end):undefined;
+    if(cachedWindow){
+     const report=await inspectDecodedPcm(cachedWindow,{signal:this.abort!.signal,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start});
+     pcm=cachedWindow;
+     this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'reused',window:index+1,pcmQuality:report.quality});
+    }else if(session&&pipeline){
      const waitStarted=benchmarkNow(),prefetched=await pipeline.take(index);this.check();
      if(prefetched){
       const waitMs=benchmarkNow()-waitStarted;
@@ -753,10 +807,18 @@ export class JobRunner{
      }else pcm=(await this.readRecoverableStreamWindow(id,session,file,window,index,windows.length)).pcm;
     }else if(audio instanceof Float32Array)pcm=audio.subarray(window.start,window.end);
     else throw new Error('Потоковый декодер недоступен.');
+    if(checkpoints&&profile&&session&&!cachedWindow){
+     await checkpoints.saveWindow(profile,window.start,window.end,pcm);
+     this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'saved',window:index+1});
+    }
+    const rawInputs=checkpoints?[profile,window.start,window.end,await checkpoints.pcmInput(pcm),params.model,params.language,'engine-0.1.1-transformers-4.3.1-asr-v1']:undefined;
+    const raw=checkpoints&&rawInputs?await checkpoints.loadRaw('asr',rawInputs):undefined;
+    if(raw!==undefined&&!Array.isArray(raw))throw new CheckpointIntegrityError();
     this.set({operation:'Распознавание'});
     this.patch(id,{status:currentWindowLabel(windows,index)+' · сохранено '+index+' / '+windows.length+' окон · backend: '+(this.manager.capabilities?.active??this.state.backend)});
-    let result:TranscriptSegment[]|undefined,successfulAttemptMs=0;
-    for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
+    let result:TranscriptSegment[]|undefined=raw as TranscriptSegment[]|undefined,successfulAttemptMs=0;
+    if(raw!==undefined)this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'asr',artifactState:'reused',window:index+1});
+    if(raw===undefined)for(let attempt=1;attempt<=MAX_ASR_WINDOW_ATTEMPTS;attempt++){
      this.check();
      this.traceEvent(id,'window-attempt','asr',{window:index+1,totalWindows:windows.length,attempt,backend:traceBackend(this.manager.capabilities?.active??this.state.backend)});
      // Start only read-only lookahead; it cannot commit or reserve retries.
@@ -833,6 +895,13 @@ export class JobRunner{
      }
     }
     if(!result)throw new Error('Окно не вернуло результат распознавания.');
+    // Outside Worker retry: a storage or validation failure must never
+    // automatically repeat a successful inference.
+    if(checkpoints&&rawInputs&&raw===undefined){
+     await checkpoints.saveRaw('asr',rawInputs,result);
+     this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'asr',artifactState:'saved',window:index+1});
+    }
+    this.check();
     const segments=[...this.job(id).segments,...absoluteSegments(result,window)];
     const after=checkpointProgress(windows,index+1);
     if(streamed){
@@ -844,6 +913,10 @@ export class JobRunner{
     }
     const checkpointStarted=benchmarkNow();
     await this.commit(id,{segments,nextWindow:index+1,percent:after.percent,status:checkpointLabel(after)},segments);
+    if(checkpoints&&profile&&session){
+     try{await checkpoints.discardWindow(profile,window.start,window.end)}
+     catch{this.traceEvent(id,'checkpoint-artifact','checkpoint',{artifactStage:'window-pcm',artifactState:'cleanup-failed',window:index+1,errorKind:'storage'})}
+    }
     if(session)session.windows++;
     const checkpointMs=benchmarkNow()-checkpointStarted;
     const uniqueAudioSeconds=(window.end-(index===0?window.start:windows[index-1].end))/16000;

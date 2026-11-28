@@ -5,7 +5,9 @@ import {sameDecoder} from './decoderDiagnostics';
 // Version 2 adds append-only ASR chunks. The legacy jobs/audio stores remain
 // in the same database; a transaction commits text and nextWindow atomically.
 const DB='iscribe-jobs-v1';
-const DB_VERSION=2;
+// v3 adds independent stage artifacts without rewriting v1/v2 jobs.
+const DB_VERSION=3;
+const ARTIFACTS='stage-artifacts-v3';
 const ASR='asr-chunks-v2';
 const SPEAKERS='speaker-results-v2';
 type StoredJob=Omit<Job,'segments'|'speakerSegments'> & {
@@ -16,6 +18,7 @@ type StoredJob=Omit<Job,'segments'|'speakerSegments'> & {
 };
 type AsrChunk={id:string;offset:number;segments:TranscriptSegment[]};
 type SpeakerRecord={id:string;segments:TranscriptSegment[]};
+type ArtifactRecord={id:string;key:string;value:unknown};
 
 function restore(records:readonly StoredJob[],chunks:readonly AsrChunk[],speakers:readonly SpeakerRecord[],recover:boolean):Job[]{
  const byJob=new Map<string,AsrChunk[]>();
@@ -51,16 +54,18 @@ export class JobStore{
  private open():Promise<IDBDatabase>{
   return this.opening??=(new Promise<IDBDatabase>((resolve,reject)=>{
    const request=indexedDB.open(this.dbName,DB_VERSION);
+   let blocked=false;
    request.onupgradeneeded=()=>{
     const db=request.result;
     if(!db.objectStoreNames.contains('jobs'))db.createObjectStore('jobs',{keyPath:'id'});
     if(!db.objectStoreNames.contains('audio'))db.createObjectStore('audio');
     if(!db.objectStoreNames.contains(ASR))db.createObjectStore(ASR,{keyPath:['id','offset']});
     if(!db.objectStoreNames.contains(SPEAKERS))db.createObjectStore(SPEAKERS,{keyPath:'id'});
+    if(!db.objectStoreNames.contains(ARTIFACTS))db.createObjectStore(ARTIFACTS,{keyPath:['id','key']});
    };
-   request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this.opening=undefined};resolve(db)};
+   request.onsuccess=()=>{const db=request.result;if(blocked){db.close();return}db.onversionchange=()=>{db.close();this.opening=undefined};resolve(db)};
    request.onerror=()=>{this.opening=undefined;reject(request.error)};
-   request.onblocked=()=>{this.opening=undefined;reject(new Error('Закройте другие вкладки iScribe для обновления локального хранилища.'))};
+   request.onblocked=()=>{blocked=true;this.opening=undefined;reject(new Error('Закройте другие вкладки iScribe для обновления локального хранилища.'))};
   }));
  }
  async list(recover=true):Promise<Job[]>{
@@ -110,6 +115,8 @@ export class JobStore{
      // reservation, even if its ASR checkpoint is still identical.
      if(old?.decoderIdentity&&(!job.decoderIdentity||!sameDecoder(old.decoderIdentity,job.decoderIdentity)))
       throw new Error('Декодер задания изменился. Обновите страницу.');
+     if(old?.sourceFingerprint&&(old.sourceFingerprint!==job.sourceFingerprint||old.artifactContract!==job.artifactContract))
+      throw new Error('Идентификатор исходного аудио изменился. Добавьте запись как новое задание.');
      if((old?.fullDecodeRecoveries??0)>(job.fullDecodeRecoveries??0))
       throw new Error('Лимит полного декодирования изменился. Обновите страницу.');
      const previous=old?.streamRecovery,next=job.streamRecovery;
@@ -152,9 +159,34 @@ export class JobStore{
    tx.oncomplete=()=>resolve(req.result);tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
   });
  }
+ // Individual records commit atomically. PCM manifests are published last by
+ // CheckpointManager; incomplete chunks are never considered a usable PCM.
+ async getArtifact(id:string,key:string):Promise<unknown>{
+  const db=await this.open();return new Promise((resolve,reject)=>{
+   const tx=db.transaction(ARTIFACTS,'readonly'),request=tx.objectStore(ARTIFACTS).get([id,key]);
+   tx.oncomplete=()=>resolve((request.result as ArtifactRecord|undefined)?.value);
+   tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??new Error('Чтение артефакта прервано.'));
+  });
+ }
+ async putArtifact(id:string,key:string,value:unknown):Promise<void>{
+  const db=await this.open();return new Promise((resolve,reject)=>{
+   const tx=db.transaction(['jobs',ARTIFACTS],'readwrite'),request=tx.objectStore('jobs').get(id);
+   request.onsuccess=()=>{if(!request.result){tx.abort();return}
+    try{tx.objectStore(ARTIFACTS).put({id,key,value} satisfies ArtifactRecord)}catch{tx.abort()}
+   };
+   tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);
+   tx.onabort=()=>reject(tx.error??new Error('Сохранение артефакта прервано.'));
+  });
+ }
+ async deleteArtifact(id:string,key:string):Promise<void>{
+  const db=await this.open();return new Promise((resolve,reject)=>{
+   const tx=db.transaction(ARTIFACTS,'readwrite');tx.objectStore(ARTIFACTS).delete([id,key]);
+   tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??new Error('Удаление артефакта прервано.'));
+  });
+ }
  async remove(id:string):Promise<void>{
   const db=await this.open();return new Promise((resolve,reject)=>{
-   const tx=db.transaction(['jobs','audio',ASR,SPEAKERS],'readwrite');
+   const tx=db.transaction(['jobs','audio',ASR,SPEAKERS,ARTIFACTS],'readwrite');
    tx.objectStore('jobs').delete(id);
    tx.objectStore('audio').delete(id);
    tx.objectStore(SPEAKERS).delete(id);
@@ -165,6 +197,8 @@ export class JobStore{
     const cursor=keys.result;
     if(cursor){chunks.delete(cursor.primaryKey);cursor.continue()}
    };
+   const artifacts=tx.objectStore(ARTIFACTS),artifactKeys=artifacts.openKeyCursor(IDBKeyRange.bound([id,''],[id,'\uffff']));
+   artifactKeys.onsuccess=()=>{const cursor=artifactKeys.result;if(cursor){artifacts.delete(cursor.primaryKey);cursor.continue()}};
    tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error??new Error('Удаление прервано.'));
   });
  }
