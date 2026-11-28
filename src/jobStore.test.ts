@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import {expect,it} from 'vitest';
 import {JobStore} from './jobStore';
 import {createJob,absoluteSegments,audioWindows} from './jobs';
+import {initialLedger,reserveOperation,finishOperation} from './recoveryManager';
 it('recovers committed text and source after reopening, without claiming the worker is still running',async()=>{
  const store=new JobStore(),file=new File(['audio'],'meeting.wav'),job=createJob(file,{model:'whisper-small',language:'ru',diarize:true});
  await store.save({...job,stage:'speakers',asrComplete:true,segments:[{start:0,end:2,text:'Сохранено'}]},file);
@@ -41,4 +42,21 @@ it('rejects stale metadata that would reset durable stream recovery reservations
  expect(saved.nextWindow).toBe(40);
  expect(saved.segments.map(s=>s.text)).toEqual(['saved']);
  await store.remove(job.id);
+});
+
+it('PIPE-05 refuses stale reservation writes and commits completion with text',async()=>{
+ const store=new JobStore(),file=new File(['audio'],'recovery-ledger.wav'),j=createJob(file,{model:'whisper-small',language:'ru',diarize:false});
+ await store.save(j,file);
+ const first=reserveOperation(initialLedger(),'asr',1);
+ await store.save({...j,recoveryLedger:first});
+ const second=reserveOperation(first,'asr',1);
+ await store.save({...j,recoveryLedger:second});
+ await expect(store.save({...j,recoveryLedger:first})).rejects.toThrow('Журнал попыток');
+ await expect(store.save(j)).rejects.toThrow('Журнал попыток');
+ const done=finishOperation(second,'asr',1);
+ await store.save({...j,recoveryLedger:done,nextWindow:1,segments:[{start:1,end:2,text:'committed'}]});
+ const reopened=(await new JobStore().get(j.id,false))!;
+ expect(reopened.recoveryLedger).toEqual(done);
+ expect(reopened.nextWindow).toBe(1);expect(reopened.segments).toHaveLength(1);
+ await store.remove(j.id);
 });
