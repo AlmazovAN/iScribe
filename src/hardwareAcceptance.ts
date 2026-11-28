@@ -84,7 +84,7 @@ export function createHardwareEvidence(
  hints:HardwareObservedContext={browserOnlineHint:null,webgpuApiAvailable:null,
   siteStorageUsageBytes:null,siteStorageQuotaBytes:null}
 ):HardwareEvidenceReport{
- const expected=expectedWindows(job.duration);
+ const expected=expectedWindows(job.duration,job.windowPlan);
  const sourceDuration=validNumber(job.duration);
  const invalid=job.segments.filter(s=>!Number.isFinite(s.start)||!Number.isFinite(s.end)||
   s.start<0||s.end<s.start||typeof s.text!=='string').length;
