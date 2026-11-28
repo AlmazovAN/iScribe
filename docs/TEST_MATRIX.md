@@ -227,3 +227,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - REC-01 durable attempt/cycle arithmetic, shared retry cap, stale metadata, valid RAW at exhaustion, numeric export — exact standalone tsc + 8/8 Node PASS, Vitest NOT TESTED.
 - REC-02 JobStore and JobRunner fault injection, retry across reload, two-attempt split/whole stream path, reservation failure, Watchdog disposal, diarization and RAW replay — tests authored, NOT TESTED.
 - REC-03 exact release candidate local CI, reconciliation with #76, real-device fault/reload and performance acceptance — NOT TESTED.
+
+## PIPE-06 candidate gates
+- LIFE-01 model release decisions, idle lease expiry/cancel, idempotent retirement, failure latch — exact helper standalone tsc + 5/5 Node PASS; Vitest NOT TESTED.
+- LIFE-02 model and decoder ownership/cleanup, early release, queue pause and preservation, abort and recovery — integration tests authored, NOT TESTED.
+- LIFE-03 exact release candidate local CI, 10-file real-device RAM/VRAM regression, cache/idle latency, #76 reconciliation — NOT TESTED.
