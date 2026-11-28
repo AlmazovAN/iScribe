@@ -132,11 +132,12 @@ export async function inspectStreamedAudio(audio:StreamedAudio,signal?:AbortSign
  };
  for(const [index,window] of windows.entries()){
   signal?.throwIfAborted();
-  const check=readChecked?await readChecked(window,index,windows.length):await inspectDecodedPcm(await audio.read(window),{signal});
+  const check=readChecked?await readChecked(window,index,windows.length):await inspectDecodedPcm(await audio.read(window),{signal,startSample:window.start,windowNumber:index+1,expectedSamples:window.end-window.start});
   report.quietWindows+=check.quietWindows;
   report.nearClippedWindows+=check.nearClippedWindows;
   report.peakAbsolute=Math.max(report.peakAbsolute,check.peakAbsolute);
   onProgress?.(index+1,windows.length);
+  signal?.throwIfAborted();
  }
  return report;
 }
