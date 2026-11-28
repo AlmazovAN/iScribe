@@ -754,6 +754,7 @@ it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without d
  await runner.init();
  await runner.add([new File(['fixture source'],'pipe04-replay.wav')],{model:'whisper-small',language:'ru',diarize:false});
  const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.transcribe.mockRejectedValueOnce(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
  const save=store.save.bind(store);let fail=true;
  vi.spyOn(store,'save').mockImplementation(async(job,file)=>{
   if(fail&&job.id===id&&job.nextWindow===1){fail=false;throw new Error('injected transaction failure')}
@@ -761,13 +762,14 @@ it('PIPE-04 reuses full PCM and saved RAW after an ASR commit failure, without d
  });
  runner.enqueue(id);await finished(runner);
  expect((await store.get(id,false))!).toMatchObject({stage:'error',nextWindow:0,segments:[]});
- expect(fake.transcribe).toHaveBeenCalledTimes(1);expect(decode).toHaveBeenCalledTimes(1);
+ expect(fake.transcribe).toHaveBeenCalledTimes(2);expect(decode).toHaveBeenCalledTimes(1);
+ expect((await store.get(id,false))?.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:2,done:false});
  const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
  await resumed.init();resumed.enqueue(id);await finished(resumed);
  const result=(await store.get(id,false))!;
  expect(result).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
  expect(result.segments).toHaveLength(3);
- expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
+ expect(fake.transcribe).toHaveBeenCalledTimes(4);expect(decode).toHaveBeenCalledTimes(1);
  expect(result.trace).toEqual(expect.arrayContaining([
   expect.objectContaining({code:'checkpoint-artifact',artifactStage:'pcm',artifactState:'reused'}),
   expect.objectContaining({code:'checkpoint-artifact',artifactStage:'asr',artifactState:'reused',window:1})
@@ -806,5 +808,67 @@ it('PIPE-04 resumes raw speaker intervals after cancellation before assignment',
  runner.enqueue(id);await finished(runner);
  expect(fake.diarize).toHaveBeenCalledTimes(1);expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledTimes(1);
  expect((await store.get(id,false))?.speakerSegments).toHaveLength(3);
+ await store.remove(id);
+});
+
+it('PIPE-05 persists both ASR reservations before dispatch and refuses a third after reopening',async()=>{
+ const {runner,store,fake,decode}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'durable-retry.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ let dispatched=0;
+ fake.transcribe.mockImplementation(async()=>{
+  dispatched++;
+  const durable=(await store.get(id,false))!;
+  expect(durable.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:dispatched,done:false});
+  throw Object.assign(new Error('Worker crashed'),{code:'worker-failed'});
+ });
+ runner.enqueue(id);await finished(runner);
+ expect(dispatched).toBe(2);expect(fake.recover).toHaveBeenCalledOnce();
+ const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ expect(dispatched).toBe(2);expect(fake.recover).toHaveBeenCalledOnce();
+ const saved=(await store.get(id,false))!;
+ expect(saved).toMatchObject({stage:'error',nextWindow:0,segments:[]});
+ expect(saved.recoveryLedger?.operations.asr).toMatchObject({unit:1,attempts:2,done:false});
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'recovery-exhausted',recoveryOperation:'asr',window:1,recoveryLimit:'operation'})]));
+ await store.remove(id);
+});
+it('PIPE-05 never dispatches inference if the reservation cannot be committed',async()=>{
+ const {runner,store,fake}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'retry-quota.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ const save=store.save.bind(store);
+ vi.spyOn(store,'save').mockImplementation(async(j,file)=>{
+  if(j.id===id&&j.recoveryLedger?.operations.asr?.attempts)throw new Error('injected quota failure');
+  return save(j,file);
+ });
+ runner.enqueue(id);await finished(runner);
+ expect(fake.transcribe).not.toHaveBeenCalled();expect(fake.recover).not.toHaveBeenCalled();
+ expect((await store.get(id,false))?.nextWindow).toBe(0);
+ await store.remove(id);
+});
+it('PIPE-05 bounds full FFmpeg failures across fresh runners',async()=>{
+ const {fake,store}=setup(),decode=vi.fn(async()=>{throw new FfmpegDecoderError('worker','decode')});
+ const runner=new JobRunner({store,manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg'});
+ await runner.init();await runner.add([new File(['fixture'],'full-retry.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);expect(decode).toHaveBeenCalledTimes(2);
+ const resumed=new JobRunner({store:new JobStore(),manager:fake as unknown as ModelManager,decode,decoderPreference:'ffmpeg'});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ expect(decode).toHaveBeenCalledTimes(2);expect(fake.transcribe).not.toHaveBeenCalled();
+ expect((await store.get(id,false))?.recoveryLedger?.operations['full-decode']).toMatchObject({attempts:2,done:false});
+ await store.remove(id);
+});
+it('PIPE-05 retries a transient speaker Worker failure once without replaying committed ASR',async()=>{
+ const {runner,store,fake}=setup();await runner.init();
+ await runner.add([new File(['fixture'],'speaker-retry.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.diarize.mockRejectedValueOnce(Object.assign(new Error('Worker crashed'),{code:'worker-failed'}));
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(fake.diarize).toHaveBeenCalledTimes(2);
+ expect(saved).toMatchObject({stage:'done',nextWindow:3,asrComplete:true});
+ expect(saved.recoveryLedger?.operations.diarization).toMatchObject({attempts:2,done:true});
+ expect(saved.recoveryLedger?.totalRecoveries).toBe(1);
  await store.remove(id);
 });
