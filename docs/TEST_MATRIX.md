@@ -248,3 +248,8 @@ DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real f
 - ASRQ-02 local plain TXT WER normalization/edit distance/bounds/privacy — exact script 4/4 Node smoke PASS; Vitest NOT TESTED.
 - ASRQ-03 RAW replay/invalid metadata, JobRunner warning-preservation, JobStore transaction and full local CI — authored, NOT TESTED.
 - ASRQ-04 real paired WER, hallucination/quiet speech manual review, timing/RTF/memory and #76 reconciliation — NOT TESTED.
+
+## PIPE-10 candidate gates
+- ALIGN-01 exact CTC path, repeated symbols, word offsets, bounds, weak scores, immutable metadata and 200 exhaustive cases — strict standalone tsc + 7/7 Node PASS; Vitest NOT TESTED.
+- ALIGN-02 independent stage, RAW reuse, ordinary fallback, stale metadata and diagnostic privacy — project tests authored, NOT TESTED.
+- ALIGN-03 real RU/EN q8 model loading, output geometry/provider, word accuracy/coverage, resources, local mandatory CI and #76 reconciliation — NOT TESTED.
