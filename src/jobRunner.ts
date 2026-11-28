@@ -1,7 +1,7 @@
 import type {TranscriptSegment} from '@yourdevice/engine';
 import {decodeAudio,usesStreamedAudio,validateFile} from './audio';
 import {chooseAudioDecoder,providerForDecoder,openSelectedStream} from './audioDecoderProvider';
-import {resolveJobDecoder,canRetryFfmpeg,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
+import {resolveJobDecoder,ffmpegFailureFields,type DecoderIdentity,type AudioDecoderKind} from './decoderDiagnostics';
 import type {StreamedAudio} from './streamedAudio';
 import {audioDuration} from './audioMetadata';
 import {inspectDecodedPcm,AudioValidationError,type AudioInspectionReport} from './audioValidation';
@@ -12,7 +12,7 @@ import {appendTrace,pcmValidationFields,diagnosticReport,downloadDiagnosticJson,
 import {checkpointProgress,checkpointLabel,currentWindowLabel,type AudioWindow,type CheckpointProgress} from './recognitionProgress';
 import {PipelineOrchestrator} from './pipelineOrchestrator';
 import {CheckpointManager,sourceFingerprint,decoderProfile,CheckpointIntegrityError,ARTIFACT_CONTRACT} from './checkpointManager';
-import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,isRetryableStreamError,advanceStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
+import {MAX_ASR_WINDOW_ATTEMPTS,shouldRetryAsrWindow,preferWasmAfterFailure,isRetryableFullDecodeError,isRetryableStreamError,advanceStreamRecovery,STREAM_SUBWINDOW_SAMPLES,DEFAULT_STREAM_ROTATE_WINDOWS} from './ml/recoveryPolicy';
 import {initialLedger,reserveOperation,finishOperation,RecoveryExhaustedError,type RecoveryOperation} from './recoveryManager';
 import {DEFAULT_ASR_IDLE_MS,DEFAULT_STREAM_OPEN_IDLE_MS,DEFAULT_STREAM_DECODE_IDLE_MS,DEFAULT_STREAM_RESAMPLE_IDLE_MS,DEFAULT_STREAM_PCM_IDLE_MS,StreamDecodeStalledError,withActivityWatchdog} from './ml/activityWatchdog';
 import {ModelManager,type EnginePhase,type WhisperId} from './ml/manager';
@@ -407,7 +407,7 @@ export class JobRunner{
    }catch(error){
     this.traceEvent(id,'decoder-full-error','audio',{attempt,streamStage:'decode',errorKind:traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)});
     this.check();signal.throwIfAborted();
-    if(!canRetryFfmpeg(error,'full')||attempt>=MAX_ASR_WINDOW_ATTEMPTS)throw error;
+    if(!isRetryableFullDecodeError(error)||attempt>=MAX_ASR_WINDOW_ATTEMPTS)throw error;
     this.patch(id,{status:'Повторное декодирование FFmpeg · попытка 2/2'});
     this.traceEvent(id,'decoder-full-retry','audio',{attempt:2,streamStage:'decode',...ffmpegFailureFields(error)});
    }
