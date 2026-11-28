@@ -29,16 +29,17 @@ export class Wav2VecAlignment{
   // Do not ask a forced path to match digital silence.
   if(pcm.every(x=>Math.abs(x)<0.00001))return null;
   const input=await this.processor(pcm);
-  let output:Awaited<ReturnType<Model>>|undefined;
+  let output:unknown;
   try{
    output=await this.model(input);
-   const logits=output.logits;
-   if(!logits||logits.dims.length!==3||logits.dims[0]!==1||logits.dims[2]!==ALIGNMENT_MODELS[this.language].vocabSize||!(logits.data instanceof Float32Array))throw new Error('Unexpected CTC tensor shape');
+   if(!output||typeof output!=='object'||!('logits' in output))throw new Error('Unexpected CTC output');
+   const logits=output.logits as {dims?:unknown;data?:unknown}|null;
+   if(!logits||!Array.isArray(logits.dims)||logits.dims.length!==3||logits.dims[0]!==1||logits.dims[2]!==ALIGNMENT_MODELS[this.language].vocabSize||!(logits.data instanceof Float32Array))throw new Error('Unexpected CTC tensor shape');
    return alignTarget(logits.data,logits.dims[1],logits.dims[2],target,{start:startSample,end:startSample+pcm.length});
   }finally{
    // Processor/model outputs may include non-tensor fields. Only release tensors.
    const seen=new Set<object>();
-   for(const value of [...Object.values(input),...Object.values(output??{})]){
+   for(const value of [...Object.values(input),...Object.values(output&&typeof output==='object'?output:{})]){
     if(value&&typeof value==='object'&&!seen.has(value)&&'dispose' in value&&typeof value.dispose==='function'){seen.add(value);value.dispose()}
    }
   }
