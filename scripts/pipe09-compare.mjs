@@ -25,7 +25,8 @@ async function readWords(path){
  try{
   const {size}=await handle.stat();
   if(size>MAX_BYTES)throw new Error('File limit exceeded');
-  const bytes=Buffer.alloc(size+1),{bytesRead}=await handle.read(bytes,0,bytes.length,0);
+  const bytes=Buffer.alloc(size+1);let bytesRead=0;
+  while(bytesRead<bytes.length){const part=await handle.read(bytes,bytesRead,bytes.length-bytesRead,bytesRead);if(!part.bytesRead)break;bytesRead+=part.bytesRead}
   if(bytesRead!==size)throw new Error('File changed');
   return normalizeWords(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,bytesRead)));
  }finally{await handle.close()}
