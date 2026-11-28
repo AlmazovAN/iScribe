@@ -9,6 +9,7 @@ import type {ModelManager} from './ml/manager';
 import type {StreamedAudio,openStreamedAudio} from './streamedAudio';
 import {ResourceManager} from './performance/resourceManager';
 import {FfmpegDecoderError,decoderIdentity} from './decoderDiagnostics';
+import {ALIGNMENT_CONTRACT,type AlignmentReport,type AlignmentSegment} from './ml/forcedAlignment';
 function setup(){
  const fake={active:null as string|null,onProgress:(status:string,percent:number|null)=>{void status;void percent},recover:vi.fn(async(id:string,wasmOnly:boolean)=>{fake.active=id;return {cached:true,backend:wasmOnly?'wasm':'webgpu'}}),prepare:vi.fn(async(id:string)=>{fake.active=id;return {cached:true,backend:'wasm'}}),transcribe:vi.fn(async()=>[{start:3,end:4,text:'текст'}]),diarize:vi.fn(async()=>[{start:0,end:60,speaker:'A'}]),cancel:vi.fn(()=>{})};
  const store=new JobStore(),download=vi.fn(),diagnosticDownload=vi.fn((_report:ReturnType<typeof diagnosticReport>,_filename:string)=>{void _report;void _filename}),decode=vi.fn(async()=>new Float32Array(60*16000));
@@ -984,5 +985,47 @@ it('PIPE-09 reports repeated text without deleting it or triggering inference re
  expect(saved.stage).toBe('done');expect(saved.segments[0].text).toBe(repeated);
  expect(saved.asrQuality).toMatchObject({examinedWindows:3,warningWindows:3,repeatWindows:1,silentTextWindows:3});
  expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(fake.recover).not.toHaveBeenCalled();
+ await store.remove(id);
+});
+
+it('PIPE-10 saves alignment after ASR and reuses it on speaker retry without running ASR or alignment again',async()=>{
+ const {fake,store,decode}=setup();
+ const alignSpeech=vi.fn(async(audio:Float32Array,segments:readonly AlignmentSegment[],language:'ru'|'en'):Promise<AlignmentReport>=>({
+  revision:1,contract:ALIGNMENT_CONTRACT,language,samples:audio.length,segmentCount:segments.length,
+  rows:segments.map((s,index)=>({index,words:[{from:0,to:s.text.length,startSample:Math.round(s.start*16000)+320,endSample:Math.round(s.start*16000)+640,score:.8}]}))
+ }));
+ const manager={...fake,alignSpeech};
+ const runner=new JobRunner({store,manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,alignmentEnabled:true,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture source'],'align-resume.wav')],{model:'whisper-small',language:'ru',diarize:true});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ fake.diarize.mockImplementationOnce(async()=>{
+  const saved=(await store.get(id,false))!;
+  expect(saved.asrComplete).toBe(true);
+  expect(saved.alignmentCheckpoint).toMatchObject({alignedSegments:3,alignedWords:3});
+  throw new Error('injected speaker failure');
+ });
+ runner.enqueue(id);await finished(runner);
+ const first=(await store.get(id,false))!;
+ expect(first.stage).toBe('partial');expect(first.segments).toHaveLength(3);expect(first.alignmentCheckpoint?.alignedWords).toBe(3);
+ expect(alignSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);
+ const resumed=new JobRunner({store:new JobStore(),manager:manager as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,download:()=>{}});
+ await resumed.init();resumed.enqueue(id);await finished(resumed);
+ const result=(await store.get(id,false))!;
+ expect(result.stage).toBe('done');expect(result.segments).toEqual(first.segments);expect(result.alignmentCheckpoint).toEqual(first.alignmentCheckpoint);
+ expect(alignSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(decode).toHaveBeenCalledOnce();
+ expect(result.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'pipeline-stage',pipelineStage:'alignment',pipelineState:'reused'})]));
+ await store.remove(id);
+});
+it('PIPE-10 falls back on unavailable alignment without changing original ASR or automatic retry',async()=>{
+ const {fake,store,decode}=setup();
+ const alignSpeech=vi.fn(async()=>{throw new Error('alignment model unavailable')});
+ const runner=new JobRunner({store,manager:{...fake,alignSpeech} as unknown as ModelManager,decode,decoderPreference:'ffmpeg',checkpointArtifacts:true,alignmentEnabled:true,download:()=>{}});
+ await runner.init();await runner.add([new File(['fixture source'],'align-fallback.wav')],{model:'whisper-small',language:'ru',diarize:false});
+ const id=runner.snapshot().jobs.at(-1)!.id;
+ runner.enqueue(id);await finished(runner);
+ const saved=(await store.get(id,false))!;
+ expect(saved.stage).toBe('done');expect(saved.asrComplete).toBe(true);expect(saved.segments).toHaveLength(3);expect(saved.alignmentCheckpoint).toBeUndefined();
+ expect(alignSpeech).toHaveBeenCalledOnce();expect(fake.transcribe).toHaveBeenCalledTimes(3);expect(fake.recover).not.toHaveBeenCalled();
+ expect(saved.trace).toEqual(expect.arrayContaining([expect.objectContaining({code:'pipeline-stage',pipelineStage:'alignment',pipelineState:'skipped',pipelineReason:'alignment-unavailable'})]));
  await store.remove(id);
 });
