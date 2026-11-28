@@ -13,9 +13,17 @@ const messages:Record<FfmpegFailure,string>={
  duration:'Не удалось подтвердить конец аудиозаписи.',window:'Некорректные границы окна.',
  protocol:'Нарушение последовательности запросов.'
 };
+const detailCodes=['input-protocol','unsupported-codec','missing-audio','memory','command-option','damaged-frame','invalid-container','io','other'] as const;
+export type FfmpegDetailCode=typeof detailCodes[number];
+export type FfmpegDetails={details:FfmpegDetailCode[];errorLines:number};
+export function safeFfmpegDetails(raw:unknown,count:unknown):FfmpegDetails|undefined{
+ if(!Array.isArray(raw)||typeof count!=='number'||!Number.isInteger(count)||count<0||count>10000)return undefined;
+ const details=detailCodes.filter(code=>raw.includes(code));
+ return {details:[...details],errorLines:count};
+}
 export class FfmpegDecoderError extends Error{
  readonly code='ffmpeg-decoder-failed';
- constructor(readonly failure:FfmpegFailure,readonly stage:FfmpegStage,readonly exitCode?:number){
+ constructor(readonly failure:FfmpegFailure,readonly stage:FfmpegStage,readonly exitCode?:number,readonly diagnostic?:FfmpegDetails){
   super('FFmpeg: '+messages[failure]);this.name='FfmpegDecoderError';
  }
 }
@@ -26,7 +34,7 @@ export function safeExitCode(value:unknown):number|undefined{
  return typeof value==='number'&&Number.isInteger(value)&&value>=-255&&value<=255?value:undefined;
 }
 export function ffmpegFailureFields(error:unknown){
- return error instanceof FfmpegDecoderError?{decoderFailure:error.failure,decoderFailureStage:error.stage,decoderExitCode:safeExitCode(error.exitCode)}:{};
+ return error instanceof FfmpegDecoderError?{decoderFailure:error.failure,decoderFailureStage:error.stage,decoderExitCode:safeExitCode(error.exitCode),...(error.diagnostic?{decoderDetails:error.diagnostic.details,decoderErrorLines:error.diagnostic.errorLines}:{})}:{};
 }
 export function canRetryFfmpeg(error:unknown,route:DecoderRoute):boolean{
  if(!(error instanceof FfmpegDecoderError)||error.stage!=='decode')return false;

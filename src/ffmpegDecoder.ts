@@ -1,13 +1,14 @@
 import {MAX_SECONDS,usesStreamedAudio,validateFile} from './audio';
 import {PCM_SAMPLE_RATE,inspectDecodedPcm} from './audioValidation';
 import workerSource from './ffmpegWorker.js?raw';
-import {FfmpegDecoderError,ffmpegFailure,safeExitCode} from './decoderDiagnostics';
+import errorClassifier from './ffmpegErrorClassifier.js?raw';
+import {FfmpegDecoderError,ffmpegFailure,safeExitCode,safeFfmpegDetails} from './decoderDiagnostics';
 
 export const FFMPEG_CORE_ASSET='assets/ffmpeg-core-0.12.10.js';
 export const FFMPEG_WASM_ASSET='assets/ffmpeg-core-0.12.10.wasm.gz.bin';
 const MAX_SAMPLES=MAX_SECONDS*PCM_SAMPLE_RATE;
 const DEADLINE_MS=10*60*1000;
-type Reply={kind:'pcm';buffer:ArrayBuffer}|{kind:'error';code:string;status?:number};
+type Reply={kind:'pcm';buffer:ArrayBuffer}|{kind:'error';code:string;status?:number;details?:unknown;errorLines?:unknown};
 export function assetURL(name:string):string{
  const embedded=(globalThis as typeof globalThis&{__iscribeAssets?:Record<string,string>}).__iscribeAssets?.[name];
  return embedded??new URL(import.meta.env.DEV?'/'+name:name,document.baseURI).href;
@@ -15,6 +16,7 @@ export function assetURL(name:string):string{
 type EmbeddedFfmpeg={core:Blob;wasm:Blob};
 type FfmpegWorkerInput={coreURL:string;wasmURL:string}|{wasmBlob:Blob};
 export function ffmpegWorkerAssets(source:string,embedded:EmbeddedFfmpeg|undefined=(globalThis as typeof globalThis&{__iscribeFfmpegEmbedded?:EmbeddedFfmpeg}).__iscribeFfmpegEmbedded):{script:Blob;input:FfmpegWorkerInput}{
+ source+=';\n'+errorClassifier;
  if(embedded){
   if(!(embedded.core instanceof Blob)||!(embedded.wasm instanceof Blob)||!embedded.core.size||!embedded.wasm.size)
    throw new FfmpegDecoderError('asset','open');
@@ -55,7 +57,7 @@ export async function decodeFfmpegAudio(file:File,signal?:AbortSignal):Promise<F
    active.onmessage=(event:MessageEvent<Reply>)=>{
     const reply=event.data;
     if(reply?.kind==='pcm'&&reply.buffer instanceof ArrayBuffer){finish(undefined,reply.buffer);return;}
-    if(reply?.kind==='error'){finish(new FfmpegDecoderError(ffmpegFailure(reply.code),'decode',safeExitCode(reply.status)));return;}
+    if(reply?.kind==='error'){finish(new FfmpegDecoderError(ffmpegFailure(reply.code),'decode',safeExitCode(reply.status),safeFfmpegDetails(reply.details,reply.errorLines)));return;}
     finish(new FfmpegDecoderError('runtime','decode'));
    };
    active.onerror=()=>finish(new FfmpegDecoderError('worker','decode'));

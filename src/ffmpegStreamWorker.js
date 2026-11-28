@@ -14,7 +14,8 @@ function removeOutput(){
 function decode(start,count,id,allowShort=false){
  const warm=Math.max(0,start-RATE),skip=start-warm;
  let lastProgress=0;
- core.setLogger(()=>{});
+ const errors=globalThis.createFfmpegErrorCollector();
+ core.setLogger(errors.observe);
  core.setProgress(event=>{
   const time=Number(event.time);
   // Only monotonic media output is a heartbeat, not incoming messages.
@@ -30,7 +31,7 @@ function decode(start,count,id,allowShort=false){
    '-af','aresample=16000,atrim=start_sample='+skip+':end_sample='+(skip+count)+',asetpts=PTS-STARTPTS',
    '-t',(count/RATE).toFixed(7),'-ac','1','-ar','16000','-c:a','pcm_f32le','-f','f32le',OUTPUT);
   const status=execute(()=>core.exec(...args));
-  if(status!==0)throw Object.assign(new Error('decode'),{exitCode:status});
+  if(status!==0)throw Object.assign(new Error('decode'),{exitCode:status,...errors.snapshot()});
   const bytes=core.FS.readFile(OUTPUT);
   const samples=bytes.byteLength/4;
   if(!Number.isSafeInteger(samples)||samples<=0||samples>count||(!allowShort&&samples!==count))
@@ -45,13 +46,14 @@ function decode(start,count,id,allowShort=false){
 function probeMetadata(){
  const output='/probe.json',fs=core.FS;
  let hadError=false,status;
+ const errors=globalThis.createFfmpegErrorCollector();
  if(fs.analyzePath(output).exists)fs.unlink(output);
- core.setLogger(event=>{if(event.type==='stderr'&&event.message?.trim())hadError=true;});
+ core.setLogger(event=>{errors.observe(event);if(event.type==='stderr'&&event.message?.trim())hadError=true;});
  try{
   status=execute(()=>core.ffprobe('-v','error','-protocol_whitelist','file','-select_streams','a:0',
    '-show_entries','stream=duration,start_time,sample_rate:format=duration,start_time','-of','json','-o',output,INPUT));
   if((status!==0&&status!==-1)||hadError)
-   throw Object.assign(new Error('probe-exit'),{exitCode:status});
+   throw Object.assign(new Error('probe-exit'),{exitCode:status,...errors.snapshot()});
   if(!fs.analyzePath(output).exists||fs.stat(output).size<=0||fs.stat(output).size>65536)
    throw Object.assign(new Error('probe-json'),{exitCode:status});
   let metadata;
@@ -139,6 +141,6 @@ self.onmessage=async({data:request})=>{
  }catch(error){
   const code=knownErrors.has(error?.message)?error.message:'runtime';
   const exitCode=Number.isInteger(error?.exitCode)&&error.exitCode>=-255&&error.exitCode<=255?error.exitCode:undefined;
-  self.postMessage({id,kind:'error',code,exitCode});
+  self.postMessage({id,kind:'error',code,exitCode,details:error?.details,errorLines:error?.errorLines});
  }finally{busy=false}
 };

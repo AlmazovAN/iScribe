@@ -1,0 +1,5 @@
+# DEC runtime diagnostics follow-up
+
+Local CI of main 918d0f1 passed (239 unit, 16 primary and 6 offline browser tests); real 739.261975 s, 29,570,479 byte full-route job failed twice in ~4 s with exit code 1, no PCM or Whisper. Exact stderr was discarded; cause unknown. -xerror remains strict; no retry or fallback policy change. Classify stderr inside worker into fixed categories and bounded line count; never export raw lines or names. New real compressed MP3 fixture generated from a synthetic sine wave; native FFmpeg 7.1.5 yielded 5184 PCM samples. Actual browser tests of this patch NOT TESTED. After local CI, reproduce original job and export JSON if it fails. No private audio in repository.
+
+Local iteration 1: npm ci and typecheck PASS; lint failed (exit 1), exact rule omitted from reconstructed diagnostics. The raw worker helper was a standalone unused declaration in ESLint's module view. Explicitly register and call the helper via globalThis in the worker and test VM; no lint rule disabled. Revised candidate requires local CI.

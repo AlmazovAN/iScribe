@@ -1,7 +1,7 @@
 import type {Job} from './jobs';
 import {expectedWindows} from './jobDiagnostics';
 import {benchmarkReport} from './benchmark';
-import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute,type FfmpegFailure,type FfmpegStage} from './decoderDiagnostics';
+import {decoderReport,FfmpegDecoderError,type AudioDecoderKind,type DecoderRoute,type FfmpegFailure,type FfmpegStage,type FfmpegDetailCode} from './decoderDiagnostics';
 
 // Structured diagnostic events deliberately omit filenames, transcript text,
 // raw exception messages, audio buffers and browser/device identifiers.
@@ -37,6 +37,8 @@ export type TraceEvent={
  decoderFailure?:FfmpegFailure;
  decoderFailureStage?:FfmpegStage;
  decoderExitCode?:number;
+ decoderDetails?:FfmpegDetailCode[];
+ decoderErrorLines?:number;
  recoveryCount?:number;
  decoderWindows?:number;
  rotationCount?:number;

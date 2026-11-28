@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import {createContext,runInContext} from 'node:vm';
 import {expect,it} from 'vitest';
 
-const worker=readFileSync(new URL('../src/ffmpegStreamWorker.js',import.meta.url),'utf8');
+const worker=readFileSync(new URL('../src/ffmpegStreamWorker.js',import.meta.url),'utf8')+';\n'+readFileSync(new URL('../src/ffmpegErrorClassifier.js',import.meta.url),'utf8');
 const valid=JSON.stringify({streams:[{sample_rate:'16000',duration:'41.000000'}],format:{duration:'41.000000'}});
 function fixture({status=-1,report=valid,stderr='',stale=false}={}){
  const files=new Map(stale?[['/probe.json',valid]]:[]);

@@ -23,9 +23,10 @@ async function initializeCore({coreURL,wasmURL,wasmBlob}){
 }
 self.onmessage=async({data:{file,coreURL,wasmURL,wasmBlob,maxSamples}})=>{
  let core;
+ const errors=globalThis.createFfmpegErrorCollector();
  try{
   core=await initializeCore({coreURL,wasmURL,wasmBlob});
-  core.setLogger(()=>{});
+  core.setLogger(errors.observe);
   const fs=core.FS,workerfs=fs.filesystems?.WORKERFS;
   if(!workerfs){self.postMessage({kind:'error',code:'workerfs'});return;}
   fs.mkdir('/source');fs.mount(workerfs,{blobs:[{name:'input',data:file}]},'/source');
@@ -35,7 +36,7 @@ self.onmessage=async({data:{file,coreURL,wasmURL,wasmBlob,maxSamples}})=>{
    '-protocol_whitelist','file','-i','/source/input','-map','0:a:0','-vn','-sn','-dn','-t',String(maxSamples/16000+1),
    '-ac','1','-ar','16000','-c:a','pcm_f32le','-f','f32le','/output');
   const status=core.ret;
-  if(status!==0){self.postMessage({kind:'error',code:'decode',status});return;}
+  if(status!==0){self.postMessage({kind:'error',code:'decode',status,...errors.snapshot()});return;}
   const bytes=core.FS.readFile('/output');
   if(bytes.byteLength===0||bytes.byteLength%4!==0||bytes.byteLength/4>maxSamples){
    self.postMessage({kind:'error',code:'length'});return;
@@ -45,7 +46,7 @@ self.onmessage=async({data:{file,coreURL,wasmURL,wasmBlob,maxSamples}})=>{
   self.postMessage({kind:'pcm',buffer:result},[result]);
  }catch(error){
   const code=error?.message==='asset'||error?.message==='initialize'?error.message:'runtime';
-  self.postMessage({kind:'error',code});
+  self.postMessage({kind:'error',code,...errors.snapshot()});
  }finally{
   if(core){
    try{core.FS.unlink('/output')}catch{/* missing file */}

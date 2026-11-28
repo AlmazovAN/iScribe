@@ -204,3 +204,6 @@ DEC-04 local iteration 1: dependencies/typecheck/lint/Vitest 234/234 PASS; Playw
 
 
 DEC-04 iteration 2: Vitest 238/238, primary Playwright 16/16, standalone/web builds and web preflight PASS; offline 5/6 (file:// FFmpeg only). Standalone worker transport changed to inline core and cloned compressed Blob; revised candidate pending local CI.
+
+
+DEC runtime follow-up: main 918d0f1 local CI PASS (239 unit, 22 browser); real full FFmpeg decode exit 1 twice, root cause unknown. New bounded diagnostic categories and real synthetic MP3 browser test; revised candidate NOT TESTED. Strict decode/PCM policies unchanged.
