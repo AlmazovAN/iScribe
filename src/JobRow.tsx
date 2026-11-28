@@ -3,6 +3,7 @@ import type {Job} from './jobs';
 import {usesStreamedAudio} from './audio';
 import {isRunning,audioWindows} from './jobs';
 import {checkpointProgress} from './recognitionProgress';
+import {validateSpeechPlan} from './speechSegmentation';
 import {formatTime} from './formatTranscript';
 export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,onPreview,queuePosition}:{job:Job;active:boolean;onStart:(id:string)=>void;onExport:(id:string,variant:'plain'|'time'|'speakers')=>void;onTrash:(id:string)=>void;onPreview:(id:string)=>void;queuePosition?:number}){
  const queued=queuePosition!==undefined&&!active,running=isRunning(job.stage);
@@ -13,9 +14,10 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
  const streamed=usesStreamedAudio(job.size);
  const duration=job.duration,validDuration=typeof duration==='number'&&Number.isFinite(duration)&&duration>0&&(streamed||duration<=3600);
  const samples=validDuration?Math.round(duration*16000):0;
- const windows=useMemo(()=>Number.isSafeInteger(samples)&&(!streamed||Math.ceil(samples/(25*16000))<=job.size)
-  ?audioWindows(samples,streamed):[],[samples,streamed,job.size]);
- const progress=windows.length?checkpointProgress(windows,Math.min(job.nextWindow,windows.length)):null;
+ const windows=useMemo(()=>job.windowPlan!==undefined
+  ?(validateSpeechPlan(job.windowPlan,samples)?job.windowPlan.windows:[])
+  :Number.isSafeInteger(samples)&&(!streamed||Math.ceil(samples/(25*16000))<=job.size)?audioWindows(samples,streamed):[],[samples,streamed,job.size,job.windowPlan]);
+ const progress=windows.length&&Number.isInteger(job.nextWindow)&&job.nextWindow>=0&&job.nextWindow<=windows.length?checkpointProgress(windows,job.nextWindow):null;
  const retry=job.stage==='partial'||job.stage==='error'||job.stage==='interrupted'||job.stage==='cancelled';
  const status=
   active&&queuePosition!==undefined&&job.stage!=='recognizing'&&!job.asrComplete?'Ожидание окружения':
@@ -56,7 +58,7 @@ export const JobRow=memo(function JobRow({job,active,onStart,onExport,onTrash,on
      <progress max={100} value={job.stage==='speakers'?job.percent??undefined:progress?.percent} aria-label={`Обработка ${job.name}`}/>
     </div>
    </>}
-   <small>{job.params.language}{job.backend?' · '+job.backend:''}{job.decoderIdentity?' · '+(job.decoderIdentity.kind==='ffmpeg'?'FFmpeg':job.decoderIdentity.route==='windowed'?'MediaBunny':'Web Audio'):''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
+   <small>{job.params.language}{job.backend?' · '+job.backend:''}{job.decoderIdentity?' · '+(job.decoderIdentity.kind==='ffmpeg'?'FFmpeg':job.decoderIdentity.route==='windowed'?'MediaBunny':'Web Audio'):''}{job.windowPlan?' · адаптивные окна':''}{!job.asrComplete&&hasText?' · промежуточный текст':''}</small>
   </div>
   <div className="file-actions">
    {(!active&&!running&&(!queued||job.stage==='interrupted')&&(job.stage==='waiting'||retry))&&<button className="start" onClick={()=>onStart(job.id)}>{job.asrComplete?'Повторить спикеров':job.nextWindow>0?'Продолжить':'Начать'}</button>}
