@@ -406,7 +406,7 @@ export class JobRunner{
   this.traceEvent(id,'audio-start','audio');
   const pipeline:JobPipeline=new PipelineOrchestrator(this.abort!.signal,(event,error)=>{
    this.traceEvent(id,'pipeline-stage','job',{pipelineStage:event.stage,pipelineState:event.state,pipelineReason:event.reason,elapsedMs:event.elapsedMs,
-    ...(event.state==='failed'||event.state==='cancelled'?{errorKind:event.state==='cancelled'?'cancelled':traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error)}:{})});
+    ...(event.state==='failed'||event.state==='cancelled'?{errorKind:event.state==='cancelled'?'cancelled':traceErrorKind(error),...pcmValidationFields(error),...ffmpegFailureFields(error),...(error instanceof CheckpointIntegrityError?{artifactIntegrityFailure:true}:{})}:{})});
   },benchmarkNow);
   let checkpoints:CheckpointManager|undefined;
   const file=await pipeline.run('preflight',async()=>{
