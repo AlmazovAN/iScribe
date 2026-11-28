@@ -159,3 +159,6 @@ Opt-in pause-aware full-PCM segmentation, 30s max with unchanged 5s overlap and 
 
 ## PIPE-09 candidate
 ASR QA inspects saved RAW before commit, preserves existing hard timestamp validation and adds advisory repeat/near-silence/density/timestamp evidence; atomic summary and local WER script. Exact helper tsc + 7/7 Node and exact script 4/4 smoke PASS; full CI/real accuracy NOT TESTED. No engine option, batching or automatic text suppression change. See [PIPE-09](PIPE-09_WHISPER_ASR_QUALITY.md).
+
+## PIPE-10 candidate
+Opt-in full PCM Wav2Vec2 CTC word alignment (RU/EN pinned q8 candidates), original text retained, separate versioned RAW artifact and private JSON word export. Exact CTC helper strict tsc + 7/7 Node groups PASS including 200 exhaustive short cases; actual ONNX/browser/full CI NOT TESTED. TXT and speaker assignment unchanged. See [PIPE-10](PIPE-10_FORCED_ALIGNMENT.md).
