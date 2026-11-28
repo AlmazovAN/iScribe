@@ -1,6 +1,7 @@
 import type {DecoderIdentity} from './decoderDiagnostics';
 import {MAX_PCM_SAMPLES} from './audioValidation';
 
+export const ARTIFACT_CONTRACT='pipe04-v1';
 const CHUNK_BYTES=4*1024*1024;
 const HEX=/^[0-9a-f]{64}$/;
 export interface ArtifactStore{
@@ -39,7 +40,7 @@ type PcmManifest={revision:1;samples:number;hashes:string[]};
 type RawRecord={revision:1;json:string;hash:string};
 function rawJson(value:unknown):string{
  // Preserve non-finite numeric diagnostics instead of silently turning them
- // into null. Engine outputs are JSON records; unsupported values fail closed.
+ // into null. Engine outputs are JSON records; this is a JSON representation.
  const json=JSON.stringify(value,(_key,v:unknown)=>{
   if(typeof v==='number'&&!Number.isFinite(v))return {__iscribeNonfinite:String(v)};
   return v;
